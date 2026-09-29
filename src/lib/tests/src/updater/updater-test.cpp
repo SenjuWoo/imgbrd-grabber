@@ -91,6 +91,7 @@ TEST_CASE("Updater")
 		REQUIRE(updater.compareVersions("7.15.0-fable.1", "7.14.0-fable.10") == 1);
 	}
 
+	#ifndef NIGHTLY
 	SECTION("Release tags are independent of their display title")
 	{
 		QTemporaryFile response;
@@ -107,4 +108,5 @@ TEST_CASE("Updater")
 		REQUIRE(updater.latestUrl().host() == "github.com");
 		REQUIRE(updater.latestUrl().path().startsWith("/SenjuWoo/imgbrd-grabber/"));
 	}
+	#endif
 }

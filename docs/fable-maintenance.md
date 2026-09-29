@@ -50,3 +50,5 @@ machine-specific drive letters or account names. They do not deploy over a live 
   The save-failure regression uses a temporary file as the destination parent,
   so it works on hosts where Z: is a real drive. Packaging explicitly deploys
   the OpenSSL backend along with the verified OpenSSL runtime libraries.
+- CI uses the current all_os Android Qt repository. The release-tag regression
+  runs in stable builds because nightlies use commit hashes instead of release tags.

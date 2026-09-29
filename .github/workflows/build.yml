@@ -627,7 +627,7 @@ jobs:
         cache: true
         version: ${{ env.QT_VERSION }}
         modules: ${{ env.QT_MODULES }}
-        host: linux
+        host: all_os
         target: android
         arch: android_armv7
 
@@ -637,7 +637,7 @@ jobs:
         cache: true
         version: ${{ env.QT_VERSION }}
         modules: ${{ env.QT_MODULES }}
-        host: linux
+        host: all_os
         target: android
         arch: android_arm64_v8a
 
