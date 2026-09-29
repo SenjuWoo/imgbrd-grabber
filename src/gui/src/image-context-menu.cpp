@@ -4,15 +4,20 @@
 #include <QDesktopServices>
 #include <QSignalMapper>
 #include "functions.h"
+#include "image-library-actions.h"
 #include "main-window.h"
 #include "models/image.h"
 #include "reverse-search/reverse-search-engine.h"
 #include "reverse-search/reverse-search-loader.h"
 
 
-ImageContextMenu::ImageContextMenu(QSettings *settings, QSharedPointer<Image> img, MainWindow *mw, QWidget *parent)
+ImageContextMenu::ImageContextMenu(QSettings *settings, QSharedPointer<Image> img, MainWindow *mw, QWidget *parent, qint64 collection)
 	: QMenu(parent), m_settings(settings), m_image(std::move(img)), m_mainWindow(mw)
 {
+	auto *libraryActions = new ImageLibraryActions(m_image->getProfile(), m_image, this, collection);
+	libraryActions->hide();
+	libraryActions->addToMenu(this);
+
 	// Load reverse search engines
 	ReverseSearchLoader loader(m_settings);
 	m_reverseSearchEngines = loader.getAllReverseSearchEngines();

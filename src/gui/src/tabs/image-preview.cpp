@@ -18,6 +18,7 @@
 #include "functions.h"
 #include "helpers.h"
 #include "image-context-menu.h"
+#include "image-library-actions.h"
 #include "logger.h"
 #include "models/image.h"
 #include "models/profile.h"
@@ -239,6 +240,7 @@ void ImagePreview::finishedLoading()
 		layout->addWidget(label);
 	}
 
+	layout->addWidget(new ImageLibraryActions(m_profile, m_image, m_container, 0, true));
 	emit finished();
 }
 

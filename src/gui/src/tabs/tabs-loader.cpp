@@ -9,6 +9,7 @@
 #include "favorites-tab.h"
 #include "gallery-tab.h"
 #include "log-tab.h"
+#include "library-tab.h"
 #include "logger.h"
 #include "main-window.h"
 #include "models/profile.h"
@@ -139,7 +140,9 @@ bool TabsLoader::save(const QString &path, QList<SearchTab*> &allTabs, QWidget *
 	// Find tab index
 	// TODO(Bionus): just remember the overall index over all opened tabs
 	QVariant current;
-	if (qobject_cast<FavoritesTab*>(currentTab) != nullptr) {
+	if (qobject_cast<LibraryTab*>(currentTab) != nullptr) {
+		current = "library";
+	} else if (qobject_cast<FavoritesTab*>(currentTab) != nullptr) {
 		current = "favorites";
 	} else if (qobject_cast<DownloadsTab*>(currentTab) != nullptr) {
 		current = "downloads";

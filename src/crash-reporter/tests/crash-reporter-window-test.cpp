@@ -1,3 +1,4 @@
+#include <QDir>
 #include <QFile>
 #include <QLineEdit>
 #include "catch.h"
@@ -7,6 +8,7 @@
 
 TEST_CASE("CrashReporterWindow")
 {
+	REQUIRE(QDir().mkpath("tests/resources"));
 	FileDeleter lastDump("tests/resources/lastdump");
 
 	SECTION("Renders default values")
@@ -25,8 +27,8 @@ TEST_CASE("CrashReporterWindow")
 	SECTION("Reads the 'lastdump' file if it exists")
 	{
 		QFile f("tests/resources/lastdump");
-		f.open(QFile::WriteOnly | QFile::Truncate);
-		f.write("test.dmp");
+		REQUIRE(f.open(QFile::WriteOnly | QFile::Truncate));
+		REQUIRE(f.write("test.dmp") == 8);
 		f.close();
 
 		const QScopedPointer<CrashReporterWindow> window(new CrashReporterWindow(nullptr));

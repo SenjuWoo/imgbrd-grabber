@@ -48,6 +48,7 @@
 #include "settings/start-window.h"
 #include "tabs/downloads-tab.h"
 #include "tabs/favorites-tab.h"
+#include "tabs/library-tab.h"
 #include "tabs/gallery-tab.h"
 #include "tabs/log-tab.h"
 #include "tabs/monitors-tab.h"
@@ -313,6 +314,10 @@ void MainWindow::init(const QStringList &args, const QMap<QString, QString> &par
 	ui->tabWidget->setCurrentIndex(0);
 	favoritesDock->tabChanged(m_favoritesTab);
 
+	// Library tab
+	m_libraryTab = new LibraryTab(m_profile, this);
+	ui->tabWidget->insertTab(m_tabs.size(), m_libraryTab, m_libraryTab->windowTitle());
+
 	// Tab corner widget
 	auto *cornerWidget = new QWidget(this);
 	auto *layout = new QHBoxLayout(cornerWidget);
@@ -338,6 +343,7 @@ void MainWindow::init(const QStringList &args, const QMap<QString, QString> &par
 		m_tabSelector->setShowTabCount(true); // TODO(Bionus): add a setting to disable tab count
 		m_tabSelector->setFlat(true);
 		m_tabSelector->markStaticTab(m_favoritesTab);
+		m_tabSelector->markStaticTab(m_libraryTab);
 		m_tabSelector->markStaticTab(m_downloadsTab);
 		m_tabSelector->markStaticTab(m_monitorsTab);
 		if (m_logTab != nullptr)
@@ -426,7 +432,9 @@ void MainWindow::initialLoginsDone()
 
 	if ((QMetaType::Type) m_forcedTab.type() == QMetaType::QString) {
 		QString name = m_forcedTab.toString();
-		if (name == "favorites") {
+		if (name == "library") {
+			ui->tabWidget->setCurrentWidget(m_libraryTab);
+		} else if (name == "favorites") {
 			ui->tabWidget->setCurrentWidget(m_favoritesTab);
 		} else if (name == "downloads") {
 			ui->tabWidget->setCurrentWidget(m_downloadsTab);

@@ -26,6 +26,7 @@
 #include "functions.h"
 #include "helpers.h"
 #include "image-context-menu.h"
+#include "image-library-actions.h"
 #include "logger.h"
 #include "main-window.h"
 #include "models/filtering/post-filter.h"
@@ -46,8 +47,8 @@
 #include "viewer/players/video-player.h"
 
 
-ViewerWindow::ViewerWindow(QList<QSharedPointer<Image>> images, const QSharedPointer<Image> &image, Site *site, Profile *profile, MainWindow *parent, SearchTab *tab)
-	: QWidget(nullptr, Qt::Window), m_parent(parent), m_tab(tab), m_profile(profile), m_favorites(profile->getFavorites()), m_viewItLater(profile->getKeptForLater()), m_ignore(profile->getIgnored()), m_settings(profile->getSettings()), ui(new Ui::ViewerWindow), m_site(site), m_timeout(300), m_tooBig(false), m_loadedImage(false), m_loadedDetails(false), m_finished(false), m_size(0), m_isFullscreen(false), m_isSlideshowRunning(false), m_images(std::move(images)), m_displayImage(QPixmap()), m_labelImageScaled(false)
+ViewerWindow::ViewerWindow(QList<QSharedPointer<Image>> images, const QSharedPointer<Image> &image, Site *site, Profile *profile, MainWindow *parent, SearchTab *tab, qint64 collection)
+	: QWidget(nullptr, Qt::Window), m_libraryCollection(collection), m_parent(parent), m_tab(tab), m_profile(profile), m_favorites(profile->getFavorites()), m_viewItLater(profile->getKeptForLater()), m_ignore(profile->getIgnored()), m_settings(profile->getSettings()), ui(new Ui::ViewerWindow), m_site(site), m_timeout(300), m_tooBig(false), m_loadedImage(false), m_loadedDetails(false), m_finished(false), m_size(0), m_isFullscreen(false), m_isSlideshowRunning(false), m_images(std::move(images)), m_displayImage(QPixmap()), m_labelImageScaled(false)
 {
 	setAttribute(Qt::WA_DeleteOnClose);
 	connect(parent, &MainWindow::destroyed, this, &QWidget::deleteLater);
@@ -179,10 +180,13 @@ ViewerWindow::ViewerWindow(QList<QSharedPointer<Image>> images, const QSharedPoi
 	connect(&m_resizeTimer, SIGNAL(timeout()), this, SLOT(update()));
 	m_resizeTimer.setSingleShot(true);
 
+	m_libraryActions = new ImageLibraryActions(m_profile, image, this, m_libraryCollection);
+	ui->windowLayout->insertWidget(2, m_libraryActions);
 	load(image);
 }
 void ViewerWindow::go()
 {
+	m_libraryActions->setImage(m_image, m_libraryCollection);
 	ui->labelPools->hide();
 	bool whitelisted = false;
 	if (!m_settings->value("whitelistedtags").toString().isEmpty()) {
@@ -441,7 +445,7 @@ void ViewerWindow::configureButtons()
 
 void ViewerWindow::imageContextMenu()
 {
-	QMenu *menu = new ImageContextMenu(m_settings, m_image, m_parent, this);
+	QMenu *menu = new ImageContextMenu(m_settings, m_image, m_parent, this, m_libraryCollection);
 
 	// Reload action
 	auto *reloadImageAction = new QAction(QIcon(":/images/icons/update.png"), tr("Reload"), menu);

@@ -16,6 +16,7 @@ class Commands;
 class DownloadQueryManager;
 class Exiftool;
 class Md5Database;
+class LibraryStore;
 class MonitorManager;
 class QSettings;
 class Site;
@@ -110,6 +111,7 @@ class Profile : public QObject
 		DownloadQueryManager *downloadQueryManager() const;
 		UrlDownloaderManager *urlDownloaderManager() const;
 		Md5Database *md5Database() const;
+		LibraryStore *library();
 
 	signals:
 		void favoritesChanged();
@@ -124,6 +126,7 @@ class Profile : public QObject
 		void reload(bool init);
 
 	private:
+		LibraryStore *m_library = nullptr;
 		QString m_path;
 		QSettings *m_settings;
 		QList<Favorite> m_favorites;

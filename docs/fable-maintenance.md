@@ -2,7 +2,7 @@
 
 Keep one portable app beside this checkout. The app profile stays outside Git:
 settings.ini, site settings/cookies, blacklists, history, favorites, tabs, queued
-downloads and the MD5 database are personal data. Never copy them into source or CI.
+downloads, the MD5 database and library.sqlite are personal data. Never copy them into source or CI.
 
 ## Update and rebuild
 
@@ -43,7 +43,7 @@ machine-specific drive letters or account names. They do not deploy over a live 
 - The installed source scripts and themes matched the old generated package.
   Per-site settings and all profile files are retained; obsolete template language
   output and empty disabled sources are omitted from clean packages.
-- Source defaults to 7.14.0-fable.3. This is a local build revision, not a claim that
+- At this audit, source defaulted to 7.14.0-fable.3. This was a local build revision, not a claim that
   a new public release exists. v7.14.0-fable.2 remains the latest published archive.
 
 - CTest now launches Jest through Node directly and runs CLI fixtures from src/lib.
@@ -54,3 +54,17 @@ machine-specific drive letters or account names. They do not deploy over a live 
   runs in stable builds because nightlies use commit hashes instead of release tags.
 - Linux CI restores execute permissions on the Android SDK CMake wrappers; the
   shared Qt archive otherwise fails before configuration with exit code 126.
+
+## Library milestone (7.14.0-fable.4)
+
+- Native picture Library with independent likes/favorites, collection memberships,
+  scope-specific ratings/notes, covers, text filters and batch actions.
+- Shared image actions on search thumbnails, context menus, viewer and Library.
+- Saved search files/monitors are unchanged; their UI is named Saved searches.
+- SQLite schema version 1 and cached thumbnails live in library.sqlite. Restore
+  corrupt databases from a backup; do not delete them to make startup succeed.
+- Catalog removal never deletes originals or changes the download MD5 index.
+- The portable package includes a blank settings.ini but excludes it from runtime hashes;
+  a real profile replaces it. The SQLite driver is checked during packaging.
+
+Implementation scope and verification are in [library-milestone.md](library-milestone.md).

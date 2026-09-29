@@ -16,7 +16,7 @@ class ImageContextMenu : public QMenu
 	Q_OBJECT
 
 	public:
-		ImageContextMenu(QSettings *settings, QSharedPointer<Image> img, MainWindow *mw, QWidget *parent = nullptr);
+		ImageContextMenu(QSettings *settings, QSharedPointer<Image> img, MainWindow *mw, QWidget *parent = nullptr, qint64 collection = 0);
 
 	protected slots:
 		void copyAllTagsToClipboard();

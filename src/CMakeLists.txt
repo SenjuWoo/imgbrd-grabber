@@ -13,7 +13,7 @@ if(NOT DEFINED VERSION_DISPLAY)
 	if(VERSION MATCHES "-fable")
 		set(VERSION_DISPLAY "${VERSION}")
 	else()
-		set(VERSION_DISPLAY "${VERSION}-fable.3")
+		set(VERSION_DISPLAY "${VERSION}-fable.4")
 	endif()
 endif()
 string(REGEX MATCH "^[0-9]+(\\.[0-9]+)*" VERSION_NUMERIC "${VERSION}")
@@ -55,6 +55,12 @@ set(CMAKE_MODULE_PATH "${CMAKE_CURRENT_SOURCE_DIR}/cmake/")
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
+
+# Qt UI strings and bundled source names are UTF-8; MSVC otherwise uses the
+# machine's legacy code page and corrupts hearts, stars and translated text.
+if(MSVC)
+	add_compile_options(/utf-8)
+endif()
 
 # Enable more compiler warnings
 if(MSVC OR CMAKE_CXX_COMPILER MATCHES "cl\\.exe")

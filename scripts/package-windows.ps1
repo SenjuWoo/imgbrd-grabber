@@ -58,10 +58,10 @@ foreach ($source in Get-ChildItem -LiteralPath (Join-Path $stage 'sites') -Direc
         throw "Missing source script: $($source.Name)"
     }
 }
-foreach ($required in @('platforms\qwindows.dll','tls\qopensslbackend.dll','sites\helper.js','Qt6Core.dll')) {
+foreach ($required in @('platforms\qwindows.dll','tls\qopensslbackend.dll','sites\helper.js','Qt6Core.dll','sqldrivers\qsqlite.dll')) {
     if (!(Test-Path -LiteralPath (Join-Path $stage $required))) { throw "Missing runtime file: $required" }
 }
-$files = @(Get-ChildItem -LiteralPath $stage -File -Recurse | ForEach-Object {
+$files = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Where-Object { $_.FullName -ne (Join-Path $stage 'settings.ini') } | ForEach-Object {
     @{path=$_.FullName.Substring($stage.Length+1).Replace('\','/'); sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 })
 $manifest = @{commit=(& git.exe -C $repo rev-parse HEAD); files=$files}

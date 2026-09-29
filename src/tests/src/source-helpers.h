@@ -7,6 +7,7 @@
 class Profile;
 
 Profile *makeProfile(bool clean = true);
+Profile *makeLibraryProfile(const QString &path);
 void setupSource(const QString &source, QString dir = QString());
 void setupSite(const QString &source, const QString &site, QString dir = QString());
 

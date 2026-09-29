@@ -1,6 +1,7 @@
 #include "source-helpers.h"
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QSettings>
 #include "models/profile.h"
 
@@ -62,4 +63,16 @@ void setupSite(const QString &source, const QString &site, QString dir)
 	if (QFile::exists("../sites/" + source + "/" + site + "/tag-types.txt")) {
 		QFile("../sites/" + source + "/" + site + "/tag-types.txt").copy(dir + "/tag-types.txt");
 	}
+}
+
+Profile *makeLibraryProfile(const QString &path)
+{
+	const QString sourceDir = QDir::cleanPath(QFileInfo(QString::fromUtf8(__FILE__)).absolutePath() + "/../../sites");
+	const QString target = path + "/sites/Danbooru (2.0)";
+	QDir().mkpath(target + "/danbooru.donmai.us");
+	QFile::copy(sourceDir + "/helper.js", path + "/sites/helper.js");
+	QFile::copy(sourceDir + "/Danbooru (2.0)/model.js", target + "/model.js");
+	QFile::copy(sourceDir + "/Danbooru (2.0)/sites.txt", target + "/sites.txt");
+	QFile::copy(sourceDir + "/Danbooru (2.0)/danbooru.donmai.us/defaults.ini", target + "/danbooru.donmai.us/defaults.ini");
+	return new Profile(path);
 }

@@ -133,7 +133,7 @@ void FavoritesTab::updateFavorites()
 	clearLayout(m_favoritesLayout);
 
 	if (m_favorites.isEmpty()) {
-		ui->labelFavorites->setText(tr("You don't have any favorite yet."));
+		ui->labelFavorites->setText(tr("You do not have any saved searches yet."));
 		ui->labelFavorites->show();
 	} else {
 		ui->labelFavorites->hide();
@@ -460,13 +460,13 @@ void FavoritesTab::thumbnailContextMenu(QMenu *menu, const QSharedPointer<Image>
 
 void FavoritesTab::updateTitle()
 {
-	setWindowTitle(tr("Favorites") + (m_currentTags.isEmpty() ? "" : " - " + m_currentTags));
+	setWindowTitle(tr("Saved searches") + (m_currentTags.isEmpty() ? "" : " - " + m_currentTags));
 	emit titleChanged(this);
 }
 
 void FavoritesTab::splitterMoved(int pos, int index)
 {
-	const QString title = tr("Favorites");
+	const QString title = tr("Saved searches");
 
 	int min, max;
 	ui->splitter->getRange(index, &min, &max);

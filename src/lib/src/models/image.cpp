@@ -340,6 +340,11 @@ void Image::write(QJsonObject &json) const
 	json["md5"] = m_md5;
 	json["tags"] = tags;
 	json["url"] = m_url.toString();
+	json["page_url"] = m_pageUrl.toString();
+	json["parent_url"] = m_parentUrl.toString();
+	json["is_gallery"] = m_isGallery;
+	json["gallery_count"] = m_galleryCount;
+	json["position"] = m_position;
 	json["search"] = QJsonArray::fromStringList(m_search);
 
 	// Arbitrary tokens
@@ -356,7 +361,7 @@ void Image::write(QJsonObject &json) const
 	// Identity
 	QJsonObject jsonIdentity;
 	for (const auto &key : m_identity.keys()) {
-		jsonIdentity[key] = QJsonValue::fromVariant(m_identity[key]);
+		jsonIdentity[key] = key == "id" ? QJsonValue(m_identity[key].toString()) : QJsonValue::fromVariant(m_identity[key]);
 	}
 	if (!jsonIdentity.isEmpty()) {
 		json["identity"] = jsonIdentity;
@@ -418,6 +423,11 @@ bool Image::read(const QJsonObject &json, const QMap<QString, Site*> &sites)
 	}
 
 	// Basic fields
+	m_pageUrl = json["page_url"].toString();
+	m_parentUrl = json["parent_url"].toString();
+	m_isGallery = json["is_gallery"].toBool();
+	m_galleryCount = json["gallery_count"].toInt(-1);
+	m_position = json["position"].toInt();
 	m_name = json["name"].toString();
 	m_id = json["id"].toString().toULongLong();
 	m_md5 = json["md5"].toString();

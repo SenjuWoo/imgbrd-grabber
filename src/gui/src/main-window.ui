@@ -182,7 +182,7 @@
   </widget>
   <widget class="QDockWidget" name="dock_favorites">
    <property name="windowTitle">
-    <string>Favorites</string>
+    <string>Saved searches</string>
    </property>
    <attribute name="dockWidgetArea">
     <number>1</number>
@@ -364,7 +364,7 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>Favorites</string>
+    <string>Saved searches</string>
    </property>
   </action>
   <action name="actionAddpooltab">

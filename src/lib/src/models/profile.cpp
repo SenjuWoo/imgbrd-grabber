@@ -17,6 +17,7 @@
 #include "functions.h"
 #include "logger.h"
 #include "models/favorite.h"
+#include "models/library-store.h"
 #include "models/md5-database/md5-database-sqlite.h"
 #include "models/md5-database/md5-database-text.h"
 #include "models/site.h"
@@ -229,6 +230,7 @@ void Profile::reload(bool init)
 
 Profile::~Profile()
 {
+	delete m_library;
 	sync();
 
 	if (m_settings != nullptr) {
@@ -621,4 +623,12 @@ QList<Site*> Profile::getFilteredSites(const QStringList &urls) const
 		}
 	}
 	return ret;
+}
+
+LibraryStore *Profile::library()
+{
+	if (m_library == nullptr) {
+		m_library = new LibraryStore(m_path.isEmpty() ? QString(":memory:") : m_path + "/library.sqlite", this);
+	}
+	return m_library;
 }

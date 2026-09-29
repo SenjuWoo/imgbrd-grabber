@@ -19,6 +19,7 @@ namespace Ui
 
 class SearchTab;
 class FavoritesTab;
+class LibraryTab;
 class Profile;
 class DownloadQueue;
 class DownloadsTab;
@@ -124,6 +125,7 @@ class MainWindow : public QMainWindow
 		QList<SearchTab*> m_tabs, m_tabsWaitingForPreload;
 		QList<Site*> m_selectedSites;
 		FavoritesTab *m_favoritesTab;
+		LibraryTab *m_libraryTab;
 		DownloadsTab *m_downloadsTab;
 		MonitorsTab *m_monitorsTab;
 		LogTab *m_logTab;

@@ -29,6 +29,7 @@ class Profile;
 class MainWindow;
 class DetailsWindow;
 class ImageDownloader;
+class ImageLibraryActions;
 class ImageLoader;
 class ImageLoaderQueue;
 class SearchTab;
@@ -48,7 +49,7 @@ class ViewerWindow : public QWidget
 			PendingOpen,
 		};
 
-		ViewerWindow(QList<QSharedPointer<Image>> images, const QSharedPointer<Image> &image, Site *site, Profile *profile, MainWindow *parent, SearchTab *tab);
+		ViewerWindow(QList<QSharedPointer<Image>> images, const QSharedPointer<Image> &image, Site *site, Profile *profile, MainWindow *parent, SearchTab *tab, qint64 collection = 0);
 		~ViewerWindow() override;
 		void go();
 		void load(bool force = false);
@@ -123,6 +124,8 @@ class ViewerWindow : public QWidget
 		void clearLoadQueue();
 
 	private:
+		ImageLibraryActions *m_libraryActions;
+		qint64 m_libraryCollection;
 		MainWindow *m_parent;
 		QPointer<SearchTab> m_tab;
 		Profile *m_profile;

@@ -35,6 +35,25 @@ Compared to stock Grabber, this fork focuses on things that break real use: hung
 | **Order / sort + free-text hygiene** | Real `order:` / `sort:` mapping across Gelbooru-family, Danbooru, E621, Moebooru, etc., plus freestyle aliases (`newest`, `popular`, …). Multi-site free-text search is cleaned so meta tags don’t poison APIs that don’t understand them. Also improves DeviantArt / Reddit / Twitter sort handling. |
 | **R34.xxx default source order** | Restores a sensible default source order for Rule34.xxx. |
 
+### Picture Library
+
+Keep individual pictures with **♥ Like**, **★ Favorite**, or **+ Collection** on
+search thumbnails and in the viewer. The **Library** tab has cached previews,
+search, Unsorted/Liked/Favorites/Recently saved views, picture notes and collection
+covers. Select several pictures to organize or rate them together. Double-click
+or press Enter to open a picture in the existing viewer.
+
+A picture can belong to multiple collections. Likes, favorites and notes in a
+collection apply only to that collection; the other Library views use separate
+Library-wide preferences. Use **More…** for notes, covers and removal, and
+**Manage collection…** to rename or delete a collection. Removal never deletes
+original downloads. Existing tag bookmarks are now labeled **Saved searches**;
+their data and monitors are preserved.
+
+The portable profile stores this catalog in `library.sqlite`, including bounded
+cached previews. Back it up together with the profile. AI recommendations, cloud
+processing and new source integrations are subsequent milestones.
+
 ### Packaging & UI
 
 | Change | Why it matters |
@@ -92,7 +111,7 @@ Full feature write-up and screenshots: [upstream README / site](https://github.c
 
 ## Local maintenance (Windows)
 
-The current source defaults to **7.14.0-fable.3**. This is a local build revision;
+The current source defaults to **7.14.0-fable.4**. This is a local build revision;
 the latest published archive is still **v7.14.0-fable.2** until a release is explicitly published.
 
 Run `scripts/build-local.ps1` to rebuild, run the existing C++ and site checks,
@@ -114,7 +133,7 @@ Same stack as upstream (Qt 6, CMake/Ninja, OpenSSL). See [Compilation](https://b
 
 Windows: run `scripts/build-local.ps1`, or configure CMake against Qt 6 + MSVC and build `Release`. `scripts/package-windows.ps1` packages the runtime with `windeployqt` and Windows tools; `package-windows.bat` remains the CI entry point.
 
-Local Windows builds use Qt **6.9.x** / MSVC; CI uses the Qt version in `.github/workflows/build.yml`. CMake `project()` needs a numeric version; an explicit local revision is `-DVERSION=7.14.0 -DVERSION_DISPLAY=7.14.0-fable.3`.
+Local Windows builds use Qt **6.9.x** / MSVC; CI uses the Qt version in `.github/workflows/build.yml`. CMake `project()` needs a numeric version; an explicit local revision is `-DVERSION=7.14.0 -DVERSION_DISPLAY=7.14.0-fable.4`.
 
 ---
 
@@ -132,6 +151,11 @@ Support the original author if you use Grabber:
 ---
 
 ## Changelog (Fable tags)
+
+### 7.14.0-fable.4 (local build, unpublished)
+- Add the portable picture Library, likes, favorites, named collections, covers, notes, search filters and batch actions.
+- Use one action set across thumbnails, viewer, menus and Library; keep Saved searches and monitors intact.
+- Correct Windows UTF-8 UI text and preserve thumbnail colors when selected.
 
 ### 7.14.0-fable.3 (local build, unpublished)
 - Merge Bionus `develop` through `3eb00bcb` and `master` through `56f673c6` (September 26, 2026): transparent video overlay, Java CI update, and js-yaml 3.15.2.
