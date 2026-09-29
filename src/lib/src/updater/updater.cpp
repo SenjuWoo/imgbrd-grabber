@@ -14,6 +14,19 @@ Updater::~Updater()
 
 int Updater::compareVersions(QString a, QString b)
 {
+	// Fable releases extend the upstream version; compare their numbered revision.
+	static const QRegularExpression forkSuffix("-fable\\.([0-9]+)$");
+	const auto aForkMatch = forkSuffix.match(a);
+	const auto bForkMatch = forkSuffix.match(b);
+	const int aFork = aForkMatch.captured(1).toInt();
+	const int bFork = bForkMatch.captured(1).toInt();
+	if (aForkMatch.hasMatch()) {
+		a.truncate(aForkMatch.capturedStart());
+	}
+	if (bForkMatch.hasMatch()) {
+		b.truncate(bForkMatch.capturedStart());
+	}
+
 	int aSub = 0;
 	char aSubType = ' ';
 	const int aPos = a.indexOf(QRegularExpression("[a-z]"));
@@ -70,5 +83,5 @@ int Updater::compareVersions(QString a, QString b)
 		}
 	}
 
-	return 0;
+	return (aFork > bFork) - (aFork < bFork);
 }

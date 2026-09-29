@@ -12,7 +12,7 @@
 
 
 ProgramUpdater::ProgramUpdater()
-	: ProgramUpdater(QStringLiteral("https://api.github.com/repos/Bionus/imgbrd-grabber"))
+	: ProgramUpdater(QStringLiteral("https://api.github.com/repos/SenjuWoo/imgbrd-grabber"))
 {}
 
 ProgramUpdater::ProgramUpdater(QString baseUrl)
@@ -49,7 +49,10 @@ void ProgramUpdater::checkForUpdatesDone()
 		latest = latest.left(8);
 		QString changelog;
 	#else
-		const QString latest = lastRelease["name"].toString().mid(1);
+		QString latest = lastRelease["tag_name"].toString();
+		if (latest.startsWith('v')) {
+			latest.remove(0, 1);
+		}
 		const bool isNew = compareVersions(latest, QString(VERSION)) > 0;
 		const QString changelog = lastRelease["body"].toString();
 	#endif

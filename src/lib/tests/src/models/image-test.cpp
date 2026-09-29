@@ -4,6 +4,7 @@
 #include <QScopedPointer>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QTemporaryFile>
 #include "loader/token.h"
 #include "models/image.h"
 #include "models/image-factory.h"
@@ -228,17 +229,17 @@ TEST_CASE("Image")
 			file.remove();
 		}
 
-		#ifdef Q_OS_WIN
-			SECTION("Error writing file to disk (Windows-only)")
-			{
-				const QString savePath = QDir::toNativeSeparators("Z:/../tests/resources/tmp/7331.jpg");
+		SECTION("Error creating the destination folder")
+		{
+			QTemporaryFile parentFile;
+			REQUIRE(parentFile.open());
+			const QString savePath = QDir::toNativeSeparators(parentFile.fileName() + "/7331.jpg");
 
-				img->setSavePath("tests/resources/image_1x1.png");
-				Image::SaveResult res = img->preSave(savePath, Image::Size::Full);
+			img->setSavePath("tests/resources/image_1x1.png");
+			Image::SaveResult res = img->preSave(savePath, Image::Size::Full);
 
-				REQUIRE(res == Image::SaveResult::Error);
-			}
-		#endif
+			REQUIRE(res == Image::SaveResult::Error);
+		}
 
 		SECTION("Destination file already exists on disk")
 		{

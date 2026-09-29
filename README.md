@@ -3,9 +3,9 @@
 <h1 align="center">Grabber <sup><sub>(Fable fork)</sub></sup></h1>
 
 <p align="center">
-  <a href="https://github.com/ShugokiFable/imgbrd-grabber/releases/latest"><img src="https://img.shields.io/github/v/release/ShugokiFable/imgbrd-grabber?label=latest%20release" alt="Latest release" /></a>
-  <a href="https://github.com/ShugokiFable/imgbrd-grabber/releases"><img src="https://img.shields.io/github/downloads/ShugokiFable/imgbrd-grabber/total" alt="Downloads" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/ShugokiFable/imgbrd-grabber" alt="License" /></a>
+  <a href="https://github.com/SenjuWoo/imgbrd-grabber/releases/latest"><img src="https://img.shields.io/github/v/release/SenjuWoo/imgbrd-grabber?label=latest%20release" alt="Latest release" /></a>
+  <a href="https://github.com/SenjuWoo/imgbrd-grabber/releases"><img src="https://img.shields.io/github/downloads/SenjuWoo/imgbrd-grabber/total" alt="Downloads" /></a>
+  <a href="LICENSE"><img src="https://img.shields.io/github/license/SenjuWoo/imgbrd-grabber" alt="License" /></a>
   <a href="https://github.com/Bionus/imgbrd-grabber"><img src="https://img.shields.io/badge/upstream-Bionus%2Fimgbrd--grabber-blue" alt="Upstream" /></a>
 </p>
 
@@ -50,14 +50,14 @@ Compared to stock Grabber, this fork focuses on things that break real use: hung
 
 ## Download (this fork)
 
-**Latest Windows build:** [Releases](https://github.com/ShugokiFable/imgbrd-grabber/releases/latest)
+**Latest Windows build:** [Releases](https://github.com/SenjuWoo/imgbrd-grabber/releases/latest)
 
 | Tag | Notes |
 |-----|--------|
-| [`v7.14.0-fable.2`](https://github.com/ShugokiFable/imgbrd-grabber/releases/tag/v7.14.0-fable.2) | **Current.** Crash-loop fix + latest Bionus develop on 7.14.0. Portable Windows x64 zip. |
-| [`v7.14.0-fable.1`](https://github.com/ShugokiFable/imgbrd-grabber/releases/tag/v7.14.0-fable.1) | Previous. Fable fixes on official 7.14.0. |
-| [`v7.13.0-fable.2`](https://github.com/ShugokiFable/imgbrd-grabber/releases/tag/v7.13.0-fable.2) | Previous Fable zip, before the 7.14.0 merge. |
-| [`v7.13.0-fable.1`](https://github.com/ShugokiFable/imgbrd-grabber/releases/tag/v7.13.0-fable.1) | First Fable package with translation packaging fix. |
+| [`v7.14.0-fable.2`](https://github.com/SenjuWoo/imgbrd-grabber/releases/tag/v7.14.0-fable.2) | Latest published archive. Crash-loop fix + latest Bionus develop on 7.14.0. Portable Windows x64 zip. |
+| [`v7.14.0-fable.1`](https://github.com/SenjuWoo/imgbrd-grabber/releases/tag/v7.14.0-fable.1) | Previous. Fable fixes on official 7.14.0. |
+| [`v7.13.0-fable.2`](https://github.com/SenjuWoo/imgbrd-grabber/releases/tag/v7.13.0-fable.2) | Previous Fable zip, before the 7.14.0 merge. |
+| [`v7.13.0-fable.1`](https://github.com/SenjuWoo/imgbrd-grabber/releases/tag/v7.13.0-fable.1) | First Fable package with translation packaging fix. |
 
 Unpack the zip and run `Grabber.exe`. No installer required.
 
@@ -90,6 +90,16 @@ Full feature write-up and screenshots: [upstream README / site](https://github.c
 
 ---
 
+## Local maintenance (Windows)
+
+The current source defaults to **7.14.0-fable.3**. This is a local build revision;
+the latest published archive is still **v7.14.0-fable.2** until a release is explicitly published.
+
+Run `scripts/build-local.ps1` to rebuild, run the existing C++ and site checks,
+and create a clean portable package. Build dependencies are discovered from
+environment variables or the existing CMake cache; Visual Studio is found with `vswhere`.
+See [the maintenance notes](docs/fable-maintenance.md) before deploying or deleting old app copies.
+
 ## Building from source
 
 Same stack as upstream (Qt 6, CMake/Ninja, OpenSSL). See [Compilation](https://bionus.github.io/imgbrd-grabber/docs/compilation.html).
@@ -102,16 +112,16 @@ Same stack as upstream (Qt 6, CMake/Ninja, OpenSSL). See [Compilation](https://b
 ./build-mac.sh
 ```
 
-Windows: configure with CMake against Qt 6 + MSVC, build `Release`, then package with `scripts/package-windows.bat` (needs Git Bash, 7-Zip, `windeployqt`).
+Windows: run `scripts/build-local.ps1`, or configure CMake against Qt 6 + MSVC and build `Release`. `scripts/package-windows.ps1` packages the runtime with `windeployqt` and Windows tools; `package-windows.bat` remains the CI entry point.
 
-Fable Windows release builds use Qt **6.9.x** / MSVC and stamp portable zips as `Grabber_7.14.0-fable.N_x64.zip`. CMake `project()` needs a numeric version, so pass `-DVERSION=7.14.0 -DVERSION_DISPLAY=7.14.0-fable.2`.
+Local Windows builds use Qt **6.9.x** / MSVC; CI uses the Qt version in `.github/workflows/build.yml`. CMake `project()` needs a numeric version; an explicit local revision is `-DVERSION=7.14.0 -DVERSION_DISPLAY=7.14.0-fable.3`.
 
 ---
 
 ## Relationship to upstream
 
 - **Upstream project:** [Bionus/imgbrd-grabber](https://github.com/Bionus/imgbrd-grabber) by [Jack Vasti (Bionus)](https://github.com/Bionus) and [contributors](https://github.com/Bionus/imgbrd-grabber#contributors).
-- **This fork:** [ShugokiFable/imgbrd-grabber](https://github.com/ShugokiFable/imgbrd-grabber).
+- **This fork:** [SenjuWoo/imgbrd-grabber](https://github.com/SenjuWoo/imgbrd-grabber).
 - License remains the upstream project license (see [`LICENSE`](LICENSE)).
 - Bug reports for **Fable-specific** behavior: open issues **here**. Core Grabber questions and PRs that belong upstream should go to Bionus when possible.
 
@@ -122,6 +132,12 @@ Support the original author if you use Grabber:
 ---
 
 ## Changelog (Fable tags)
+
+### 7.14.0-fable.3 (local build, unpublished)
+- Merge Bionus `develop` through `3eb00bcb` and `master` through `56f673c6` (September 26, 2026): transparent video overlay, Java CI update, and js-yaml 3.15.2.
+- Keep fork updates on SenjuWoo; read release tags and compare numbered Fable revisions correctly. Portable updates open the fork release page.
+- Package Windows runtimes from an empty staging directory; verify translations, source scripts and OpenSSL before replacing generated packages.
+- Repair Windows CTest launch and fixture paths; make the destination-folder failure regression independent of installed drive letters.
 
 ### v7.14.0-fable.2
 - Stop unbounded HTTP redirect and 429/503 retry loops (Sankaku OIDC bounce and Zerochan 503 storms were crashing in Qt6Core).

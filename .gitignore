@@ -132,3 +132,11 @@ Sessionx.vim
 
 ## Persistent undo
 [._]*.un~
+
+# Generated local packages and test profile state
+/release.new/
+src/lib/tests/resources/md5s.txt.bak
+src/lib/tests/resources/md5s.sqlite
+src/lib/tests/resources/history.json
+src/lib/tests/resources/monitors.json
+/src/tests/resources/

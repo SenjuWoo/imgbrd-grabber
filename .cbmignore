@@ -1,0 +1,16 @@
+# codebase-memory ignore for imgbrd-grabber fork
+# mkdocs documentation site — prose, not code
+docs/
+site/
+
+# local build outputs (also gitignored upstream)
+build/
+release/
+
+# Generated staging, dependencies and assets
+release.new/
+coverage/
+**/node_modules/
+src/gui/resources/
+src/gui-qml/resources/
+src/sites/**/resources/
