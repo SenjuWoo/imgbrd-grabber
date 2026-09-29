@@ -52,3 +52,5 @@ machine-specific drive letters or account names. They do not deploy over a live 
   the OpenSSL backend along with the verified OpenSSL runtime libraries.
 - CI uses the current all_os Android Qt repository. The release-tag regression
   runs in stable builds because nightlies use commit hashes instead of release tags.
+- Linux CI restores execute permissions on the Android SDK CMake wrappers; the
+  shared Qt archive otherwise fails before configuration with exit code 126.

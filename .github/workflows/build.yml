@@ -654,6 +654,8 @@ jobs:
         QT_ANDROID_KEYSTORE_ALIAS: release
         QT_ANDROID_KEYSTORE_STORE_PASS: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
       run: |
+        # The shared Android archive does not preserve Linux wrapper permissions.
+        chmod +x "${QT_ROOT_DIR}"/../android_*/bin/qt-cmake*
         mkdir build
         cd build
         ${{ env.QT_ROOT_DIR }}/bin/qt-cmake ../src \
