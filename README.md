@@ -86,7 +86,7 @@ Full feature write-up and screenshots: [upstream README / site](https://github.c
 | Branch | Role |
 |--------|------|
 | `develop` | **Default.** Fable fixes on top of upstream 7.14.0 + later Bionus develop. Tagged Fable releases are cut from here. |
-| `master` | Same tree as `develop`. |
+| `master` | Historical release branch; active maintenance is on `develop`. |
 
 ---
 
