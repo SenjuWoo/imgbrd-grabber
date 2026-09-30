@@ -11,6 +11,8 @@ permissions:
 jobs:
   tag_databases:
     name: Tag databases
+    # This upstream publisher requires its nightly release; forks do not ship one.
+    if: github.repository == 'Bionus/imgbrd-grabber'
     runs-on: ubuntu-latest
     permissions:
       contents: write
