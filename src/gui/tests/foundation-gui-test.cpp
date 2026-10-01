@@ -78,6 +78,8 @@ TEST_CASE("Viewer navigation applies tag actions to the displayed picture source
 		}
 	});
 	viewer.contextMenu(QPoint());
+	// Offscreen macOS menus may return before dispatching the queued action.
+	QApplication::processEvents();
 	REQUIRE(invoked);
 	const int index = profile->getFavorites().indexOf(Favorite("foundation_tag"));
 	REQUIRE(index >= 0);
