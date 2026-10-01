@@ -3,8 +3,23 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QFile>
+#include <QDir>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QFileDialog>
+#include <QFileInfo>
+#include <QFutureWatcher>
+#include <QMimeData>
+#include <QPlainTextEdit>
+#include <QProgressDialog>
+#include <QSettings>
+#include <QtConcurrent>
+#include "models/library-importer.h"
+#include "viewer/library-image-dialog.h"
+#include "viewer/library-source-dialog.h"
 #include <QHBoxLayout>
 #include <QInputDialog>
+#include <QImageReader>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
@@ -31,6 +46,8 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	: QWidget(parent), m_profile(profile), m_mainWindow(parent), m_store(profile->library())
 {
 	setObjectName("libraryTab");
+	setAcceptDrops(true);
+	m_copyImports = profile->getSettings()->value("Library/copyImports", false).toBool();
 	setWindowTitle(tr("Library"));
 	setMaximumWidth(16777214); // Existing convention for permanent tabs.
 	auto *layout = new QHBoxLayout(this);
@@ -87,6 +104,38 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	m_filter->addItems({ tr("All pictures"), tr("Liked"), tr("Favorites") });
 	filters->addWidget(m_search, 1);
 	filters->addWidget(m_filter);
+	m_importButton = new QPushButton(tr("Import pictures…"), content);
+	m_importButton->setObjectName("libraryImport");
+	m_importButton->setEnabled(m_store->isReady());
+	m_importButton->setToolTip(tr("Choose files or a folder, or drop pictures into Library."));
+	auto *importMenu = new QMenu(m_importButton);
+	importMenu->addAction(tr("Choose pictures…"), this, [this]() {
+		QStringList patterns;
+		for (const auto &format : QImageReader::supportedImageFormats()) {
+			patterns.append("*." + QString::fromLatin1(format));
+		}
+		const auto files = QFileDialog::getOpenFileNames(this, tr("Import pictures"), QString(), tr("Pictures (%1);;All files (*)").arg(patterns.join(' ')));
+		if (!files.isEmpty()) {
+			importPaths(files, m_copyImports);
+		}
+	});
+	importMenu->addAction(tr("Choose folder…"), this, [this]() {
+		const auto folder = QFileDialog::getExistingDirectory(this, tr("Import folder and subfolders"));
+		if (!folder.isEmpty()) {
+			importPaths({folder}, m_copyImports);
+		}
+	});
+	importMenu->addSeparator();
+	auto *copyAction = importMenu->addAction(tr("Copy into portable Library"));
+	copyAction->setCheckable(true);
+	copyAction->setChecked(m_copyImports);
+	copyAction->setToolTip(tr("Off: reference existing files. On: keep an extra copy beside your Library catalog. Originals stay on disk."));
+	connect(copyAction, &QAction::toggled, this, [this](bool copy) {
+		m_copyImports = copy;
+		m_profile->getSettings()->setValue("Library/copyImports", copy);
+	});
+	m_importButton->setMenu(importMenu);
+	filters->addWidget(m_importButton);
 	contentLayout->addLayout(filters);
 	m_count = new QLabel(content);
 	contentLayout->addWidget(m_count);
@@ -142,7 +191,11 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	});
 	connect(m_store, &LibraryStore::imageChanged, this, &LibraryTab::scheduleReload);
 	connect(m_store, &LibraryStore::collectionsChanged, this, &LibraryTab::scheduleReload);
-	connect(m_search, &QLineEdit::textChanged, this, &LibraryTab::scheduleReload);
+	m_searchTimer = new QTimer(this);
+	m_searchTimer->setSingleShot(true);
+	m_searchTimer->setInterval(150);
+	connect(m_searchTimer, &QTimer::timeout, this, &LibraryTab::scheduleReload);
+	connect(m_search, &QLineEdit::textChanged, this, [this]() { m_searchTimer->start(); });
 	connect(m_filter, &QComboBox::currentIndexChanged, this, &LibraryTab::scheduleReload);
 	connect(m_sidebar, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) {
 		if (item != nullptr && item->data(0, Qt::UserRole).isValid()) {
@@ -161,7 +214,7 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 
 void LibraryTab::scheduleReload()
 {
-	if (m_reloadPending) {
+	if (m_reloadPending || m_importing) {
 		return;
 	}
 	m_reloadPending = true;
@@ -171,6 +224,9 @@ void LibraryTab::scheduleReload()
 
 void LibraryTab::reload()
 {
+	if (m_importing) {
+		return;
+	}
 	const auto collections = m_store->collections();
 	bool collectionExists = m_collection == 0;
 	QString title = tr("All pictures");
@@ -250,6 +306,9 @@ void LibraryTab::reload()
 			name = tr("Picture #%1").arg(entry.image.value("id").toString());
 		}
 		QString source = entry.image.value("website").toString();
+		if (source.isEmpty()) {
+			source = tr("Local file · source unlinked");
+		}
 		QString badges = (entry.liked ? QStringLiteral("♥ ") : QString()) + (entry.favorite ? QStringLiteral("★ ") : QString());
 		if (!entry.notes.isEmpty()) {
 			badges += tr("Note · ");
@@ -296,7 +355,7 @@ QSharedPointer<Image> LibraryTab::restoreImage(const LibraryEntry &entry)
 	if (!thumbnail.isNull()) {
 		image->setPreviewImage(thumbnail);
 	}
-	for (const QString &path : m_profile->md5Exists(image->md5())) {
+	for (const QString &path : entry.localPaths + (image->md5().isEmpty() ? QStringList() : m_profile->md5Exists(image->md5()))) {
 		if (QFile::exists(path)) {
 			image->setSavePath(path);
 			break;
@@ -372,8 +431,15 @@ void LibraryTab::openImage(const QString &key)
 {
 	const auto entry = m_entries.value(key);
 	auto image = restoreImage(entry);
-	if (!image) {
-		QMessageBox::information(this, tr("Library"), tr("This source is no longer configured. The cached picture and its preferences are preserved. Add the source again to use the viewer."));
+	if (!entry.localPaths.isEmpty() || !image || !image->savePath().isEmpty()) {
+		QStringList keys;
+		for (int i = 0; i < m_grid->count(); ++i) {
+			keys.append(m_grid->item(i)->data(Qt::UserRole).toString());
+		}
+		auto *viewer = new LibraryImageDialog(m_profile, keys, key, m_collection, this);
+		connect(viewer, &LibraryImageDialog::locateRequested, this, &LibraryTab::locateFile);
+		connect(viewer, &LibraryImageDialog::sourceRequested, this, &LibraryTab::findSource);
+		viewer->show();
 		return;
 	}
 	if (image->isGallery() && m_mainWindow != nullptr) {
@@ -408,7 +474,12 @@ void LibraryTab::imageMenu(const QPoint &pos)
 	m_actions->addToMenu(&menu);
 	if (m_grid->selectedItems().count() == 1) {
 		menu.addAction(tr("View picture"), this, [this, key]() { openImage(key); });
-		menu.addAction(tr("Open source page"), this, [entry]() { QDesktopServices::openUrl(QUrl(entry.image.value("page_url").toString())); });
+		const QUrl page(entry.image.value("page_url").toString());
+		if (page.isValid() && !page.host().isEmpty() && (page.scheme() == "http" || page.scheme() == "https")) {
+			menu.addAction(tr("Open source page"), this, [page]() { QDesktopServices::openUrl(page); });
+		}
+		menu.addAction(tr("Find / link source…"), this, [this, key]() { findSource(key); });
+		menu.addAction(tr("Locate matching local file…"), this, [this, key]() { locateFile(key); });
 		menu.addAction(tr("Edit note…"), this, [this, key, entry]() {
 			bool accepted;
 			const QString notes = QInputDialog::getMultiLineText(this, tr("Picture note"), tr("Note for this view:"), entry.notes, &accepted);
@@ -451,4 +522,150 @@ void LibraryTab::imageMenu(const QPoint &pos)
 		}
 	});
 	menu.exec(m_grid->viewport()->mapToGlobal(pos));
+}
+
+LibraryTab::~LibraryTab()
+{
+	if (m_cancel) {
+		m_cancel->store(true);
+	}
+}
+
+void LibraryTab::dragEnterEvent(QDragEnterEvent *event)
+{
+	if (!m_importing && m_store->isReady() && event->mimeData()->hasUrls()) {
+		for (const auto &url : event->mimeData()->urls()) {
+			if (url.isLocalFile()) {
+				event->acceptProposedAction(); return;
+			}
+		}
+	}
+}
+
+void LibraryTab::dropEvent(QDropEvent *event)
+{
+	QStringList paths;
+	for (const auto &url : event->mimeData()->urls()) {
+		if (url.isLocalFile()) {
+			paths.append(url.toLocalFile());
+		}
+	}
+	if (!paths.isEmpty() && !m_importing) {
+		event->acceptProposedAction();
+		importPaths(paths, m_copyImports);
+	}
+}
+
+void LibraryTab::locateFile(const QString &key)
+{
+	if (m_importing) {
+		return;
+	}
+	const QString file = QFileDialog::getOpenFileName(this, tr("Locate the original picture"));
+	if (!file.isEmpty()) {
+		importPaths({file}, false, key);
+	}
+}
+
+void LibraryTab::findSource(const QString &key)
+{
+	auto *dialog = new LibrarySourceDialog(m_profile, key, this);
+	dialog->setAttribute(Qt::WA_DeleteOnClose);
+	dialog->show();
+}
+
+void LibraryTab::importPaths(const QStringList &paths, bool copy, const QString &expectedKey)
+{
+	if (m_importing || paths.isEmpty() || !m_store->isReady()) {
+		return;
+	}
+	m_importing = true;
+	m_added = m_duplicates = m_failed = m_importIndex = 0;
+	m_importErrors.clear();
+	m_importFiles.clear();
+	m_knownKeys.clear();
+	for (const auto &entry : m_store->entries()) {
+		m_knownKeys.insert(entry.key);
+	}
+	m_importCollection = m_collection;
+	m_expectedKey = expectedKey;
+	m_managedDirectory = copy ? QDir(m_profile->getPath()).filePath("library-media") : QString();
+	m_cancel = std::make_shared<std::atomic_bool>(false);
+	m_importButton->setEnabled(false);
+	m_progress = new QProgressDialog(tr("Finding pictures…"), tr("Cancel"), 0, 0, this);
+	m_progress->setWindowTitle(tr("Import pictures"));
+	m_progress->setWindowModality(Qt::NonModal);
+	m_progress->setMinimumDuration(0);
+	m_progress->setAutoClose(false);
+	connect(m_progress, &QProgressDialog::canceled, this, [cancel = m_cancel]() { cancel->store(true); });
+	m_progress->show();
+	auto *watcher = new QFutureWatcher<QStringList>(this);
+	connect(watcher, &QFutureWatcher<QStringList>::finished, this, [this, watcher]() {
+		m_importFiles = watcher->result();
+		watcher->deleteLater();
+		m_progress->setRange(0, qMax(1, int(m_importFiles.size())));
+		importNext();
+	});
+	watcher->setFuture(QtConcurrent::run([paths, cancel = m_cancel]() { return LibraryImporter::imageFiles(paths, cancel); }));
+}
+
+void LibraryTab::importNext()
+{
+	if (m_cancel->load() || m_importIndex >= m_importFiles.size()) {
+		finishImport(); return;
+	}
+	const QString path = m_importFiles[m_importIndex];
+	m_progress->setLabelText(tr("%1 of %2 · %3").arg(m_importIndex + 1).arg(m_importFiles.size()).arg(QFileInfo(path).fileName()));
+	m_progress->setValue(m_importIndex);
+	auto *watcher = new QFutureWatcher<LibraryImportData>(this);
+	connect(watcher, &QFutureWatcher<LibraryImportData>::finished, this, [this, watcher, path]() {
+		const auto data = watcher->result();
+		watcher->deleteLater();
+		if (!m_cancel->load() || data.error.isEmpty()) {
+			const QString key = data.error.isEmpty() ? m_store->saveLocalImage(data, m_importCollection, m_expectedKey) : QString();
+			if (key.isEmpty()) {
+				++m_failed;
+				if (m_importErrors.size() < 50) {
+					m_importErrors.append(QFileInfo(path).fileName() + ": " + (data.error.isEmpty() ? m_store->lastError() : data.error));
+				}
+			} else if (m_knownKeys.contains(key)) {
+				++m_duplicates;
+			} else {
+				m_knownKeys.insert(key); ++m_added;
+			}
+		}
+		++m_importIndex;
+		importNext();
+	});
+	watcher->setFuture(QtConcurrent::run([path, directory = m_managedDirectory, cancel = m_cancel]() { return LibraryImporter::inspect(path, directory, cancel); }));
+}
+
+void LibraryTab::finishImport()
+{
+	const bool cancelled = m_cancel->load();
+	m_progress->hide();
+	m_progress->deleteLater();
+	m_progress = nullptr;
+	m_importing = false;
+	m_importButton->setEnabled(m_store->isReady());
+	reload();
+	QString summary = tr("Import: %1 added · %2 duplicates · %3 failed").arg(m_added).arg(m_duplicates).arg(m_failed);
+	if (cancelled) {
+		summary += tr(" · Cancelled; completed pictures were kept.");
+	} else if (m_importFiles.isEmpty()) {
+		summary += tr(" · No supported pictures found.");
+	}
+	m_hint->setText(summary);
+	if (!m_importErrors.isEmpty()) {
+		auto *report = new QDialog(this);
+		report->setAttribute(Qt::WA_DeleteOnClose);
+		report->setWindowTitle(tr("Import report"));
+		auto *layout = new QVBoxLayout(report);
+		auto *text = new QPlainTextEdit(summary + "\n\n" + m_importErrors.join('\n'), report);
+		text->setReadOnly(true);
+		layout->addWidget(text);
+		report->resize(650, 350);
+		report->show();
+	}
+	emit importFinished(m_added, m_duplicates, m_failed);
 }

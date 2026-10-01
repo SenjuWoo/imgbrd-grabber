@@ -6,8 +6,10 @@
 #include <QObject>
 #include <QSqlDatabase>
 #include <QVariant>
+#include <QStringList>
 
 class Image;
+struct LibraryImportData;
 
 struct LibraryEntry
 {
@@ -19,6 +21,7 @@ struct LibraryEntry
 	QString notes;
 	QString savedAt;
 	int collectionCount = 0;
+	QStringList localPaths;
 };
 
 struct LibraryCollection
@@ -39,7 +42,12 @@ class LibraryStore : public QObject
 		bool isReady() const;
 		QString lastError() const;
 		static QString imageKey(const Image &image);
+		QString keyForImage(const Image &image);
 		QString saveImage(const Image &image);
+		QString saveLocalImage(const LibraryImportData &data, qint64 collection = 0, const QString &expectedKey = {});
+		bool linkSource(const QString &key, const Image &image, const QString &evidence);
+		bool backupTo(const QString &path);
+		bool restoreFrom(const QString &path);
 		QList<LibraryEntry> entries(qint64 collection = 0);
 		LibraryEntry entry(const QString &key, qint64 collection = 0);
 		bool setLiked(const QString &key, bool liked, qint64 collection = 0);
@@ -62,6 +70,9 @@ class LibraryStore : public QObject
 	private:
 		bool execute(const QString &sql, const QVariantList &values = {});
 		bool setValue(const QString &key, const QString &column, const QVariant &value, qint64 collection);
+		QString storedPath(const QString &path) const;
+		QString resolvedPath(const QString &path) const;
+		QString m_directory;
 		QString m_connection;
 		QSqlDatabase m_database;
 		QString m_error;

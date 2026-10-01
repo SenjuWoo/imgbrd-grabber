@@ -41,7 +41,8 @@ ImageLibraryActions::ImageLibraryActions(Profile *profile, const QSharedPointer<
 	m_scopeLabel = new QLabel(this);
 	m_scopeLabel->setObjectName("libraryScope");
 	m_scopeLabel->setTextFormat(Qt::PlainText);
-	m_scopeLabel->setSizePolicy(QSizePolicy::Ignored, QSizePolicy::Preferred);
+	m_scopeLabel->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+	m_scopeLabel->setMaximumWidth(260);
 	m_scopeLabel->setVisible(!compact);
 	layout->addWidget(m_likeButton);
 	layout->addWidget(m_favoriteButton);
@@ -90,7 +91,7 @@ ImageLibraryActions::ImageLibraryActions(Profile *profile, const QSharedPointer<
 
 void ImageLibraryActions::setImage(const QSharedPointer<Image> &image, qint64 collection)
 {
-	setSelection({ image }, { image ? LibraryStore::imageKey(*image) : QString() }, collection);
+	setSelection({ image }, { image ? m_store->keyForImage(*image) : QString() }, collection);
 }
 
 void ImageLibraryActions::setSelection(const QList<QSharedPointer<Image>> &images, const QStringList &keys, qint64 collection)
@@ -108,7 +109,7 @@ void ImageLibraryActions::setSelection(const QList<QSharedPointer<Image>> &image
 			continue;
 		}
 		auto updateSavedImage = [this, imagePointer = image.data()]() {
-			if (m_store->contains(LibraryStore::imageKey(*imagePointer))) {
+			if (m_store->contains(m_store->keyForImage(*imagePointer))) {
 				m_store->saveImage(*imagePointer);
 			}
 		};
@@ -142,6 +143,14 @@ void ImageLibraryActions::showError()
 
 void ImageLibraryActions::refresh()
 {
+	// An explicit source link can merge a source entry while its viewer is open.
+	if (m_images.size() == m_keys.size()) {
+		for (int i = 0; i < m_images.size(); ++i) {
+			if (m_images[i]) {
+				m_keys[i] = m_store->keyForImage(*m_images[i]);
+			}
+		}
+	}
 	QString scope = tr("Library-wide");
 	bool scopeExists = m_collection == 0;
 	if (m_collection > 0) {
@@ -180,7 +189,7 @@ void ImageLibraryActions::refresh()
 	m_favoriteButton->setAccessibleName(m_favoriteButton->toolTip());
 	m_collectButton->setAccessibleName(m_collectButton->toolTip());
 	m_scopeLabel->setText(scope);
-	m_scopeLabel->setToolTip(tr("Likes and favorites apply only to this scope."));
+	m_scopeLabel->setToolTip(tr("Likes and favorites apply only to %1.").arg(scope));
 	if (!m_store->isReady()) {
 		setToolTip(m_store->lastError());
 	}

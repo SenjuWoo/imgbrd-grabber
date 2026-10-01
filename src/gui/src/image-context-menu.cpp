@@ -68,7 +68,7 @@ void ImageContextMenu::searchMd5()
 
 void ImageContextMenu::reverseImageSearch(int i)
 {
-	if (m_reverseSearchEngines.count() < i) {
+	if (i < 0 || i >= m_reverseSearchEngines.count()) {
 		return;
 	}
 

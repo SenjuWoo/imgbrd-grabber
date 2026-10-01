@@ -4,19 +4,24 @@
 #include <QDateTime>
 #include <QDir>
 #include <QFileInfo>
+#include <QFile>
+#include "utils/file-utils.h"
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPixmap>
+#include <QRegularExpression>
 #include <QSqlError>
 #include <QSqlQuery>
 #include <QUuid>
 #include "models/image.h"
+#include "models/library-importer.h"
 #include "models/site.h"
 
 
 LibraryStore::LibraryStore(const QString &path, QObject *parent)
 	: QObject(parent), m_connection("library-" + QUuid::createUuid().toString())
 {
+	m_directory = QFileInfo(path).absolutePath();
 	if (path != ":memory:" && !QDir().mkpath(QFileInfo(path).absolutePath())) {
 		m_error = tr("Cannot create the Library directory.");
 		return;
@@ -39,7 +44,7 @@ LibraryStore::LibraryStore(const QString &path, QObject *parent)
 	}
 	const int version = check.value(0).toInt();
 	check.finish();
-	if (version > 1 || version < 0) {
+	if (version > 2 || version < 0) {
 		m_error = tr("This Library was created by a newer Grabber. Open it with that version.");
 		return;
 	}
@@ -78,10 +83,46 @@ LibraryStore::LibraryStore(const QString &path, QObject *parent)
 			return;
 		}
 	}
-	// Validate every table before enabling writes; never recreate an existing schema.
-	m_ready = execute("SELECT key,metadata,thumbnail,liked,favorite,notes,saved_at,updated_at FROM images LIMIT 0")
-		&& execute("SELECT id,name,cover_key FROM collections LIMIT 0")
-		&& execute("SELECT image_key,collection_id,liked,favorite,notes FROM members LIMIT 0");
+	// Validate the original schema before backing it up or attempting migration.
+	if (!execute("SELECT key,metadata,thumbnail,liked,favorite,notes,saved_at,updated_at FROM images LIMIT 0")
+		|| !execute("SELECT id,name,cover_key FROM collections LIMIT 0")
+		|| !execute("SELECT image_key,collection_id,liked,favorite,notes FROM members LIMIT 0")) {
+		return;
+	}
+	if (version < 2) {
+		if (version == 1 && path != ":memory:") {
+			const QString backup = path + ".before-import-" + QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss-zzz") + "-" + QUuid::createUuid().toString(QUuid::Id128) + ".bak";
+			if (!execute("VACUUM INTO ?", { backup })) {
+				m_error = tr("Cannot back up the Library before upgrading: %1").arg(m_error);
+				return;
+			}
+		}
+		if (!m_database.transaction()) {
+			m_error = m_database.lastError().text();
+			return;
+		}
+		const QStringList schema {
+			"CREATE TABLE local_files (path TEXT PRIMARY KEY, image_key TEXT NOT NULL REFERENCES images(key) ON DELETE CASCADE, "
+			"sha256 TEXT NOT NULL, md5 TEXT NOT NULL, source_md5 TEXT NOT NULL, visual_hash TEXT NOT NULL)",
+			"CREATE INDEX local_files_hash ON local_files(sha256)",
+			"CREATE INDEX local_files_image ON local_files(image_key)",
+			"CREATE TABLE source_links (source_key TEXT PRIMARY KEY, image_key TEXT NOT NULL REFERENCES images(key) ON DELETE CASCADE)",
+			"PRAGMA user_version = 2"
+		};
+		for (const QString &sql : schema) {
+			if (!execute(sql)) {
+				m_database.rollback();
+				return;
+			}
+		}
+		if (!m_database.commit()) {
+			m_error = m_database.lastError().text();
+			m_database.rollback();
+			return;
+		}
+	}
+	m_ready = execute("SELECT path,image_key,sha256,md5,source_md5,visual_hash FROM local_files LIMIT 0")
+		&& execute("SELECT source_key,image_key FROM source_links LIMIT 0");
 }
 
 LibraryStore::~LibraryStore()
@@ -149,15 +190,24 @@ QString LibraryStore::saveImage(const Image &image)
 	if (!m_ready) {
 		return {};
 	}
-	const QString key = imageKey(image);
+	const QString key = keyForImage(image);
 	if (key.isEmpty()) {
 		m_error = tr("This picture has no usable source identity.");
 		return {};
 	}
 	QJsonObject metadata;
 	image.write(metadata);
+	const auto previous = entry(key).image;
+	for (const QString &field : {QString("local_import"), QString("source_link_evidence")}) {
+		if (previous.contains(field)) {
+			metadata.insert(field, previous.value(field));
+		}
+	}
 	QByteArray thumbnail;
 	const QPixmap preview = image.previewImage();
+	if (!preview.isNull()) {
+		metadata.insert("visual_hash", LibraryImporter::visualHash(preview.toImage()));
+	}
 	if (!preview.isNull()) {
 		QBuffer buffer(&thumbnail);
 		buffer.open(QIODevice::WriteOnly);
@@ -199,6 +249,21 @@ QList<LibraryEntry> LibraryStore::entries(qint64 collection)
 		result.append({ query.value(0).toString(), QJsonDocument::fromJson(query.value(1).toByteArray()).object(),
 						query.value(2).toByteArray(), query.value(3).toBool(), query.value(4).toBool(), query.value(5).toString(), query.value(6).toString(), query.value(7).toInt() });
 	}
+	query.finish();
+	QHash<QString, int> indexes;
+	for (int i = 0; i < result.size(); ++i) {
+		indexes.insert(result[i].key, i);
+	}
+	if (query.exec("SELECT image_key,path FROM local_files ORDER BY path")) {
+		while (query.next()) {
+			const auto it = indexes.constFind(query.value(0).toString());
+			if (it != indexes.cend()) {
+				result[*it].localPaths.append(resolvedPath(query.value(1).toString()));
+			}
+		}
+	} else {
+		m_error = query.lastError().text();
+	}
 	return result;
 }
 
@@ -222,6 +287,18 @@ LibraryEntry LibraryStore::entry(const QString &key, qint64 collection)
 				   query.value(3).toBool(), query.value(4).toString(), query.value(5).toString(), query.value(6).toInt() };
 	} else if (query.lastError().isValid()) {
 		m_error = query.lastError().text();
+	}
+	query.finish();
+	if (!result.key.isEmpty()) {
+		query.prepare("SELECT path FROM local_files WHERE image_key=? ORDER BY path");
+		query.addBindValue(key);
+		if (query.exec()) {
+			while (query.next()) {
+				result.localPaths.append(resolvedPath(query.value(0).toString()));
+			}
+		} else {
+			m_error = query.lastError().text();
+		}
 	}
 	return result;
 }
@@ -366,6 +443,316 @@ bool LibraryStore::removeFromCollection(const QString &key, qint64 collection)
 		return false;
 	}
 	emit imageChanged(key);
+	emit collectionsChanged();
+	return true;
+}
+
+QString LibraryStore::storedPath(const QString &path) const
+{
+	const QString absolute = QFileInfo(path).absoluteFilePath();
+	const QString relative = QDir(m_directory).relativeFilePath(absolute);
+	return relative.startsWith("library-media/") ? relative : absolute;
+}
+
+QString LibraryStore::resolvedPath(const QString &path) const
+{
+	return QDir::isAbsolutePath(path) ? path : QDir(m_directory).absoluteFilePath(path);
+}
+
+QString LibraryStore::keyForImage(const Image &image)
+{
+	const QString source = imageKey(image);
+	if (!m_ready || source.isEmpty()) {
+		return source;
+	}
+	QSqlQuery query(m_database);
+	query.prepare("SELECT image_key FROM source_links WHERE source_key=?");
+	query.addBindValue(source);
+	if (!query.exec()) {
+		m_error = query.lastError().text(); return {};
+	}
+	return query.next() ? query.value(0).toString() : source;
+}
+
+QString LibraryStore::saveLocalImage(const LibraryImportData &data, qint64 collection, const QString &expectedKey)
+{
+	static const QRegularExpression sha("^[0-9a-f]{64}$"), md5("^[0-9a-f]{32}$");
+	if (!m_ready || !data.error.isEmpty() || !sha.match(data.sha256).hasMatch() || !md5.match(data.md5).hasMatch()
+		|| data.path.isEmpty() || data.thumbnail.isEmpty()) {
+		m_error = data.error.isEmpty() ? tr("This file has no usable image or content hash.") : data.error;
+		return {};
+	}
+	QString key;
+	QSqlQuery query(m_database);
+	query.prepare("SELECT image_key FROM local_files WHERE sha256=? LIMIT 1");
+	query.addBindValue(data.sha256);
+	if (!query.exec()) {
+		m_error = query.lastError().text(); return {};
+	}
+	if (query.next()) {
+		key = query.value(0).toString();
+	}
+	query.finish();
+	if (!expectedKey.isEmpty()) {
+		const auto expected = entry(expectedKey);
+		const QString expectedSha = expected.image.value("local_import").toObject().value("sha256").toString();
+		if (expected.key.isEmpty() || (!expectedSha.isEmpty() ? expectedSha != data.sha256 : expected.image.value("md5").toString().toLower() != data.md5)) {
+			m_error = tr("The selected file does not match this picture's recorded content hash.");
+			return {};
+		}
+		if (!key.isEmpty() && key != expectedKey) {
+			m_error = tr("This file already belongs to another Library picture. Review its source link first.");
+			return {};
+		}
+		key = expectedKey;
+	}
+	// Only a verified byte hash can attach to an existing remote image automatically.
+	if (key.isEmpty()) {
+		QStringList exact;
+		query.prepare("SELECT key,metadata FROM images WHERE metadata LIKE ?");
+		query.addBindValue("%" + data.md5 + "%");
+		if (!query.exec()) {
+			m_error = query.lastError().text(); return {};
+		}
+		while (query.next()) {
+			const auto item = QJsonDocument::fromJson(query.value(1).toByteArray()).object();
+			if (!item.value("website").toString().isEmpty() && item.value("md5").toString().toLower() == data.md5) {
+				exact.append(query.value(0).toString());
+			}
+		}
+		query.finish();
+		if (exact.size() == 1) {
+			key = exact.first();
+		}
+	}
+	if (key.isEmpty()) {
+		key = "local-" + data.sha256;
+	}
+	QJsonObject metadata = entry(key).image;
+	if (metadata.isEmpty()) {
+		metadata.insert("name", data.title);
+		metadata.insert("tags", data.tags.join(' '));
+	}
+	QJsonObject local = metadata.value("local_import").toObject();
+	if (local.isEmpty()) {
+		local = data.metadata;
+		local.insert("sha256", data.sha256);
+		local.insert("md5", data.md5);
+		local.insert("source_md5", data.sourceMd5);
+		local.insert("visual_hash", data.visualHash);
+		local.insert("width", data.size.width());
+		local.insert("height", data.size.height());
+		local.insert("source_urls", QJsonArray::fromStringList(data.sourceUrls));
+		local.insert("tags", QJsonArray::fromStringList(data.tags));
+	} else {
+		QJsonArray evidenceItems = local.value("evidence").toArray();
+		for (const auto &item : data.metadata.value("evidence").toArray()) {
+			if (!evidenceItems.contains(item)) {
+				evidenceItems.append(item);
+			}
+		}
+		local.insert("evidence", evidenceItems);
+		for (const QString &field : {QString("source_urls"), QString("tags")}) {
+			QJsonArray values = local.value(field).toArray();
+			const auto incoming = QJsonArray::fromStringList(field == "tags" ? data.tags : data.sourceUrls);
+			for (const auto &value : incoming) {
+				if (!values.contains(value)) {
+					values.append(value);
+				}
+			}
+			local.insert(field, values);
+		}
+		if (local.value("source_md5").toString().isEmpty()) {
+			local.insert("source_md5", data.sourceMd5);
+		}
+	}
+	if (metadata.value("website").toString().isEmpty()) {
+		QStringList tags;
+		for (const auto &tag : local.value("tags").toArray()) {
+			tags.append(tag.toString());
+		}
+		metadata.insert("tags", tags.join(' '));
+	}
+	metadata.insert("local_import", local);
+	const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
+	if (!m_database.transaction()) {
+		m_error = m_database.lastError().text(); return {};
+	}
+	const bool ok = execute("INSERT INTO images(key,metadata,thumbnail,saved_at,updated_at) VALUES(?,?,?,?,?) "
+		"ON CONFLICT(key) DO UPDATE SET metadata=excluded.metadata,thumbnail=coalesce(images.thumbnail,excluded.thumbnail),updated_at=excluded.updated_at",
+		{key, QString::fromUtf8(QJsonDocument(metadata).toJson(QJsonDocument::Compact)), data.thumbnail, now, now})
+		&& execute("INSERT INTO local_files(path,image_key,sha256,md5,source_md5,visual_hash) VALUES(?,?,?,?,?,?) "
+		"ON CONFLICT(path) DO UPDATE SET image_key=excluded.image_key,sha256=excluded.sha256,md5=excluded.md5,source_md5=excluded.source_md5,visual_hash=excluded.visual_hash",
+		{storedPath(data.path), key, data.sha256, data.md5, data.sourceMd5.isEmpty() ? QStringLiteral("") : data.sourceMd5, data.visualHash.isEmpty() ? QStringLiteral("") : data.visualHash})
+		&& (collection <= 0 || execute("INSERT INTO members(image_key,collection_id) VALUES(?,?) ON CONFLICT DO NOTHING", {key, collection}));
+	if (!ok || !m_database.commit()) {
+		if (ok) {
+			m_error = m_database.lastError().text();
+		}
+		m_database.rollback();
+		return {};
+	}
+	emit imageChanged(key);
+	if (collection > 0) {
+		emit collectionsChanged();
+	}
+	return key;
+}
+
+bool LibraryStore::linkSource(const QString &key, const Image &image, const QString &evidence)
+{
+	const auto target = entry(key);
+	const QString source = imageKey(image);
+	const QString other = keyForImage(image);
+	if (!m_ready || target.key.isEmpty() || source.isEmpty()) {
+		m_error = tr("The picture or source identity is unavailable."); return false;
+	}
+	QJsonObject metadata;
+	image.write(metadata);
+	QJsonObject local = target.image.value("local_import").toObject();
+	const QJsonObject otherLocal = entry(other).image.value("local_import").toObject();
+	if (local.isEmpty()) {
+		local = otherLocal;
+	} else if (!otherLocal.isEmpty() && other != key) {
+		QJsonArray evidenceItems = local.value("evidence").toArray();
+		for (const auto &item : otherLocal.value("evidence").toArray()) {
+			if (!evidenceItems.contains(item)) {
+				evidenceItems.append(item);
+			}
+		}
+		local.insert("evidence", evidenceItems);
+		for (const QString &field : {QString("source_urls"), QString("tags")}) {
+			QJsonArray values = local.value(field).toArray();
+			for (const auto &value : otherLocal.value(field).toArray()) {
+				if (!values.contains(value)) {
+					values.append(value);
+				}
+			}
+			local.insert(field, values);
+		}
+	}
+	if (!local.isEmpty()) {
+		metadata.insert("local_import", local);
+	}
+	metadata.insert("source_link_evidence", evidence);
+	if (!m_database.transaction()) {
+		m_error = m_database.lastError().text(); return false;
+	}
+	bool ok = true;
+	if (other != key && contains(other)) {
+		ok = execute("UPDATE images SET liked=max(liked,(SELECT liked FROM images WHERE key=?)),favorite=max(favorite,(SELECT favorite FROM images WHERE key=?)), "
+			"notes=CASE WHEN notes='' THEN (SELECT notes FROM images WHERE key=?) WHEN (SELECT notes FROM images WHERE key=?)='' OR notes=(SELECT notes FROM images WHERE key=?) THEN notes "
+			"ELSE notes || char(10) || (SELECT notes FROM images WHERE key=?) END WHERE key=?", {other, other, other, other, other, other, key})
+			&& execute("INSERT INTO members(image_key,collection_id,liked,favorite,notes) SELECT ?,collection_id,liked,favorite,notes FROM members WHERE image_key=? "
+			"ON CONFLICT(image_key,collection_id) DO UPDATE SET liked=max(members.liked,excluded.liked),favorite=max(members.favorite,excluded.favorite), "
+			"notes=CASE WHEN members.notes='' THEN excluded.notes WHEN excluded.notes='' OR members.notes=excluded.notes THEN members.notes ELSE members.notes || char(10) || excluded.notes END", {key, other})
+			&& execute("UPDATE collections SET cover_key=? WHERE cover_key=?", {key, other})
+			&& execute("UPDATE local_files SET image_key=? WHERE image_key=?", {key, other})
+			&& execute("UPDATE source_links SET image_key=? WHERE image_key=?", {key, other})
+			&& execute("DELETE FROM images WHERE key=?", {other});
+	}
+	ok = ok && execute("UPDATE images SET metadata=?,updated_at=? WHERE key=?",
+		{QString::fromUtf8(QJsonDocument(metadata).toJson(QJsonDocument::Compact)), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs), key})
+		&& execute("INSERT INTO source_links(source_key,image_key) VALUES(?,?) ON CONFLICT(source_key) DO UPDATE SET image_key=excluded.image_key", {source, key});
+	if (!ok || !m_database.commit()) {
+		if (ok) {
+			m_error = m_database.lastError().text();
+		}
+		m_database.rollback(); return false;
+	}
+	emit imageChanged(QString());
+	emit collectionsChanged();
+	return true;
+}
+
+bool LibraryStore::backupTo(const QString &path)
+{
+	if (!m_ready || !QDir().mkpath(QFileInfo(path).absolutePath())) {
+		if (m_ready) {
+			m_error = tr("Cannot prepare the Library backup directory.");
+		}
+		return false;
+	}
+	return execute("VACUUM INTO ?", {QFileInfo(path).absoluteFilePath()});
+}
+
+bool LibraryStore::restoreFrom(const QString &path)
+{
+	const QFileInfo incoming(path);
+	if (!incoming.isFile()) {
+		m_error = tr("The Library backup file is missing.");
+		return false;
+	}
+	if (incoming.canonicalFilePath() == QFileInfo(m_database.databaseName()).canonicalFilePath()) {
+		return true;
+	}
+	{
+		LibraryStore validation(incoming.absoluteFilePath());
+		if (!validation.isReady()) {
+			m_error = tr("Cannot restore this Library: %1").arg(validation.lastError());
+			return false;
+		}
+	}
+	const QString suffix = ".before-restore-" + QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss-zzz") + "-" + QUuid::createUuid().toString(QUuid::Id128) + ".bak";
+	const QString backup = m_database.databaseName() == ":memory:" ? incoming.absoluteFilePath() + suffix : m_database.databaseName() + suffix;
+	if (!m_ready) {
+		const QString target = m_database.databaseName();
+		if (target.isEmpty() || target == ":memory:") {
+			m_error = tr("The Library has no usable restore location."); return false;
+		}
+		m_database.close();
+		if ((QFileInfo::exists(target) && !QFile::copy(target, backup)) || !atomicCopyFile(incoming.absoluteFilePath(), target)) {
+			m_database.open();
+			m_error = tr("Cannot preserve or replace the damaged Library.");
+			return false;
+		}
+		m_ready = m_database.open() && execute("PRAGMA foreign_keys=ON")
+			&& execute("SELECT key,metadata,thumbnail,liked,favorite,notes FROM images LIMIT 0")
+			&& execute("SELECT image_key,collection_id FROM members LIMIT 0")
+			&& execute("SELECT path,image_key FROM local_files LIMIT 0") && execute("SELECT source_key,image_key FROM source_links LIMIT 0");
+		if (m_ready) {
+			m_error.clear(); emit imageChanged(QString()); emit collectionsChanged();
+		}
+		return m_ready;
+	}
+	if (!backupTo(backup) || !execute("ATTACH DATABASE ? AS library_restore", {incoming.absoluteFilePath()})) {
+		return false;
+	}
+	if (!m_database.transaction()) {
+		m_error = m_database.lastError().text();
+		const QString error = m_error;
+		execute("DETACH DATABASE library_restore");
+		m_error = error;
+		return false;
+	}
+	const QStringList statements {
+		"DELETE FROM members", "DELETE FROM source_links", "DELETE FROM local_files", "DELETE FROM collections", "DELETE FROM images",
+		"INSERT INTO images(key,metadata,thumbnail,liked,favorite,notes,saved_at,updated_at) SELECT key,metadata,thumbnail,liked,favorite,notes,saved_at,updated_at FROM library_restore.images",
+		"INSERT INTO collections(id,name,cover_key) SELECT id,name,cover_key FROM library_restore.collections",
+		"INSERT INTO members(image_key,collection_id,liked,favorite,notes) SELECT image_key,collection_id,liked,favorite,notes FROM library_restore.members",
+		"INSERT INTO local_files(path,image_key,sha256,md5,source_md5,visual_hash) SELECT path,image_key,sha256,md5,source_md5,visual_hash FROM library_restore.local_files",
+		"INSERT INTO source_links(source_key,image_key) SELECT source_key,image_key FROM library_restore.source_links"
+	};
+	bool ok = true;
+	for (const QString &sql : statements) {
+		if (!execute(sql)) {
+			ok = false; break;
+		}
+	}
+	if (!ok || !m_database.commit()) {
+		if (ok) {
+			m_error = m_database.lastError().text();
+		}
+		const QString error = m_error;
+		m_database.rollback();
+		execute("DETACH DATABASE library_restore");
+		m_error = error;
+		return false;
+	}
+	if (!execute("DETACH DATABASE library_restore")) {
+		return false;
+	}
+	emit imageChanged(QString());
 	emit collectionsChanged();
 	return true;
 }

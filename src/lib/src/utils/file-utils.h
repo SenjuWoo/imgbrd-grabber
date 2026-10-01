@@ -7,6 +7,8 @@
 
 bool copyRecursively(QString srcFilePath, QString tgtFilePath, bool overwrite = false);
 bool safeCopyFile(const QString &from, const QString &dest, bool backup = false);
+// Stream a replacement through QSaveFile; failures preserve the existing destination.
+bool atomicCopyFile(const QString &from, const QString &dest);
 bool safeWriteFile(const QString &filePath, const QByteArray &data, bool backup = false);
 
 bool ensureFileParent(const QString &filePath);

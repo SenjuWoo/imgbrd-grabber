@@ -1,6 +1,7 @@
 #include <QFile>
 #include <QJsonObject>
 #include <QTemporaryFile>
+#include <QTemporaryDir>
 #include "models/image-size.h"
 #include "catch.h"
 
@@ -48,7 +49,9 @@ TEST_CASE("ImageSize")
 
 	SECTION("SaveDefault")
 	{
-		const QString dest = "tests/resources/tmp/image-size.jpg";
+		QTemporaryDir directory;
+		REQUIRE(directory.isValid());
+		const QString dest = directory.filePath("image-size.jpg");
 
 		ImageSize is;
 		REQUIRE(is.save(dest) == QString());
@@ -57,12 +60,12 @@ TEST_CASE("ImageSize")
 
 	SECTION("SaveMove")
 	{
-		return; // FIXME
+		QTemporaryDir directory;
+		REQUIRE(directory.isValid());
+		const QString dest = directory.filePath("image-size.jpg");
 
-		const QString dest = "tests/resources/tmp/image-size.jpg";
-
-		QTemporaryFile file;
-		REQUIRE(file.open());
+		QFile file(directory.filePath("source.tmp"));
+		REQUIRE(file.open(QIODevice::WriteOnly));
 		file.write("test");
 		file.close();
 
@@ -77,10 +80,12 @@ TEST_CASE("ImageSize")
 
 	SECTION("SaveCopy")
 	{
-		const QString dest = "tests/resources/tmp/image-size.jpg";
+		QTemporaryDir directory;
+		REQUIRE(directory.isValid());
+		const QString dest = directory.filePath("image-size.jpg");
 
-		QTemporaryFile file;
-		REQUIRE(file.open());
+		QFile file(directory.filePath("source.tmp"));
+		REQUIRE(file.open(QIODevice::WriteOnly));
 		file.write("test");
 		file.close();
 
@@ -91,6 +96,42 @@ TEST_CASE("ImageSize")
 		REQUIRE(file.exists());
 		REQUIRE(QFile::exists(dest));
 		REQUIRE(QFile::remove(dest));
+	}
+
+	SECTION("Failed save keeps the source and reports failure")
+	{
+		QTemporaryDir directory;
+		REQUIRE(directory.isValid());
+		const QString source = directory.filePath("source.png");
+		REQUIRE(QFile::copy("tests/resources/image_1x1.png", source));
+		const QString target = directory.filePath(QString(300, 'x') + ".png");
+		ImageSize image;
+		SECTION("Temporary file")
+		{
+			image.setTemporaryPath(source);
+		}
+		SECTION("Previously saved file")
+		{
+			image.setSavePath(source);
+		}
+		REQUIRE(image.save(target).isEmpty());
+		REQUIRE(image.savePath() == source);
+		REQUIRE(QFile::exists(source));
+		REQUIRE(!QFile::exists(target));
+	}
+
+	SECTION("Unavailable files have no MD5 and a changed path invalidates the hash")
+	{
+		ImageSize image;
+		image.setSavePath("non_existing_file.png");
+		REQUIRE(image.md5().isEmpty());
+		image.setSavePath("tests/resources/image_1x1.png");
+		REQUIRE(image.md5() == "956ddde86fb5ce85218b21e2f49e5c50");
+		QTemporaryFile emptyFile;
+		REQUIRE(emptyFile.open());
+		emptyFile.close();
+		image.setSavePath(emptyFile.fileName());
+		REQUIRE(image.md5() == "d41d8cd98f00b204e9800998ecf8427e");
 	}
 
 	SECTION("Pixmap")

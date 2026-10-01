@@ -180,6 +180,7 @@ ViewerWindow::ViewerWindow(QList<QSharedPointer<Image>> images, const QSharedPoi
 	connect(&m_resizeTimer, SIGNAL(timeout()), this, SLOT(update()));
 	m_resizeTimer.setSingleShot(true);
 
+	m_detailsWindow = new DetailsWindow(m_profile, this);
 	m_libraryActions = new ImageLibraryActions(m_profile, image, this, m_libraryCollection);
 	ui->windowLayout->insertWidget(2, m_libraryActions);
 	load(image);
@@ -224,7 +225,6 @@ void ViewerWindow::go()
 		ui->widgetLeft->show();
 	}
 
-	m_detailsWindow = new DetailsWindow(m_profile, this);
 	colore();
 
 	// Load image details (exact tags & co)
@@ -1299,6 +1299,7 @@ void ViewerWindow::load(const QSharedPointer<Image> &image)
 	m_source = "";
 	m_imagePath = "";
 	m_image = image;
+	m_site = image->parentSite();
 	m_isAnimated = image->isAnimated();
 	m_size = 0;
 	ui->labelLoadingError->hide();

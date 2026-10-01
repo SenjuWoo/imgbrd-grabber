@@ -61,7 +61,7 @@ class FFmpeg
 		static QString getVideoCodec(const QString &file, int msecs = 30000);
 
 	protected:
-		static bool executeConvert(const QString &file, const QString &destination, bool deleteOriginal, const QStringList &params, int msecs = 30000);
+		static bool executeConvert(const QString &file, const QString &destination, bool overwrite, bool deleteOriginal, const QStringList &params, int msecs = 30000);
 		static bool execute(const QStringList &params, int msecs = 30000);
 		static QString probe(const QStringList &params, int msecs = 30000);
 };

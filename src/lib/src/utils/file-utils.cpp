@@ -75,6 +75,28 @@ bool safeCopyFile(const QString &from, const QString &filePath, bool backup)
 	return true;
 }
 
+bool atomicCopyFile(const QString &from, const QString &dest)
+{
+	QFile source(from);
+	QSaveFile target(dest);
+	target.setDirectWriteFallback(false);
+	if (!source.open(QFile::ReadOnly) || !target.open(QFile::WriteOnly)) {
+		return false;
+	}
+	QByteArray buffer(1024 * 1024, Qt::Uninitialized);
+	qint64 read;
+	while ((read = source.read(buffer.data(), buffer.size())) > 0) {
+		if (target.write(buffer.constData(), read) != read) {
+			return false;
+		}
+	}
+	if (read < 0 || source.error() != QFile::NoError) {
+		return false;
+	}
+	source.close();
+	return target.commit();
+}
+
 bool safeWriteFile(const QString &filePath, const QByteArray &data, bool backup)
 {
 	// Copy the file to a "bak" file to ensure no data is lost

@@ -945,7 +945,11 @@ QString getFileMd5(const QString &path)
 	if (!file.open(QFile::ReadOnly)) {
 		return QString();
 	}
-	return QCryptographicHash::hash(file.readAll(), QCryptographicHash::Md5).toHex();
+	QCryptographicHash hash(QCryptographicHash::Md5);
+	if (!hash.addData(&file) || file.error() != QFile::NoError) {
+		return {};
+	}
+	return hash.result().toHex();
 }
 
 QString getFilenameToken(const QString &fileName, const QString &format, const QString &token, const QString &regex = ".+")

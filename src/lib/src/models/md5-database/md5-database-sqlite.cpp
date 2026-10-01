@@ -124,50 +124,32 @@ int Md5DatabaseSqlite::count() const
 
 void Md5DatabaseSqlite::setMd5s(const QMultiHash<QString, QString> &md5s)
 {
-	// Empty the database first
-	QSqlQuery clearQuery(m_database);
-	clearQuery.prepare(QStringLiteral("DELETE FROM md5s"));
-	if (!clearQuery.exec()) {
-		log(QStringLiteral("SQL error when clearing md5s: %1").arg(clearQuery.lastError().text()), Logger::Error);
+	// Replace the index atomically: a failed insert must retain the old rows.
+	if (!m_database.transaction()) {
+		log(QStringLiteral("Could not create MD5 replacement transaction: %1").arg(m_database.lastError().text()), Logger::Error);
 		return;
 	}
 
-	bool transaction = false;
-	int current = 0;
-
-	for (auto it = md5s.constBegin(); it != md5s.constEnd(); ++it) {
-		const QString &md5 = it.key();
-		const QString &path = it.value();
-
-		if (current % 500 == 0) {
-			if (transaction) {
-				if (!m_database.commit()) {
-					log("Could not commit transaction", Logger::Error);
-					return;
-				}
-			}
-			if (!m_database.transaction()) {
-				log("Could not create transaction", Logger::Error);
-				return;
-			}
-			transaction = true;
-		}
-
-		m_addQuery.bindValue(":md5", md5);
-		m_addQuery.bindValue(":path", path);
-		if (!m_addQuery.exec()) {
-			log(QStringLiteral("Error adding MD5 to the database: %1").arg(m_addQuery.lastError().text()), Logger::Error);
-			continue;
-		}
-
-		current++;
+	QSqlQuery clearQuery(m_database);
+	if (!clearQuery.exec("DELETE FROM md5s")) {
+		log(QStringLiteral("SQL error when clearing md5s: %1").arg(clearQuery.lastError().text()), Logger::Error);
+		m_database.rollback();
+		return;
 	}
 
-	if (transaction) {
-		if (!m_database.commit()) {
-			log("Could not commit transaction", Logger::Error);
+	for (auto it = md5s.constBegin(); it != md5s.constEnd(); ++it) {
+		m_addQuery.bindValue(":md5", it.key());
+		m_addQuery.bindValue(":path", it.value());
+		if (!m_addQuery.exec()) {
+			log(QStringLiteral("Error adding MD5 to the replacement index: %1").arg(m_addQuery.lastError().text()), Logger::Error);
+			m_database.rollback();
 			return;
 		}
+	}
+
+	if (!m_database.commit()) {
+		log(QStringLiteral("Could not commit MD5 replacement transaction: %1").arg(m_database.lastError().text()), Logger::Error);
+		m_database.rollback();
 	}
 }
 

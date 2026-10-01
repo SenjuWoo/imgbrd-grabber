@@ -2,6 +2,7 @@
 #include <QFile>
 #include <QString>
 #include <QTemporaryFile>
+#include <QTemporaryDir>
 #include "catch.h"
 #include "raii-helpers.h"
 #include "utils/file-utils.h"
@@ -70,6 +71,42 @@ TEST_CASE("File utils")
 			REQUIRE(QFile::exists(file));
 			REQUIRE(QFile::exists(file + ".bak"));
 		}
+	}
+
+	SECTION("Atomic copy preserves destinations on failure and unrelated backups")
+	{
+		QTemporaryDir directory;
+		REQUIRE(directory.isValid());
+		const QString input = directory.filePath("source.bin");
+		const QString output = directory.filePath("output.bin");
+		const QString backup = output + ".bak";
+		const QByteArray content(1024 * 1024 + 17, 'x');
+		REQUIRE(safeWriteFile(input, content));
+		REQUIRE(safeWriteFile(output, "old"));
+		REQUIRE(safeWriteFile(backup, "keep backup"));
+		QByteArray expected("old");
+		SECTION("Successful overwrite")
+		{
+			REQUIRE(atomicCopyFile(input, output));
+			expected = content;
+		}
+		SECTION("Missing input")
+		{
+			REQUIRE(!atomicCopyFile(directory.filePath("missing"), output));
+		}
+		#ifdef Q_OS_LINUX
+			SECTION("Read failure after opening")
+			{
+				REQUIRE(!atomicCopyFile("/proc/self/mem", output));
+			}
+		#endif
+		QFile target(output);
+		REQUIRE(target.open(QFile::ReadOnly));
+		REQUIRE(target.readAll() == expected);
+		QFile preservedBackup(backup);
+		REQUIRE(preservedBackup.open(QFile::ReadOnly));
+		REQUIRE(preservedBackup.readAll() == "keep backup");
+		REQUIRE(QFile::exists(input));
 	}
 
 	SECTION("safeWriteFile")

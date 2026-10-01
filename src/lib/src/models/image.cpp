@@ -735,7 +735,7 @@ Image::SaveResult Image::preSave(const QString &path, Size size)
 	if (whatToDo == "save" || force) {
 		const QString savePath = m_sizes[size]->save(path);
 		if (savePath.isEmpty()) {
-			return SaveResult::NotLoaded;
+			return QFile::exists(m_sizes[size]->savePath()) ? SaveResult::Error : SaveResult::NotLoaded;
 		}
 		log(QStringLiteral("Saving image in `%1` (from `%2`)").arg(path, savePath));
 		return SaveResult::Saved;
@@ -744,14 +744,22 @@ Image::SaveResult Image::preSave(const QString &path, Size size)
 	// Copy already existing file to the new path
 	if (whatToDo == "copy") {
 		log(QStringLiteral("Copy from `%1` to `%2`").arg(md5Duplicate, path));
-		QFile(md5Duplicate).copy(path);
+		QFile file(md5Duplicate);
+		if (!file.copy(path)) {
+			log(QStringLiteral("Error copying from `%1` to `%2`: %3").arg(md5Duplicate, path, file.errorString()), Logger::Error);
+			return SaveResult::Error;
+		}
 		return SaveResult::Copied;
 	}
 
 	// Move already existing file to the new path
 	if (whatToDo == "move") {
 		log(QStringLiteral("Moving from `%1` to `%2`").arg(md5Duplicate, path));
-		QFile::rename(md5Duplicate, path);
+		QFile file(md5Duplicate);
+		if (!file.rename(path)) {
+			log(QStringLiteral("Error moving from `%1` to `%2`: %3").arg(md5Duplicate, path, file.errorString()), Logger::Error);
+			return SaveResult::Error;
+		}
 		m_profile->removeMd5(md5(), md5Duplicate);
 		return SaveResult::Moved;
 	}
@@ -759,7 +767,9 @@ Image::SaveResult Image::preSave(const QString &path, Size size)
 	// Create a shortcut/link to the existing file
 	if (whatToDo == "link" || whatToDo == "hardlink") {
 		log(QStringLiteral("Creating %1 for `%2` in `%3`").arg(whatToDo, md5Duplicate, path));
-		createLink(md5Duplicate, path, whatToDo);
+		if (!createLink(md5Duplicate, path, whatToDo)) {
+			return SaveResult::Error;
+		}
 		#ifdef Q_OS_WIN
 			if (whatToDo == "link") {
 				return SaveResult::Shortcut;

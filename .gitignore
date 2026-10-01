@@ -140,3 +140,5 @@ src/lib/tests/resources/md5s.sqlite
 src/lib/tests/resources/history.json
 src/lib/tests/resources/monitors.json
 /src/tests/resources/
+src/lib/tests/resources/library.sqlite
+src/lib/tests/resources/library.sqlite.*.bak

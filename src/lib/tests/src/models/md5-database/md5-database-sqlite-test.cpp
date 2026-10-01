@@ -1,6 +1,8 @@
 #include <QFile>
 #include <QSettings>
 #include <QSignalSpy>
+#include <QSqlDatabase>
+#include <QSqlQuery>
 #include "models/md5-database/md5-database-sqlite.h"
 #include "catch.h"
 #include "raii-helpers.h"
@@ -45,6 +47,39 @@ TEST_CASE("Md5DatabaseSqlite")
 		Md5DatabaseSqlite md5s("tests/resources/md5s-test.sqlite", &settings);
 		md5s.remove("5a105e8b9d40e1329780d62ea2265d8a", "tests/resources/image_1x1.png");
 		REQUIRE(md5s.exists("5a105e8b9d40e1329780d62ea2265d8a") == QStringList("tests/resources/image_200x200.png"));
+	}
+
+	SECTION("Replacing MD5s commits the entire replacement")
+	{
+		Md5DatabaseSqlite md5s("tests/resources/md5s-test.sqlite", &settings);
+		QMultiHash<QString, QString> replacement;
+		for (int i = 0; i < 601; ++i) {
+			replacement.insert(QString::number(i), QString::number(i));
+		}
+		md5s.setMd5s(replacement);
+		REQUIRE(md5s.count() == 601);
+		md5s.setMd5s({});
+		REQUIRE(md5s.count() == 0);
+	}
+
+	SECTION("Failed MD5 replacement rolls back to the original index")
+	{
+		Md5DatabaseSqlite md5s("tests/resources/md5s-test.sqlite", &settings);
+		QSqlQuery fault(QSqlDatabase::database("MD5 database - tests/resources/md5s-test.sqlite"));
+		REQUIRE(fault.exec("CREATE TRIGGER fail_insert BEFORE INSERT ON md5s WHEN NEW.path = 'fail' BEGIN SELECT RAISE(ABORT,'test insert failure'); END"));
+		QMultiHash<QString, QString> replacement;
+		for (int i = 0; i < 601; ++i) {
+			replacement.insert(QString::number(i), QString::number(i));
+		}
+		replacement.insert("failed", "fail");
+		md5s.setMd5s(replacement);
+		REQUIRE(md5s.count() == 3);
+		REQUIRE(md5s.exists("5a105e8b9d40e1329780d62ea2265d8a").count() == 2);
+		REQUIRE(md5s.exists("ad0234829205b9033196ba818f7a872b") == QStringList("tests/resources/image_1x1.png"));
+		REQUIRE(fault.exec("DROP TRIGGER fail_insert"));
+		// A failed replacement must not leave an open transaction behind.
+		md5s.setMd5s({});
+		REQUIRE(md5s.count() == 0);
 	}
 
 	SECTION("action()")

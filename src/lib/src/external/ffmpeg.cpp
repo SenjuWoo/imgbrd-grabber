@@ -6,6 +6,7 @@
 #include <QTemporaryDir>
 #include "functions.h"
 #include "logger.h"
+#include "utils/file-utils.h"
 #include "utils/zip.h"
 
 
@@ -52,6 +53,9 @@ QString FFmpeg::convert(const QString &file, const QString &extension, bool over
 		log(QStringLiteral("Cannot convert file that does not exist: `%1`").arg(file), Logger::Error);
 		return file;
 	}
+	if (info == QFileInfo(destination) || info.canonicalFilePath() == QFileInfo(destination).canonicalFilePath()) {
+		return file;
+	}
 	if (QFile::exists(destination) && !overwrite) {
 		log(QStringLiteral("Converting the file `%1` would overwrite another file: `%2`").arg(file, destination), Logger::Error);
 		return file;
@@ -63,7 +67,7 @@ QString FFmpeg::convert(const QString &file, const QString &extension, bool over
 
 	// Execute the conversion command
 	const QStringList params = QStringList() << (overwrite ? "-y" : "-n") << "-loglevel" << "error" << "-i" << file << filters << destination;
-	if (!executeConvert(file, destination, deleteOriginal, params, msecs)) {
+	if (!executeConvert(file, destination, overwrite, deleteOriginal, params, msecs)) {
 		return file;
 	}
 	return destination;
@@ -80,6 +84,9 @@ QString FFmpeg::remux(const QString &file, const QString &extension, bool overwr
 		log(QStringLiteral("Cannot remux file that does not exist: `%1`").arg(file), Logger::Error);
 		return file;
 	}
+	if (info == QFileInfo(destination) || info.canonicalFilePath() == QFileInfo(destination).canonicalFilePath()) {
+		return file;
+	}
 	if (QFile::exists(destination) && !overwrite) {
 		log(QStringLiteral("Remuxing the file `%1` would overwrite another file: `%2`").arg(file, destination), Logger::Error);
 		return file;
@@ -87,7 +94,7 @@ QString FFmpeg::remux(const QString &file, const QString &extension, bool overwr
 
 	// Execute the conversion command
 	const QStringList params = { overwrite ? "-y" : "-n", "-loglevel", "error", "-i", file, "-c", "copy", destination };
-	if (!executeConvert(file, destination, deleteOriginal, params, msecs)) {
+	if (!executeConvert(file, destination, overwrite, deleteOriginal, params, msecs)) {
 		return file;
 	}
 	return destination;
@@ -106,6 +113,9 @@ QString FFmpeg::convertUgoira(const QString &file, const QList<QPair<QString, in
 	}
 	if (!QFile::exists(file)) {
 		log(QStringLiteral("Cannot convert ugoira file that does not exist: `%1`").arg(file), Logger::Error);
+		return file;
+	}
+	if (info == QFileInfo(destination) || info.canonicalFilePath() == QFileInfo(destination).canonicalFilePath()) {
 		return file;
 	}
 	if (QFile::exists(destination) && !overwrite) {
@@ -158,7 +168,7 @@ QString FFmpeg::convertUgoira(const QString &file, const QList<QPair<QString, in
 	params.append(destination);
 
 	// Execute the conversion command
-	if (!executeConvert(file, destination, deleteOriginal, params, msecs)) {
+	if (!executeConvert(file, destination, overwrite, deleteOriginal, params, msecs)) {
 		return file;
 	}
 	return destination;
@@ -177,16 +187,23 @@ QString FFmpeg::getVideoCodec(const QString &file, int msecs)
 }
 
 
-bool FFmpeg::executeConvert(const QString &file, const QString &destination, bool deleteOriginal, const QStringList &params, int msecs)
+bool FFmpeg::executeConvert(const QString &file, const QString &destination, bool overwrite, bool deleteOriginal, const QStringList &params, int msecs)
 {
-	// Execute the command
-	if (!execute(params, msecs)) {
-		// Cleanup failed conversions
-		if (QFile::exists(destination)) {
-			log(QStringLiteral("Cleaning up failed conversion target file: `%1`").arg(destination), Logger::Warning);
-			QFile::remove(destination);
-		}
-
+	// Keep the backend away from the real destination until conversion succeeds.
+	QTemporaryDir staging(QFileInfo(destination).absolutePath() + "/.grabber-convert-XXXXXX");
+	if (!staging.isValid()) {
+		log(QStringLiteral("Could not create conversion staging directory for `%1`").arg(destination), Logger::Error);
+		return false;
+	}
+	const QString staged = staging.filePath(QFileInfo(destination).fileName());
+	QStringList stagedParams(params);
+	stagedParams.last() = staged;
+	if (!execute(stagedParams, msecs) || QFileInfo(staged).size() <= 0) {
+		return false;
+	}
+	const bool promoted = overwrite ? atomicCopyFile(staged, destination) : QFile::rename(staged, destination);
+	if (!promoted) {
+		log(QStringLiteral("Could not save converted output to `%1`; existing files were preserved").arg(destination), Logger::Error);
 		return false;
 	}
 
@@ -215,6 +232,10 @@ bool FFmpeg::execute(const QStringList &params, int msecs)
 
 	// Wait for FFmpeg to finish
 	bool finishedOk = process.waitForFinished(msecs);
+	if (!finishedOk) {
+		process.kill();
+		process.waitForFinished(1000);
+	}
 	bool didntCrash = process.exitStatus() == QProcess::NormalExit;
 	bool exitCodeOk = process.exitCode() == 0;
 	bool ok = finishedOk && didntCrash && exitCodeOk;
@@ -245,6 +266,10 @@ QString FFmpeg::probe(const QStringList &params, int msecs)
 
 	// Wait for FFprobe to finish
 	bool finishedOk = process.waitForFinished(msecs);
+	if (!finishedOk) {
+		process.kill();
+		process.waitForFinished(1000);
+	}
 	bool didntCrash = process.exitStatus() == QProcess::NormalExit;
 	bool exitCodeOk = process.exitCode() == 0;
 	bool ok = finishedOk && didntCrash && exitCodeOk;

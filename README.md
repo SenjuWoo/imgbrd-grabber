@@ -41,7 +41,8 @@ Keep individual pictures with **♥ Like**, **★ Favorite**, or **+ Collection*
 search thumbnails and in the viewer. The **Library** tab has cached previews,
 search, Unsorted/Liked/Favorites/Recently saved views, picture notes and collection
 covers. Select several pictures to organize or rate them together. Double-click
-or press Enter to open a picture in the existing viewer.
+or press Enter to view it. Local files open in an offline viewer with zoom, pan,
+notes and the same picture actions.
 
 A picture can belong to multiple collections. Likes, favorites and notes in a
 collection apply only to that collection; the other Library views use separate
@@ -50,8 +51,22 @@ Library-wide preferences. Use **More…** for notes, covers and removal, and
 original downloads. Existing tag bookmarks are now labeled **Saved searches**;
 their data and monitors are preserved.
 
+Use **Import pictures…** to choose files or a folder (including subfolders), or
+drop pictures into Library. Imports go into the current collection. Existing files
+are referenced by default; **Copy into portable Library** keeps an extra copy in
+`library-media` without removing originals. Exact content duplicates share one entry.
+
+Embedded text, adjacent JSON/XMP/tag files and Windows download-origin information
+are recovered when available. **Find / link source…** searches a selected configured
+source by MD5 or compares cached Library thumbnails locally. Filename hashes and
+visual suggestions require review. Linking a source combines catalog preferences,
+notes and memberships. **Locate file…** reconnects a moved file by its recorded hash.
+Imports require no website identity, API key or cloud service to view and rate them.
+
 The portable profile stores this catalog in `library.sqlite`, including bounded
-cached previews. Back it up together with the profile. AI recommendations, cloud
+cached previews. Built-in backups include the catalog and managed copies; externally
+referenced originals remain outside the backup. Upgrades retain a catalog snapshot.
+AI recommendations, cloud
 processing and new source integrations are subsequent milestones.
 
 ### Packaging & UI

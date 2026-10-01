@@ -4,6 +4,9 @@
 #include <QHash>
 #include <QSharedPointer>
 #include <QWidget>
+#include <QSet>
+#include <atomic>
+#include <memory>
 #include "models/library-store.h"
 
 class Image;
@@ -17,6 +20,10 @@ class QPushButton;
 class QStackedWidget;
 class Profile;
 class MainWindow;
+class QProgressDialog;
+class QTimer;
+class QDragEnterEvent;
+class QDropEvent;
 
 class LibraryTab : public QWidget
 {
@@ -24,10 +31,24 @@ class LibraryTab : public QWidget
 
 	public:
 		LibraryTab(Profile *profile, MainWindow *parent);
+		~LibraryTab() override;
 		void reload();
+		void importPaths(const QStringList &paths, bool copy = false, const QString &expectedKey = {});
+		bool importing() const { return m_importing; }
+
+	signals:
+		void importFinished(int added, int duplicates, int failed);
+
+	protected:
+		void dragEnterEvent(QDragEnterEvent *event) override;
+		void dropEvent(QDropEvent *event) override;
 
 	private:
 		void scheduleReload();
+		void importNext();
+		void finishImport();
+		void locateFile(const QString &key);
+		void findSource(const QString &key);
 		void updateSelection();
 		void collectionMenu(const QPoint &pos);
 		void imageMenu(const QPoint &pos);
@@ -53,6 +74,16 @@ class LibraryTab : public QWidget
 		qint64 m_collection = 0;
 		int m_smartFilter = 0;
 		bool m_reloadPending = false;
+		QTimer *m_searchTimer;
+		QProgressDialog *m_progress = nullptr;
+		QPushButton *m_importButton;
+		std::shared_ptr<std::atomic_bool> m_cancel;
+		QStringList m_importFiles, m_importErrors;
+		QSet<QString> m_knownKeys;
+		QString m_managedDirectory, m_expectedKey;
+		qint64 m_importCollection = 0;
+		int m_importIndex = 0, m_added = 0, m_duplicates = 0, m_failed = 0;
+		bool m_importing = false, m_copyImports = false;
 };
 
 #endif // LIBRARY_TAB_H

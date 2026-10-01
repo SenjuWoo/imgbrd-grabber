@@ -94,10 +94,10 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	REQUIRE(!like->isChecked());
 	REQUIRE(profile->library()->entry(key, collection).favorite);
 	library.findChild<QLineEdit*>("librarySearch")->setText("missing tag");
-	QApplication::processEvents();
+	QTest::qWait(200);
 	REQUIRE(grid->count() == 0);
 	library.findChild<QLineEdit*>("librarySearch")->clear();
-	QApplication::processEvents();
+	QTest::qWait(200);
 	REQUIRE(grid->count() == 1);
 	const QString screenshot = qEnvironmentVariable("GRABBER_LIBRARY_SCREENSHOT");
 	if (!screenshot.isEmpty()) {

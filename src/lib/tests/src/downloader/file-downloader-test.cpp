@@ -1,5 +1,7 @@
 #include <QFile>
 #include <QSignalSpy>
+#include <QTemporaryFile>
+#include <QTemporaryDir>
 #include "custom-network-access-manager.h"
 #include "downloader/file-downloader.h"
 #include "network/network-manager.h"
@@ -63,6 +65,49 @@ TEST_CASE("FileDownloader")
 		REQUIRE(!QFile::exists(dest));
 	}
 
+	SECTION("Large response is fully written and flushed")
+	{
+		QTemporaryFile input;
+		REQUIRE(input.open());
+		const QByteArray data(600 * 1024 + 17, 'x');
+		REQUIRE(input.write(data) == data.size());
+		input.close();
+		CustomNetworkAccessManager::NextFiles.enqueue(input.fileName());
+		NetworkReply *reply = accessManager.get(QNetworkRequest(QUrl("testLargeResponse")));
+		const QString dest = "large-response.bin";
+		FileDownloader downloader(false);
+		QSignalSpy success(&downloader, SIGNAL(success()));
+		QSignalSpy failure(&downloader, SIGNAL(writeError()));
+		REQUIRE(downloader.start(reply, dest));
+		REQUIRE(success.wait());
+		REQUIRE(failure.isEmpty());
+		QFile written(dest);
+		REQUIRE(written.open(QFile::ReadOnly));
+		REQUIRE(written.readAll() == data);
+		written.close();
+		REQUIRE(QFile::remove(dest));
+	}
+
+	#ifdef Q_OS_UNIX
+		SECTION("Disk write failure cannot report success")
+		{
+			if (QFile::exists("/dev/full")) {
+				CustomNetworkAccessManager::NextFiles.enqueue("tests/resources/image_1x1.png");
+				NetworkReply *reply = accessManager.get(QNetworkRequest(QUrl("testWriteFailure")));
+				FileDownloader downloader(false);
+				QSignalSpy failure(&downloader, SIGNAL(writeError()));
+				QSignalSpy success(&downloader, SIGNAL(success()));
+				QTemporaryDir directory;
+				REQUIRE(directory.isValid());
+				const QString destination = directory.filePath("full-device");
+				REQUIRE(QFile::link("/dev/full", destination));
+				REQUIRE(downloader.start(reply, destination));
+				REQUIRE(failure.wait());
+				REQUIRE(success.isEmpty());
+			}
+		}
+	#endif
+
 	SECTION("FailedStart")
 	{
 		NetworkReply *reply = accessManager.get(QNetworkRequest(QUrl("testFailedStart")));
@@ -72,6 +117,27 @@ TEST_CASE("FileDownloader")
 		REQUIRE(!downloader.start(reply, dest));
 
 		accessManager.clear();
+	}
+
+	SECTION("Large HTML response is rejected after its first buffer was streamed")
+	{
+		QTemporaryFile input;
+		REQUIRE(input.open());
+		const QByteArray data = "<!DOCTYPE html>" + QByteArray(600 * 1024, 'x');
+		REQUIRE(input.write(data) == data.size());
+		input.close();
+		CustomNetworkAccessManager::NextFiles.enqueue(input.fileName());
+		NetworkReply *reply = accessManager.get(QNetworkRequest(QUrl("testLargeHtml")));
+		const QString dest = "large-html.bin";
+		FileDownloader downloader(false);
+		qRegisterMetaType<NetworkReply::NetworkError>("NetworkReply::NetworkError");
+		QSignalSpy failure(&downloader, SIGNAL(networkError(NetworkReply::NetworkError, QString)));
+		QSignalSpy success(&downloader, SIGNAL(success()));
+		REQUIRE(downloader.start(reply, dest));
+		REQUIRE(failure.wait());
+		REQUIRE(failure.takeFirst()[0].value<NetworkReply::NetworkError>() == NetworkReply::NetworkError::ContentNotFoundError);
+		REQUIRE(success.isEmpty());
+		REQUIRE(!QFile::exists(dest));
 	}
 
 	SECTION("InvalidHtml")

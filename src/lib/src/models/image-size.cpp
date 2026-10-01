@@ -1,9 +1,9 @@
 #include "image-size.h"
-#include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonObject>
 #include "logger.h"
+#include "functions.h"
 
 
 ImageSize::~ImageSize()
@@ -30,7 +30,10 @@ QString ImageSize::save(const QString &path)
 
 		// Try to rename, otherwise fallback to a copy
 		if (!file.rename(path)) {
-			file.copy(path);
+			if (!file.copy(path)) {
+				log(QStringLiteral("Error saving from `%1` to `%2`: %3").arg(m_temporaryPath, path, file.errorString()), Logger::Error);
+				return {};
+			}
 		} else {
 			m_temporaryPath.clear();
 		}
@@ -41,7 +44,11 @@ QString ImageSize::save(const QString &path)
 
 	// If we already saved this image somewhere, simply make a copy of this file
 	if (!m_savePath.isEmpty() && QFile::exists(m_savePath)) {
-		QFile(m_savePath).copy(path);
+		QFile file(m_savePath);
+		if (!file.copy(path)) {
+			log(QStringLiteral("Error copying from `%1` to `%2`: %3").arg(m_savePath, path, file.errorString()), Logger::Error);
+			return {};
+		}
 		return m_savePath;
 	}
 
@@ -74,6 +81,7 @@ bool ImageSize::setSavePath(const QString &path)
 {
 	if (path != m_savePath) {
 		m_savePath = path;
+		m_md5.clear();
 
 		if (fileSize <= 0) {
 			fileSize = QFileInfo(m_savePath).size();
@@ -109,14 +117,7 @@ QString ImageSize::md5() const
 	if (m_md5.isEmpty()) {
 		const QString path = !m_savePath.isEmpty() ? m_savePath : m_temporaryPath;
 		if (!path.isEmpty()) {
-			QCryptographicHash hash(QCryptographicHash::Md5);
-
-			QFile f(path);
-			f.open(QFile::ReadOnly);
-			hash.addData(&f);
-			f.close();
-
-			m_md5 = hash.result().toHex();
+			m_md5 = getFileMd5(path);
 		}
 	}
 

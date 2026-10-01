@@ -5,6 +5,7 @@
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryFile>
+#include <QTemporaryDir>
 #include "loader/token.h"
 #include "models/image.h"
 #include "models/image-factory.h"
@@ -253,6 +254,26 @@ TEST_CASE("Image")
 			Image::SaveResult res = img->preSave(savePath, Image::Size::Full);
 
 			REQUIRE(res == Image::SaveResult::AlreadyExistsDisk);
+		}
+
+		SECTION("Failed saves and duplicate operations preserve the source and index")
+		{
+			QTemporaryDir directory;
+			REQUIRE(directory.isValid());
+			const QString source = directory.filePath("source.png");
+			REQUIRE(QFile::copy("tests/resources/image_1x1.png", source));
+			profile->addMd5(img->md5(), source);
+			img->setSavePath(source);
+
+			// The parent exists, but this filename exceeds the filesystem limit.
+			const QString target = QDir::toNativeSeparators(directory.filePath(QString(300, 'x') + ".png"));
+			const QString action = GENERATE(QString("save"), QString("copy"), QString("move"), QString("hardlink"));
+			settings->setValue("Save/md5Duplicates", action);
+			settings->setValue("Save/md5DuplicatesSameDir", action);
+			REQUIRE(img->preSave(target, Image::Size::Full) == Image::SaveResult::Error);
+			REQUIRE(QFile::exists(source));
+			REQUIRE(!QFile::exists(target));
+			REQUIRE(profile->md5Exists(img->md5()).contains(source));
 		}
 
 		SECTION("MD5 duplicate actions (ignore, copy, move)")

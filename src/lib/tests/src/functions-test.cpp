@@ -1,4 +1,5 @@
 #include <QDir>
+#include <QCryptographicHash>
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
@@ -427,6 +428,11 @@ TEST_CASE("Functions")
 		file.seek(0);
 
 		REQUIRE(getFileMd5(file.fileName()) == QString("098f6bcd4621d373cade4e832627b4f6")); // md5("test")
+		const QByteArray large(1024 * 1024 + 17, 'x');
+		REQUIRE(file.resize(0));
+		REQUIRE(file.write(large) == large.size());
+		REQUIRE(file.flush());
+		REQUIRE(getFileMd5(file.fileName()) == QCryptographicHash::hash(large, QCryptographicHash::Md5).toHex());
 	}
 	SECTION("GetFilenameMd5")
 	{

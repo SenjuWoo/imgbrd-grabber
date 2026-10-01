@@ -3,8 +3,10 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QProcess>
+#include <QTemporaryDir>
 #include "functions.h"
 #include "logger.h"
+#include "utils/file-utils.h"
 
 
 QString ImageMagick::version(int msecs)
@@ -50,20 +52,27 @@ QString ImageMagick::convert(const QString &file, const QString &extension, bool
 		log(QStringLiteral("Cannot convert file that does not exist: `%1`").arg(file), Logger::Error);
 		return file;
 	}
+	if (info == QFileInfo(destination) || info.canonicalFilePath() == QFileInfo(destination).canonicalFilePath()) {
+		return file;
+	}
 	if (QFile::exists(destination) && !overwrite) {
 		log(QStringLiteral("Converting the file `%1` would overwrite another file: `%2`").arg(file, destination), Logger::Error);
 		return file;
 	}
 
-	// Execute the conversion command
-	const QStringList params = { file, destination };
-	if (!execute(params, msecs)) {
-		// Cleanup failed conversions
-		if (QFile::exists(destination)) {
-			log(QStringLiteral("Cleaning up failed conversion target file: `%1`").arg(destination), Logger::Warning);
-			QFile::remove(destination);
-		}
-
+	QTemporaryDir staging(info.absolutePath() + "/.grabber-convert-XXXXXX");
+	if (!staging.isValid()) {
+		log(QStringLiteral("Could not create conversion staging directory for `%1`").arg(destination), Logger::Error);
+		return file;
+	}
+	const QString staged = staging.filePath(QFileInfo(destination).fileName());
+	const QStringList params = { file, staged };
+	if (!execute(params, msecs) || QFileInfo(staged).size() <= 0) {
+		return file;
+	}
+	const bool promoted = overwrite ? atomicCopyFile(staged, destination) : QFile::rename(staged, destination);
+	if (!promoted) {
+		log(QStringLiteral("Could not save converted output to `%1`; existing files were preserved").arg(destination), Logger::Error);
 		return file;
 	}
 
@@ -92,6 +101,10 @@ bool ImageMagick::execute(const QStringList &params, int msecs)
 
 	// Wait for FFmpeg to finish
 	bool finishedOk = process.waitForFinished(msecs);
+	if (!finishedOk) {
+		process.kill();
+		process.waitForFinished(1000);
+	}
 	bool didntCrash = process.exitStatus() == QProcess::NormalExit;
 	bool exitCodeOk = process.exitCode() == 0;
 	bool ok = finishedOk && didntCrash && exitCodeOk;

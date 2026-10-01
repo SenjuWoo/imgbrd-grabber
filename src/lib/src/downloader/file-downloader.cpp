@@ -17,6 +17,7 @@ bool FileDownloader::start(NetworkReply *reply, const QString &path)
 	const bool ok = m_file.open(QFile::WriteOnly | QFile::Truncate);
 
 	m_readSize = 0;
+	m_header.clear();
 	m_writeError = false;
 	m_reply = reply;
 
@@ -38,42 +39,49 @@ void FileDownloader::replyReadyRead()
 	}
 
 	const QByteArray data = m_reply->readAll();
+	if (m_readSize == 0) {
+		m_header = data.left(100);
+	}
 	m_readSize += data.size();
 
-	if (m_file.write(data) < 0) {
+	if (m_file.write(data) != data.size() || !m_file.flush()) {
 		m_writeError = true;
 		m_reply->abort();
-	} else {
-		m_file.flush();
 	}
 }
 
 void FileDownloader::replyFinished()
 {
 	const QByteArray data = m_reply->readAll();
+	if (m_readSize == 0) {
+		m_header = data.left(100);
+	}
 	m_readSize += data.size();
 
 	const qint64 written = m_file.write(data);
+	const bool failedFlush = !m_file.flush();
 	m_file.close();
 
 	const auto error = m_reply->error();
 	const auto msg = m_reply->errorString();
 	const QUrl redirectUrl = m_reply->attribute(QNetworkRequest::RedirectionTargetAttribute).toUrl();
-	const bool failedLastWrite = data.length() > 0 && written < 0;
-	const bool invalidHtml = !m_allowHtmlResponses && isHtml(data) && redirectUrl.isEmpty();
+	const bool failedLastWrite = written != data.size() || failedFlush || m_writeError;
+	const bool invalidHtml = !m_allowHtmlResponses && isHtml(m_header) && redirectUrl.isEmpty();
 	const bool emptyFile = m_readSize == 0 && redirectUrl.isEmpty();
 
 	if (error != NetworkReply::NetworkError::NoError || failedLastWrite || invalidHtml || emptyFile) {
 		// Ignore those errors as they are caused by a bug in Qt
-		if (error != NetworkReply::NetworkError::NoError && msg.contains("140E0197")) {
+		if (error != NetworkReply::NetworkError::NoError && msg.contains("140E0197") && !failedLastWrite && !invalidHtml && !emptyFile) {
 			log(QStringLiteral("Ignored network error '140E0197' for the image: `%1`: %2 (%3)").arg(m_reply->url().toString()).arg(error).arg(msg), Logger::Info);
 			emit success();
 			return;
 		}
 
+		const QString fileErrorString = m_file.errorString();
+		const auto fileError = m_file.error();
 		m_file.remove();
 		if (failedLastWrite || m_writeError) {
-			log(QStringLiteral("Unable to write file '%1': %2 (%3)").arg(m_file.fileName(), m_file.errorString(), QString::number(m_file.error())), Logger::Error);
+			log(QStringLiteral("Unable to write file '%1': %2 (%3)").arg(m_file.fileName(), fileErrorString, QString::number(fileError)), Logger::Error);
 			emit writeError();
 		} else if (invalidHtml && error == NetworkReply::NetworkError::NoError) {
 			log(QString("Invalid HTML content returned for url '%1'").arg(m_reply->url().toString()), Logger::Info);

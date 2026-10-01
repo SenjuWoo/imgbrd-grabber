@@ -68,3 +68,43 @@ machine-specific drive letters or account names. They do not deploy over a live 
   a real profile replaces it. The SQLite driver is checked during packaging.
 
 Implementation scope and verification are in [library-milestone.md](library-milestone.md).
+
+
+## Foundation and import milestone (7.14.0-fable.5)
+
+- File save/copy/move/link failures are propagated; failed moves retain the download
+  index. Hashing streams bytes and unavailable files have no invented empty-file hash.
+- Downloads check exact writes and flushes, retain initial bytes for HTML detection
+  after streaming, and keep 64-bit byte counters. Disk failures cannot bypass validation.
+- MD5 index replacement is one rollback-safe transaction, including chunk failures.
+- FFmpeg/ImageMagick stage conversion output and atomically promote it after success.
+  Failed/missing backends preserve existing destinations; same-file conversion is a no-op.
+- Viewer navigation keeps the correct site and reuses its details window; unstarted
+  thumbnail requests can be closed safely. Search input is debounced in Library.
+- Offline local-file imports, metadata evidence, SHA-256 duplicate identity, MD5 source
+  lookup, explicit local visual candidates, and stable source-link merges. Shared image
+  actions follow aliases when a source entry is merged while its viewer remains open.
+- Library schema 2 adds local paths and source aliases. Version 1 is backed up with
+  SQLite VACUUM INTO before a transactional upgrade. Managed paths are profile-relative.
+- ZIP backups check extraction/finalization failures, support Unicode paths, reject
+  path escapes and preserve prior files on CRC/write failure.
+- Built-in backup/restore includes consistent Library snapshots and managed media.
+  Catalog restore retains the live store object and replaces records transactionally.
+
+Deliberate scope: source lookup uses the selected source's existing authentication/API
+support; not every website supports MD5 searches. Visual matching searches cached source
+images already in Library and requires confirmation. No automatic local-file upload or
+global reverse-search service is implemented. Supported import formats come from the
+installed Qt image plugins. Images above 40 million pixels are rejected for bounded
+decoding; the offline viewer shows up to a 4096-pixel preview and an animation's first
+frame. Open original uses the system viewer for full-resolution/animated viewing.
+
+The audit targets verified correctness and preservation failures; it is not a claim
+that every old component has been rewritten or that live source availability is proven.
+Architecture remains native Qt with no additional dependency. Optional ExifTool adds
+embedded metadata coverage when discovered locally; basic import works without it.
+
+Primary implementation references: [ExifTool JSON output](https://exiftool.sourceforge.net/exiftool_pod.html),
+[Qt image decoding](https://doc.qt.io/qt-6/qimagereader.html),
+[Windows download origin](https://techcommunity.microsoft.com/blog/microsoftdefenderatpblog/hunting-tip-of-the-month-browser-downloads/220454),
+and [SQLite consistent snapshots](https://www.sqlite.org/lang_vacuum.html).

@@ -55,8 +55,10 @@ ImagePreview::ImagePreview(QSharedPointer<Image> image, QWidget *container, Prof
 
 ImagePreview::~ImagePreview()
 {
-	m_reply->deleteLater();
-	m_reply = nullptr;
+	if (m_reply != nullptr) {
+		m_reply->deleteLater();
+		m_reply = nullptr;
+	}
 
 	// We don't own the button, but it will likely be deleted soon as well
 	m_bouton = nullptr;
@@ -104,7 +106,7 @@ void ImagePreview::load()
 void ImagePreview::abort()
 {
 	m_aborted = true;
-	if (m_reply->isRunning()) {
+	if (m_reply != nullptr && m_reply->isRunning()) {
 		m_reply->abort();
 	}
 }
@@ -227,7 +229,7 @@ void ImagePreview::finishedLoading()
 		}
 
 		connect(l, SIGNAL(appui(int)), this, SIGNAL(clicked()));
-		connect(l, SIGNAL(toggled(int,bool,bool)), this, SLOT(toggledWithId(int,bool,bool)));
+		connect(l, SIGNAL(toggled(int, bool, bool)), this, SLOT(toggledWithId(int, bool, bool)));
 
 		layout->addWidget(l);
 		m_bouton = l;
