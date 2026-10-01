@@ -374,6 +374,8 @@ LibraryImportData LibraryImporter::inspect(const QString &path, const QString &m
 	if (reader.transformation().testFlag(QImageIOHandler::TransformationRotate90)) {
 		data.size.transpose();
 	}
+	// Some image plugins clear their detected format after read().
+	const QByteArray format = reader.format();
 	QJsonArray evidence;
 	QJsonObject text;
 	qint64 textLength = 0;
@@ -461,12 +463,16 @@ LibraryImportData LibraryImporter::inspect(const QString &path, const QString &m
 	if (managedDirectory.isEmpty()) {
 		return data;
 	}
+	if (format.isEmpty()) {
+		data.error = "Cannot determine the image format for a managed copy.";
+		return data;
+	}
 	QDir directory(managedDirectory);
 	if (!directory.exists() && !QDir().mkpath(directory.absolutePath())) {
 		data.error = "Cannot create the managed image directory.";
 		return data;
 	}
-	const QString destination = directory.absoluteFilePath(data.sha256 + "." + QString::fromLatin1(reader.format()).toLower());
+	const QString destination = directory.absoluteFilePath(data.sha256 + "." + QString::fromLatin1(format).toLower());
 	if (QFileInfo::exists(destination)) {
 		if (!matchesHash(destination, data.sha256, cancel)) {
 			data.error = cancelled(cancel) ? "Import cancelled." : "An unmatched file already occupies the managed image path.";

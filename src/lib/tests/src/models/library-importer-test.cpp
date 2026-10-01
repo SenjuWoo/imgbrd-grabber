@@ -163,8 +163,8 @@ TEST_CASE("Library import safely copies, deduplicates, enumerates and cancels", 
 	writeImportFixture(directory.filePath("ignored.txt"), "tags");
 	const QStringList files = LibraryImporter::imageFiles({ directory.path(), nested });
 	REQUIRE(files.size() == 2);
-	REQUIRE(files.contains(path));
-	REQUIRE(files.contains(nested));
+	REQUIRE(files.contains(QFileInfo(path).canonicalFilePath()));
+	REQUIRE(files.contains(QFileInfo(nested).canonicalFilePath()));
 	#ifdef Q_OS_UNIX
 		REQUIRE(QFile::link(directory.path(), directory.filePath("nested/loop")));
 		REQUIRE(LibraryImporter::imageFiles({ directory.path() }).size() == 2);
@@ -173,6 +173,7 @@ TEST_CASE("Library import safely copies, deduplicates, enumerates and cancels", 
 	const auto imported = LibraryImporter::inspect(path, managed);
 	REQUIRE(imported.error.isEmpty());
 	REQUIRE(imported.copied);
+	REQUIRE(QFileInfo(imported.path).suffix() == "png");
 	REQUIRE(imported.path.startsWith(managed + "/"));
 	REQUIRE(readImportFixture(imported.path) == original);
 	const auto duplicate = LibraryImporter::inspect(nested, managed);
