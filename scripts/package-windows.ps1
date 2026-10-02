@@ -35,8 +35,9 @@ $excludedDirs = @($excludedDirs | Where-Object {
 })
 Copy-Tree (Join-Path $repo 'src\sites') (Join-Path $stage 'sites') (@('/XD','resources') + $excludedDirs + @('/XF','*.ts','package*.json','*.config.js','tsconfig.json','tslint.json','exclude.txt','exclude_xcopy.txt','CMakeLists.txt'))
 Get-ChildItem -LiteralPath (Join-Path $build 'languages') -File -Filter '*.qm' | Where-Object Name -ne 'YourLanguage.qm' | Copy-Item -Destination (Join-Path $stage 'languages')
+# QScintilla is copied separately; explicitly deploy its Qt PrintSupport dependency.
 $deploy = Join-Path $QtRoot 'bin\windeployqt.exe'
-& $deploy --dir $stage --release --no-quick-import --no-opengl-sw --force-openssl (Join-Path $stage 'Grabber.exe') (Join-Path $stage 'Grabber-cli.exe') (Join-Path $stage 'CrashReporter.exe')
+& $deploy --dir $stage --release --printsupport --no-quick-import --no-opengl-sw --force-openssl (Join-Path $stage 'Grabber.exe') (Join-Path $stage 'Grabber-cli.exe') (Join-Path $stage 'CrashReporter.exe')
 if ($LASTEXITCODE -ne 0) { throw "windeployqt failed ($LASTEXITCODE)" }
 foreach ($pattern in @('libcrypto-3*.dll','libssl-3*.dll')) {
     $sslFiles = @(Get-ChildItem -LiteralPath $OpenSslRoot -File -Filter $pattern)

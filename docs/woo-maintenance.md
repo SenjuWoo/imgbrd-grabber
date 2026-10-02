@@ -95,8 +95,9 @@ Deliberate scope: source lookup uses the selected source's existing authenticati
 support; not every website supports MD5 searches. Visual matching searches cached source
 images already in Library and requires confirmation. No automatic local-file upload or
 global reverse-search service is implemented. Supported import formats come from the
-installed Qt image plugins. Images above 40 million pixels are rejected for bounded
-decoding; the offline viewer shows up to a 4096-pixel preview and an animation's first
+installed Qt image plugins. Since 7.15.3, images above 40 million pixels are retained
+without an internal preview, keeping their metadata, original-file links and ratings.
+The offline viewer shows up to a 4096-pixel preview and an animation's first
 frame. Open original uses the system viewer for full-resolution/animated viewing.
 
 The audit targets verified correctness and preservation failures; it is not a claim

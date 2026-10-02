@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 if((NOT DEFINED VERSION) OR ((DEFINED NIGHTLY) AND (NIGHTLY MATCHES "1")))
-	set(VERSION "7.15.3")
+	set(VERSION "7.15.4")
 else()
 	string(REGEX REPLACE "^v" "" VERSION "${VERSION}")
 endif()
@@ -13,7 +13,7 @@ if(NOT DEFINED VERSION_DISPLAY)
 endif()
 string(REGEX MATCH "^[0-9]+(\\.[0-9]+)*" VERSION_NUMERIC "${VERSION}")
 if(NOT VERSION_NUMERIC)
-	set(VERSION_NUMERIC "7.15.3")
+	set(VERSION_NUMERIC "7.15.4")
 endif()
 set(VERSION "${VERSION_NUMERIC}")
 # /Zi + parallel MSVC (and sccache wrapping cl) races on a shared PDB:

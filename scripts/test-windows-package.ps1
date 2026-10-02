@@ -3,6 +3,7 @@ param([Parameter(Mandatory=$true)][string]$Root, [string]$Evidence,
 $ErrorActionPreference = 'Stop'
 $Root = [IO.Path]::GetFullPath($Root)
 if (!(Test-Path -LiteralPath (Join-Path $Root 'package-manifest.json'))) { throw 'Extract the package before testing it.' }
+if ((Test-Path -LiteralPath (Join-Path $Root 'qscintilla2_qt6.dll')) -and !(Test-Path -LiteralPath (Join-Path $Root 'Qt6PrintSupport.dll'))) { throw 'QScintilla requires the bundled Qt6PrintSupport.dll.' }
 $settingsPath = Join-Path $Root 'settings.ini'
 $originalSettings = [IO.File]::ReadAllBytes($settingsPath)
 $environment = @{}
