@@ -1,6 +1,6 @@
 #define MyAppName "Grabber Woo Edit"
-#define MyAppPublisher "Bionus"
-#define MyAppURL "https://github.com/Bionus/imgbrd-grabber"
+#define MyAppPublisher "SenjuWoo; based on Grabber by Bionus"
+#define MyAppURL "https://github.com/SenjuWoo/imgbrd-grabber"
 #define MyAppExeName "Grabber.exe"
 
 #define RootDir "..\.."
@@ -23,7 +23,7 @@
 #endif
 
 #ifndef MyAppVersion
-# define MyAppVersion "7.14.0"
+# define MyAppVersion "7.15.0"
 #endif
 
 #define PlatformNamePrefix ""
