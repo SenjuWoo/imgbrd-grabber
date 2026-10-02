@@ -18,5 +18,6 @@ No image is uploaded or cloud provider invoked by importing or matching.
 
 Verify core failure paths, importer fixtures, migration/reopen/merge, asynchronous
 GUI import, offline viewing/actions, and rendered Windows UI. Build all existing test
-groups and package with the current profile backed up before deployment. Publish no
-public release. Recommendations and semantic AI search remain separate milestones.
+groups and package with the current profile backed up before deployment. The initial
+milestone was local; the later Woo Edit release follows the current release gates.
+Recommendations and semantic AI search remain separate milestones.

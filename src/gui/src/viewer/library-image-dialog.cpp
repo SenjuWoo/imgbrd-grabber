@@ -243,16 +243,8 @@ void LibraryImageDialog::showCurrent()
 	m_source->setToolTip(m_sourceUrl);
 	m_reveal->setEnabled(!m_filePath.isEmpty() && QFileInfo(QFileInfo(m_filePath).absolutePath()).isDir());
 	const auto local = entry.image.value("local_import").toObject();
-	QStringList tags, origins, warnings;
-	for (const auto &tag : local.value("tags").toArray()) {
-		tags.append(tag.toString());
-	}
-	for (const auto &tag : entry.image.value("tags").toArray()) {
-		const QString text = tag.isObject() ? tag.toObject().value("text").toString() : tag.toString();
-		if (!text.isEmpty() && !tags.contains(text)) {
-			tags.append(text);
-		}
-	}
+	const QStringList tags = entry.tags();
+	QStringList origins, warnings;
 	for (const auto &value : local.value("evidence").toArray()) {
 		const auto evidence = value.toObject();
 		const QString kind = evidence.value("kind").toString();
@@ -270,12 +262,16 @@ void LibraryImageDialog::showCurrent()
 	const QString sourceDescription = m_sourceUrl.isEmpty() ? tr("Not linked") : m_sourceUrl
 		+ (entry.image.value("website").toString().isEmpty() ? "\n" + tr("From metadata; source not verified") : QString());
 	QString overview = dimensions + "\n\n" + tr("Source") + "\n" + sourceDescription
-		+ "\n\n" + tr("Tags") + "\n" + (tags.isEmpty() ? tr("None recovered") : tags.join(", "))
+		+ "\n\n" + tr("Tags") + "\n" + (tags.isEmpty() ? tr("Needs tags — none available in the saved metadata") : tags.join(", "))
 		+ "\n\n" + tr("Known files") + "\n" + (paths.isEmpty() ? tr("No local file is linked.") : paths.join('\n'))
 		+ "\n\n" + tr("Metadata recovered from") + "\n" + (origins.isEmpty() ? tr("No source metadata found") : origins.join('\n'));
 	if (!warnings.isEmpty()) {
 		overview += "\n\n" + tr("Metadata read errors") + "\n" + warnings.join('\n');
 	}
+	if (local.value("extended_reader").toString() == "unavailable") {
+		overview += "\n\n" + tr("Extended metadata reader") + "\n" + tr("ExifTool was unavailable during the last import. Basic embedded text and sidecars were checked. Install ExifTool beside Grabber or in PATH, then use Import pictures → Recheck metadata for EXIF/IPTC/XMP coverage.");
+	}
+	overview += "\n\n" + tr("Likes, favorites and collections work even without tags, and stay attached when you link a source. Recommendations are planned; no recommendation feed is running yet.");
 	m_metadata->setPlainText(overview);
 	m_rawMetadata->setPlainText(QString::fromUtf8(QJsonDocument(entry.image).toJson(QJsonDocument::Indented)));
 	if ((available && (navigated || !m_notes->document()->isModified())) || (navigated && !available)) {

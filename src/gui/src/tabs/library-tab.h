@@ -61,6 +61,10 @@ class LibraryTab : public QWidget
 		QTreeWidget *m_sidebar;
 		QPushButton *m_manage;
 		QPushButton *m_more;
+		QPushButton *m_findSource, *m_previousPage, *m_nextPage;
+		QLabel *m_pageLabel;
+		QStringList m_viewKeys;
+		int m_page = 0;
 		QListWidget *m_grid;
 		QLineEdit *m_search;
 		QComboBox *m_filter;

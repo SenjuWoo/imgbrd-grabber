@@ -37,6 +37,18 @@ For an existing portable install, close the app and back up its profile first. P
 
 The display name is **Grabber Woo Edit**. The executable names and existing profile identifiers are retained so renaming the product does not move or reset your data. Historical Fable tags remain available in [Releases](https://github.com/SenjuWoo/imgbrd-grabber/releases).
 
+## Imported pictures and missing metadata
+
+The gallery shows 100 pictures per page, with **Previous page / Next page** and the current range. Search and filters cover the entire Library, including pictures on other pages.
+
+- **Needs tags** lists pictures without usable tags. A successful picture import does not imply that tags were present in the downloaded file.
+- **Needs source** lists pictures without an identified website post, including pictures whose file tags were recovered.
+- **Metadata errors** lists reader failures separately from absent metadata. Open a picture's Overview for the reason.
+
+Select one picture and click **Find / link source…** beside the rating buttons. Choose a source for exact MD5 lookup, or compare source pictures already cached in Library. Confirm a candidate to attach its post metadata. Similarity search does not search the whole Internet. **Import pictures… → Recheck metadata** retries local files without duplicating pictures or resetting ratings.
+
+Likes, favorites, notes, and collection membership work without tags and are preserved when a source is linked. Recommendations are still planned. Missing tags will limit future tag-based matching; the stored preferences remain available for later enrichment. Basic embedded text and sidecars are checked automatically. Optional [ExifTool](https://exiftool.org/install.html) extends EXIF/IPTC/XMP coverage; the Overview reports when that reader was unavailable.
+
 ## Online sources and current limits
 
 The upstream downloader features remain: multiple tabs and sources, tag autocomplete, blacklists, filters, filename tokens, authentication, downloads, and CLI commands. Sources include Danbooru, Gelbooru, Pixiv, Reddit, e621, Kemono, and others. Website availability and account requirements vary.
@@ -75,6 +87,7 @@ npm test -- --runInBand
 
 - Rename the product to Grabber Woo Edit while preserving profile compatibility and historical attribution.
 - Ship the desktop Library, collections, likes/favorites, scoped notes, covers, local imports, offline viewer, metadata recovery, and explicit source linking developed in the previous local milestones.
+- Add explicit gallery pagination, metadata review views, a visible source-link action, and safe metadata rechecks.
 - Repair Reddit cursor pagination, author searches, empty subreddit listings, and crosspost media; handle Pixiv error and incomplete responses.
 - Update Qt, Windows OpenSSL, Lexbor, and compatible Jest/ts-jest dependencies. Add the npm audit and Windows GUI test gates; use supported Node.js for source builds.
 - Repair HTML document/selector ownership, release temporary serialization buffers, preserve UTF-8 byte lengths, and keep child nodes valid after their original wrapper closes.

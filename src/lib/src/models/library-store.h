@@ -22,6 +22,8 @@ struct LibraryEntry
 	QString savedAt;
 	int collectionCount = 0;
 	QStringList localPaths;
+	QStringList tags() const;
+	QStringList metadataErrors() const;
 };
 
 struct LibraryCollection

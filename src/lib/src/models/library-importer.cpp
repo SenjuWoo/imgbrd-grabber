@@ -56,7 +56,7 @@ namespace
 
 	bool isTagField(const QString &key)
 	{
-		return key == "tags" || key.endsWith("tagstring") || key == "keywords" || key == "subject";
+		return key == "tags" || (key.startsWith("tagstring") || key.endsWith("tagstring")) || key == "keywords" || key == "subject";
 	}
 
 	void addUrls(LibraryImportData &data, const QString &text)
@@ -103,7 +103,8 @@ namespace
 		if (value.isObject()) {
 			const QJsonObject object = value.toObject();
 			for (auto it = object.constBegin(); it != object.constEnd(); ++it) {
-				readFields(data, it.value(), fieldName(it.key()), depth + 1);
+				const QString field = fieldName(it.key());
+				readFields(data, it.value(), isTagField(key) && (field == "text" || field == "name") ? QString("tags") : field, depth + 1);
 			}
 		} else if (value.isArray()) {
 			const QJsonArray array = value.toArray();
@@ -224,8 +225,10 @@ namespace
 			executable = QStandardPaths::findExecutable("exiftool", { QCoreApplication::applicationDirPath() });
 		}
 		if (executable.isEmpty() || cancelled(cancel)) {
+			data.metadata.insert("extended_reader", "unavailable");
 			return;
 		}
+		data.metadata.insert("extended_reader", "checked");
 		QProcess process;
 		process.setReadChannel(QProcess::StandardOutput);
 		process.start(executable, { "-config", "", "-j", "-G1", "-a", "-s", "-charset", "filename=utf8", "--", data.path });
@@ -455,7 +458,8 @@ LibraryImportData LibraryImporter::inspect(const QString &path, const QString &m
 		}
 	#endif
 	readExiftool(data, evidence, cancel);
-	data.metadata = {{ "version", 1 }, { "evidence", evidence }};
+	data.metadata.insert("version", 1);
+	data.metadata.insert("evidence", evidence);
 	if (cancelled(cancel) || !unchanged(original, originalSize, originalModified)) {
 		data.error = cancelled(cancel) ? "Import cancelled." : "Image changed during import; retry it.";
 		return data;

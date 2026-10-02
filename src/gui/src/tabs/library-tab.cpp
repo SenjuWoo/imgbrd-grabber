@@ -42,6 +42,8 @@
 #include "viewer/viewer-window.h"
 
 
+namespace { constexpr int LibraryPageSize = 100; }
+
 LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	: QWidget(parent), m_profile(profile), m_mainWindow(parent), m_store(profile->library())
 {
@@ -126,6 +128,27 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 		}
 	});
 	importMenu->addSeparator();
+	importMenu->addAction(tr("Recheck metadata for selected pictures"), this, [this]() {
+		QStringList paths;
+		for (auto *item : m_grid->selectedItems()) {
+			for (const auto &path : m_entries.value(item->data(Qt::UserRole).toString()).localPaths) {
+				if (QFile::exists(path)) { paths.append(path); }
+			}
+		}
+		paths.removeDuplicates();
+		importPaths(paths);
+	});
+	importMenu->addAction(tr("Recheck metadata in this view"), this, [this]() {
+		QStringList paths;
+		for (const auto &key : m_viewKeys) {
+			for (const auto &path : m_entries.value(key).localPaths) {
+				if (QFile::exists(path)) { paths.append(path); }
+			}
+		}
+		paths.removeDuplicates();
+		importPaths(paths);
+	});
+	importMenu->addSeparator();
 	auto *copyAction = importMenu->addAction(tr("Copy into portable Library"));
 	copyAction->setCheckable(true);
 	copyAction->setChecked(m_copyImports);
@@ -138,13 +161,27 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	filters->addWidget(m_importButton);
 	contentLayout->addLayout(filters);
 	m_count = new QLabel(content);
-	contentLayout->addWidget(m_count);
+	auto *pageRow = new QHBoxLayout();
+	pageRow->addWidget(m_count, 1);
+	m_previousPage = new QPushButton(tr("Previous page"), content);
+	m_previousPage->setObjectName("libraryPreviousPage");
+	m_nextPage = new QPushButton(tr("Next page"), content);
+	m_nextPage->setObjectName("libraryNextPage");
+	m_pageLabel = new QLabel(content);
+	m_pageLabel->setObjectName("libraryPage");
+	pageRow->addWidget(m_previousPage);
+	pageRow->addWidget(m_pageLabel);
+	pageRow->addWidget(m_nextPage);
+	contentLayout->addLayout(pageRow);
+	connect(m_previousPage, &QPushButton::clicked, this, [this]() { if (m_page > 0) { --m_page; reload(); } });
+	connect(m_nextPage, &QPushButton::clicked, this, [this]() { if ((m_page + 1) * LibraryPageSize < m_viewKeys.size()) { ++m_page; reload(); } });
 	m_stack = new QStackedWidget(content);
 	m_grid = new QListWidget(m_stack);
 	m_grid->setObjectName("libraryGrid");
 	m_grid->setViewMode(QListView::IconMode);
 	m_grid->setResizeMode(QListView::Adjust);
 	m_grid->setMovement(QListView::Static);
+	m_grid->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
 	m_grid->setIconSize(QSize(224, 160));
 	m_grid->setGridSize(QSize(248, 222));
 	m_grid->setSpacing(8);
@@ -164,6 +201,13 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	m_actions = new ImageLibraryActions(profile, {}, content);
 	auto *actionRow = new QHBoxLayout();
 	actionRow->addWidget(m_actions, 1);
+	m_findSource = new QPushButton(tr("Find / link source…"), content);
+	m_findSource->setObjectName("libraryFindSource");
+	m_findSource->setToolTip(tr("Select one picture. Search an exact MD5 on a website, or compare source pictures already saved in Library."));
+	actionRow->addWidget(m_findSource);
+	connect(m_findSource, &QPushButton::clicked, this, [this]() {
+		if (m_grid->selectedItems().size() == 1) { findSource(m_grid->selectedItems().first()->data(Qt::UserRole).toString()); }
+	});
 	m_more = new QPushButton(tr("More…"), content);
 	m_more->setObjectName("libraryMore");
 	actionRow->addWidget(m_more);
@@ -195,10 +239,11 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	m_searchTimer->setSingleShot(true);
 	m_searchTimer->setInterval(150);
 	connect(m_searchTimer, &QTimer::timeout, this, &LibraryTab::scheduleReload);
-	connect(m_search, &QLineEdit::textChanged, this, [this]() { m_searchTimer->start(); });
-	connect(m_filter, &QComboBox::currentIndexChanged, this, &LibraryTab::scheduleReload);
+	connect(m_search, &QLineEdit::textChanged, this, [this]() { m_page = 0; m_searchTimer->start(); });
+	connect(m_filter, &QComboBox::currentIndexChanged, this, [this]() { m_page = 0; scheduleReload(); });
 	connect(m_sidebar, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) {
 		if (item != nullptr && item->data(0, Qt::UserRole).isValid()) {
+			m_page = 0;
 			m_collection = item->data(0, Qt::UserRole).toLongLong();
 			m_smartFilter = item->data(0, Qt::UserRole + 1).toInt();
 			m_filter->setCurrentIndex(0);
@@ -247,7 +292,7 @@ void LibraryTab::reload()
 	const QSignalBlocker sidebarBlock(m_sidebar);
 	const QSignalBlocker gridBlock(m_grid);
 	m_sidebar->clear();
-	const QStringList smartNames { tr("All pictures"), tr("Unsorted"), tr("Liked"), tr("Favorites"), tr("Recently saved") };
+	const QStringList smartNames { tr("All pictures"), tr("Unsorted"), tr("Liked"), tr("Favorites"), tr("Recently saved"), tr("Needs tags"), tr("Needs source"), tr("Metadata errors") };
 	for (int index = 0; index < smartNames.size(); ++index) {
 		auto *item = new QTreeWidgetItem(m_sidebar, { smartNames[index] });
 		item->setData(0, Qt::UserRole, 0);
@@ -277,16 +322,20 @@ void LibraryTab::reload()
 		: tr("Library-wide likes and favorites. Organize pictures into collections for separate preferences."));
 	m_grid->clear();
 	m_entries.clear();
+	m_viewKeys.clear();
 	const QString search = m_search->text().trimmed();
 	m_manage->setEnabled(m_store->isReady() && m_collection > 0);
 	const int preference = m_filter->currentIndex();
 	const auto entries = m_store->entries(m_collection);
-	// ponytail: load the catalog in one pass; use a paged model if libraries exceed tens of thousands of pictures.
+	// ponytail: read metadata in one pass, render 100 cards; query pages if catalogs exceed tens of thousands of pictures.
 	for (const auto &entry : entries) {
 		if ((m_collection == 0 && m_smartFilter == 1 && entry.collectionCount > 0) || (m_collection == 0 && m_smartFilter == 2 && !entry.liked) || (m_collection == 0 && m_smartFilter == 3 && !entry.favorite) || (preference == 1 && !entry.liked) || (preference == 2 && !entry.favorite)) {
 			continue;
 		}
 		if (m_collection == 0 && m_smartFilter == 4 && QDateTime::fromString(entry.savedAt, Qt::ISODateWithMs) < QDateTime::currentDateTimeUtc().addDays(-7)) {
+			continue;
+		}
+		if (m_collection == 0 && ((m_smartFilter == 5 && !entry.tags().isEmpty()) || (m_smartFilter == 6 && !entry.image.value("website").toString().isEmpty()) || (m_smartFilter == 7 && entry.metadataErrors().isEmpty()))) {
 			continue;
 		}
 		const QString searchable = QString::fromUtf8(QJsonDocument(entry.image).toJson(QJsonDocument::Compact)) + " " + entry.notes;
@@ -298,6 +347,25 @@ void LibraryTab::reload()
 			continue;
 		}
 		m_entries.insert(entry.key, entry);
+		m_viewKeys.append(entry.key);
+	}
+	m_page = qBound(0, m_page, qMax(0, int((m_viewKeys.size() - 1) / LibraryPageSize)));
+	m_previousPage->setEnabled(m_page > 0 && !m_importing);
+	m_nextPage->setEnabled((m_page + 1) * LibraryPageSize < m_viewKeys.size() && !m_importing);
+	m_pageLabel->setText(tr("Page %1 of %2").arg(m_page + 1).arg(qMax(1, int((m_viewKeys.size() + LibraryPageSize - 1) / LibraryPageSize))));
+	const bool paged = m_viewKeys.size() > LibraryPageSize;
+	m_previousPage->setVisible(paged);
+	m_nextPage->setVisible(paged);
+	m_pageLabel->setVisible(paged);
+	if (m_collection == 0 && m_smartFilter == 5) {
+		m_hint->setText(tr("No tags are available yet. The picture imported successfully; tags may never have been saved in the file. Likes and favorites still work. Select a picture and use Find / link source, or recheck metadata from Import pictures."));
+	} else if (m_collection == 0 && m_smartFilter == 6) {
+		m_hint->setText(tr("These pictures have no identified website post. Recovered file tags are kept separately from source identity. Find / link source offers exact MD5 lookup and similar cached source pictures."));
+	} else if (m_collection == 0 && m_smartFilter == 7) {
+		m_hint->setText(tr("The picture was imported, but one or more metadata readers reported an error. Open the picture's Overview for the reason, then recheck metadata after correcting it."));
+	}
+	for (const auto &key : m_viewKeys.mid(m_page * LibraryPageSize, LibraryPageSize)) {
+		const auto &entry = m_entries[key];
 		QString name = entry.image.value("name").toString();
 		if (name.isEmpty()) {
 			name = entry.image.value("data").toObject().value("title").toString();
@@ -309,13 +377,15 @@ void LibraryTab::reload()
 		if (source.isEmpty()) {
 			source = tr("Local file · source unlinked");
 		}
+		const QString metadataState = entry.tags().isEmpty() ? tr("Needs tags") : tr("%1 tags").arg(entry.tags().size());
+		const QString warning = entry.metadataErrors().isEmpty() ? QString() : tr(" · Metadata error");
 		QString badges = (entry.liked ? QStringLiteral("♥ ") : QString()) + (entry.favorite ? QStringLiteral("★ ") : QString());
 		if (!entry.notes.isEmpty()) {
 			badges += tr("Note · ");
 		}
-		auto *item = new QListWidgetItem(name + "\n" + source + "\n" + badges + (entry.collectionCount == 1 ? tr("1 collection") : tr("%1 collections").arg(entry.collectionCount)), m_grid);
+		auto *item = new QListWidgetItem(name + "\n" + source + " · " + metadataState + warning + "\n" + badges + (entry.collectionCount == 1 ? tr("1 collection") : tr("%1 collections").arg(entry.collectionCount)), m_grid);
 		item->setData(Qt::UserRole, entry.key);
-		item->setToolTip(name + "\n" + source + "\n" + entry.notes);
+		item->setToolTip(name + "\n" + source + "\n" + metadataState + "\n" + entry.tags().join(", ") + "\n" + entry.metadataErrors().join("\n") + "\n" + entry.notes);
 		QPixmap thumbnail;
 		thumbnail.loadFromData(entry.thumbnail);
 		if (thumbnail.isNull()) {
@@ -327,7 +397,7 @@ void LibraryTab::reload()
 		item->setTextAlignment(Qt::AlignHCenter);
 		item->setSelected(selected.contains(entry.key));
 	}
-	m_count->setText((m_grid->count() == 1 ? tr("1 picture") : tr("%1 pictures").arg(m_grid->count())));
+
 	if (!m_store->isReady()) {
 		m_empty->setText(m_store->lastError());
 	} else if (!search.isEmpty() || preference > 0) {
@@ -375,7 +445,11 @@ void LibraryTab::updateSelection()
 	}
 	m_actions->setSelection(images, keys, m_collection);
 	m_more->setEnabled(!keys.isEmpty());
-	m_count->setText((m_grid->count() == 1 ? tr("1 picture") : tr("%1 pictures").arg(m_grid->count())) + (keys.isEmpty() ? QString() : tr(" · %1 selected").arg(keys.size())));
+	m_findSource->setEnabled(keys.size() == 1 && !m_importing);
+	const int total = m_viewKeys.size();
+	const QString count = total > LibraryPageSize ? tr("%1–%2 of %3 pictures").arg(m_page * LibraryPageSize + 1).arg(m_page * LibraryPageSize + m_grid->count()).arg(total)
+		: (total == 1 ? tr("1 picture") : tr("%1 pictures").arg(total));
+	m_count->setText(count + (keys.isEmpty() ? QString() : tr(" · %1 selected").arg(keys.size())));
 }
 
 void LibraryTab::newCollection()
@@ -432,10 +506,7 @@ void LibraryTab::openImage(const QString &key)
 	const auto entry = m_entries.value(key);
 	auto image = restoreImage(entry);
 	if (!entry.localPaths.isEmpty() || !image || !image->savePath().isEmpty()) {
-		QStringList keys;
-		for (int i = 0; i < m_grid->count(); ++i) {
-			keys.append(m_grid->item(i)->data(Qt::UserRole).toString());
-		}
+		const QStringList keys = m_viewKeys;
 		auto *viewer = new LibraryImageDialog(m_profile, keys, key, m_collection, this);
 		connect(viewer, &LibraryImageDialog::locateRequested, this, &LibraryTab::locateFile);
 		connect(viewer, &LibraryImageDialog::sourceRequested, this, &LibraryTab::findSource);
@@ -592,6 +663,9 @@ void LibraryTab::importPaths(const QStringList &paths, bool copy, const QString 
 	m_managedDirectory = copy ? QDir(m_profile->getPath()).filePath("library-media") : QString();
 	m_cancel = std::make_shared<std::atomic_bool>(false);
 	m_importButton->setEnabled(false);
+	m_findSource->setEnabled(false);
+	m_previousPage->setEnabled(false);
+	m_nextPage->setEnabled(false);
 	m_progress = new QProgressDialog(tr("Finding pictures…"), tr("Cancel"), 0, 0, this);
 	m_progress->setWindowTitle(tr("Import pictures"));
 	m_progress->setWindowModality(Qt::NonModal);
@@ -655,6 +729,14 @@ void LibraryTab::finishImport()
 	} else if (m_importFiles.isEmpty()) {
 		summary += tr(" · No supported pictures found.");
 	}
+	int noTags = 0, noSource = 0, errors = 0;
+	for (const auto &entry : m_store->entries(m_importCollection)) {
+		if (!entry.image.contains("local_import")) { continue; }
+		if (entry.tags().isEmpty()) { ++noTags; }
+		if (entry.image.value("website").toString().isEmpty()) { ++noSource; }
+		if (!entry.metadataErrors().isEmpty()) { ++errors; }
+	}
+	summary += tr(". Local pictures in this scope: %1 need tags · %2 need source · %3 metadata errors. Use the Library sidebar to review them. Missing tags do not prevent likes or favorites.").arg(noTags).arg(noSource).arg(errors);
 	m_hint->setText(summary);
 	if (!m_importErrors.isEmpty()) {
 		auto *report = new QDialog(this);

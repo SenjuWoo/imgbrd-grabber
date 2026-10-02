@@ -18,6 +18,37 @@
 #include "models/site.h"
 
 
+QStringList LibraryEntry::tags() const
+{
+	QStringList result;
+	const auto value = image.value("tags");
+	if (value.isString()) {
+		result = value.toString().split(' ', Qt::SkipEmptyParts);
+	} else {
+		for (const auto &tag : value.toArray()) {
+			result.append(tag.isObject() ? tag.toObject().value("text").toString() : tag.toString());
+		}
+	}
+	for (const auto &tag : image.value("local_import").toObject().value("tags").toArray()) {
+		result.append(tag.toString());
+	}
+	result.removeAll(QString());
+	result.removeDuplicates();
+	return result;
+}
+
+QStringList LibraryEntry::metadataErrors() const
+{
+	QStringList result;
+	for (const auto &item : image.value("local_import").toObject().value("evidence").toArray()) {
+		const auto evidence = item.toObject();
+		if (!evidence.value("error").toString().isEmpty()) {
+			result.append(evidence.value("kind").toString() + ": " + evidence.value("error").toString());
+		}
+	}
+	return result;
+}
+
 LibraryStore::LibraryStore(const QString &path, QObject *parent)
 	: QObject(parent), m_connection("library-" + QUuid::createUuid().toString())
 {
@@ -547,9 +578,14 @@ QString LibraryStore::saveLocalImage(const LibraryImportData &data, qint64 colle
 	} else {
 		QJsonArray evidenceItems = local.value("evidence").toArray();
 		for (const auto &item : data.metadata.value("evidence").toArray()) {
-			if (!evidenceItems.contains(item)) {
-				evidenceItems.append(item);
+			const auto incoming = item.toObject();
+			for (int index = evidenceItems.size() - 1; index >= 0; --index) {
+				const auto previous = evidenceItems[index].toObject();
+				if (previous.value("kind") == incoming.value("kind") && previous.value("path") == incoming.value("path")) {
+					evidenceItems.removeAt(index);
+				}
 			}
+			evidenceItems.append(item);
 		}
 		local.insert("evidence", evidenceItems);
 		for (const QString &field : {QString("source_urls"), QString("tags")}) {
@@ -573,6 +609,7 @@ QString LibraryStore::saveLocalImage(const LibraryImportData &data, qint64 colle
 		}
 		metadata.insert("tags", tags.join(' '));
 	}
+	local.insert("extended_reader", data.metadata.value("extended_reader"));
 	metadata.insert("local_import", local);
 	const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
 	if (!m_database.transaction()) {

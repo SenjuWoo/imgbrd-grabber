@@ -1,4 +1,8 @@
 #include <QApplication>
+#include <QFile>
+#include <QScrollBar>
+#include <QWheelEvent>
+#include <QSet>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
@@ -72,7 +76,7 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	REQUIRE(profile->library()->addToCollection(key, collection));
 	QApplication::processEvents();
 	auto *sidebar = library.findChild<QTreeWidget*>("librarySidebar");
-	auto *collectionItem = sidebar->topLevelItem(5)->child(0);
+	auto *collectionItem = sidebar->topLevelItem(8)->child(0);
 	REQUIRE(collectionItem->data(0, Qt::UserRole).toLongLong() == collection);
 	sidebar->setCurrentItem(collectionItem);
 	QApplication::processEvents();
@@ -140,4 +144,74 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	REQUIRE(profile->library()->collections().first().name == "Sketch references");
 	REQUIRE(grid->count() == 0);
 	REQUIRE(library.findChild<QPushButton*>("libraryManageCollection")->isEnabled());
+}
+
+TEST_CASE("Large Library galleries keep the final picture reachable", "[library][gallery]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QString catalog = qEnvironmentVariable("GRABBER_TEST_CATALOG");
+	if (!catalog.isEmpty()) {
+		REQUIRE(QFile::copy(catalog, directory.filePath("library.sqlite")));
+	}
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	if (catalog.isEmpty()) {
+		Site *site = profile->getSites().value("danbooru.donmai.us");
+		for (int index = 0; index < 650; ++index) {
+			Image image(site, {{"id", QString::number(index + 1)}, {"name", QString(120, 'a')}, {"file_url", "https://test.invalid/" + QString::number(index) + ".png"}}, profile.data());
+			QPixmap preview(index % 2 ? QSize(100, 160) : QSize(160, 100));
+			preview.fill(Qt::blue);
+			image.setPreviewImage(preview);
+			REQUIRE(!profile->library()->saveImage(image).isEmpty());
+		}
+	}
+	const int expected = profile->library()->entries().size();
+	REQUIRE(expected >= 478);
+	ThemeLoader theme(QFileInfo(QString::fromUtf8(__FILE__)).absolutePath() + "/../../dist/common/themes/", profile->getSettings());
+	REQUIRE(theme.setTheme("Tokyo Night"));
+	LibraryTab library(profile.data(), nullptr);
+	for (const QSize &size : {QSize(900, 660), QSize(1500, 820)}) {
+		library.resize(size);
+		library.show();
+		QApplication::processEvents();
+		auto *grid = library.findChild<QListWidget*>("libraryGrid");
+		QSet<QString> seen;
+		auto *next = library.findChild<QPushButton*>("libraryNextPage");
+		auto *previous = library.findChild<QPushButton*>("libraryPreviousPage");
+		REQUIRE(next != nullptr);
+		REQUIRE(previous != nullptr);
+		do {
+			REQUIRE(grid->count() <= 100);
+			for (int index = 0; index < grid->count(); ++index) {
+				const auto key = grid->item(index)->data(Qt::UserRole).toString();
+				REQUIRE_FALSE(seen.contains(key));
+				seen.insert(key);
+			}
+			if (!next->isEnabled()) { break; }
+			QTest::mouseClick(next, Qt::LeftButton);
+			QApplication::processEvents();
+		} while (true);
+		REQUIRE(seen.size() == expected);
+		REQUIRE(previous->isEnabled());
+		grid->scrollToBottom();
+		QApplication::processEvents();
+		auto *last = grid->item(grid->count() - 1);
+		const QRect visible = grid->visualItemRect(last);
+		INFO("count=" << grid->count() << " viewport=" << grid->viewport()->width() << "x" << grid->viewport()->height() << " scroll=" << grid->verticalScrollBar()->value() << "/" << grid->verticalScrollBar()->maximum() << " last=" << visible.x() << "," << visible.y() << "," << visible.width() << "," << visible.height());
+		REQUIRE(grid->viewport()->rect().intersects(visible));
+		REQUIRE(grid->itemAt(visible.center()) == last);
+		grid->scrollToTop();
+		for (int step = 0; step < 500 && grid->verticalScrollBar()->value() < grid->verticalScrollBar()->maximum(); ++step) {
+			const QPointF pos = grid->viewport()->rect().center();
+			QWheelEvent wheel(pos, grid->viewport()->mapToGlobal(pos.toPoint()), QPoint(), QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
+			QApplication::sendEvent(grid->viewport(), &wheel);
+		}
+		REQUIRE(grid->verticalScrollBar()->value() == grid->verticalScrollBar()->maximum());
+		REQUIRE(grid->viewport()->rect().intersects(grid->visualItemRect(last)));
+		library.findChild<QLineEdit*>("librarySearch")->setText("no_such_tag");
+		REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 0; }, 3000));
+		library.findChild<QLineEdit*>("librarySearch")->clear();
+		REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 100; }, 3000));
+		REQUIRE_FALSE(previous->isEnabled());
+	}
 }

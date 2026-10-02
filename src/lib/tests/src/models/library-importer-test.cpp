@@ -51,7 +51,7 @@ TEST_CASE("Library import reads local evidence and preserves original image byte
 	image.setText("Keywords", "embedded_tag forest");
 	REQUIRE(image.save(path, "PNG"));
 	const QByteArray original = readImportFixture(path);
-	writeImportFixture(path + ".json", R"({"title":"Imported illustration","tags":["blue_hair","forest"],"sources":["https://danbooru.donmai.us/posts/123#fragment","file:///private/image.png","javascript:bad"]})");
+	writeImportFixture(path + ".json", R"({"title":"Imported illustration","tags":["blue_hair","forest",{"text":"object_tag"}],"tag_string_general":"sidecar_category_tag","sources":["https://danbooru.donmai.us/posts/123#fragment","file:///private/image.png","javascript:bad"]})");
 	writeImportFixture(directory.filePath(originalMd5 + ".xmp"), R"(<x:xmpmeta xmlns:x="adobe:ns:meta/" xmlns:rdf="http://www.w3.org/1999/02/22-rdf-syntax-ns#" xmlns:dc="http://purl.org/dc/elements/1.1/"><rdf:RDF><rdf:Description><dc:subject><rdf:Bag><rdf:li>xmp_tag</rdf:li></rdf:Bag></dc:subject><dc:source>https://example.test/source/42</dc:source></rdf:Description></rdf:RDF></x:xmpmeta>)");
 	writeImportFixture(directory.filePath(originalMd5 + ".txt"), "text_tag, sky clouds\n");
 	#ifdef Q_OS_WIN
@@ -69,6 +69,8 @@ TEST_CASE("Library import reads local evidence and preserves original image byte
 	REQUIRE(imported.sourceUrls.contains("https://example.test/source/42"));
 	REQUIRE(imported.tags.contains("embedded_tag"));
 	REQUIRE(imported.tags.contains("blue_hair"));
+	REQUIRE(imported.tags.contains("object_tag"));
+	REQUIRE(imported.tags.contains("sidecar_category_tag"));
 	REQUIRE(imported.tags.contains("xmp_tag"));
 	REQUIRE(imported.tags.contains("text_tag"));
 	REQUIRE(imported.tags.count("forest") == 1);

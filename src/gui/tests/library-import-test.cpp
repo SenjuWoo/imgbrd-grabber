@@ -1,6 +1,11 @@
 #include <QApplication>
 #include <QFile>
 #include <QImage>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include "models/library-importer.h"
+#include "models/image.h"
+#include "viewer/library-source-dialog.h"
 #include <QListWidget>
 #include <QProgressDialog>
 #include <QPushButton>
@@ -39,7 +44,7 @@ TEST_CASE("Asynchronous folder import keeps the UI and collection preferences us
 	library.resize(1180, 740);
 	library.show();
 	auto *sidebar = library.findChild<QTreeWidget*>("librarySidebar");
-	sidebar->setCurrentItem(sidebar->topLevelItem(5)->child(0));
+	sidebar->setCurrentItem(sidebar->topLevelItem(8)->child(0));
 	QApplication::processEvents();
 	int added = -1, duplicates = -1, failed = -1;
 	QObject::connect(&library, &LibraryTab::importFinished, [&](int a, int d, int f) { added = a; duplicates = d; failed = f; });
@@ -81,4 +86,69 @@ TEST_CASE("Asynchronous folder import keeps the UI and collection preferences us
 		cancelled = cancelled || label->text().contains("Cancelled; completed pictures were kept.");
 	}
 	REQUIRE(cancelled);
+}
+
+TEST_CASE("Metadata review views keep untagged ratings and source identification separate", "[library][import][metadata-review]")
+{
+	QTemporaryDir directory;
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	QImage pixels(80, 60, QImage::Format_RGB32);
+	pixels.fill(Qt::green);
+	const QString path = directory.filePath("plain.png");
+	REQUIRE(pixels.save(path));
+	QFile sidecar(path + ".json");
+	REQUIRE(sidecar.open(QIODevice::WriteOnly));
+	sidecar.write("{bad json");
+	sidecar.close();
+	const QString key = profile->library()->saveLocalImage(LibraryImporter::inspect(path));
+	REQUIRE(!key.isEmpty());
+	REQUIRE(profile->library()->entry(key).tags().isEmpty());
+	REQUIRE_FALSE(profile->library()->entry(key).metadataErrors().isEmpty());
+	LibraryTab library(profile.data(), nullptr);
+	library.resize(1180, 740);
+	library.show();
+	QApplication::processEvents();
+	auto *grid = library.findChild<QListWidget*>("libraryGrid");
+	auto *sidebar = library.findChild<QTreeWidget*>("librarySidebar");
+	sidebar->setCurrentItem(sidebar->topLevelItem(5)); // Needs tags.
+	QApplication::processEvents();
+	REQUIRE(grid->count() == 1);
+	grid->item(0)->setSelected(true);
+	QTest::mouseClick(library.findChild<QToolButton*>("libraryLike"), Qt::LeftButton);
+	QApplication::processEvents();
+	REQUIRE(profile->library()->entry(key).liked);
+	grid->item(0)->setSelected(true);
+	QTest::mouseClick(library.findChild<QToolButton*>("libraryFavorite"), Qt::LeftButton);
+	QApplication::processEvents();
+	REQUIRE(profile->library()->entry(key).favorite);
+	grid->item(0)->setSelected(true);
+	auto *find = library.findChild<QPushButton*>("libraryFindSource");
+	REQUIRE(find->isEnabled());
+	QTest::mouseClick(find, Qt::LeftButton);
+	auto *dialog = library.findChild<LibrarySourceDialog*>("librarySourceDialog");
+	REQUIRE(dialog != nullptr);
+	REQUIRE(dialog->findChild<QPushButton*>("librarySourceSimilar") != nullptr);
+	dialog->close();
+	REQUIRE(sidecar.open(QIODevice::WriteOnly | QIODevice::Truncate));
+	sidecar.write(R"({"tag_string_general":"recovered forest"})");
+	sidecar.close();
+	REQUIRE(profile->library()->saveLocalImage(LibraryImporter::inspect(path)) == key);
+	QApplication::processEvents();
+	REQUIRE(grid->count() == 0); // Tags recovered, so this view no longer contains it.
+	REQUIRE(profile->library()->entry(key).metadataErrors().isEmpty());
+	REQUIRE(profile->library()->entry(key).tags().contains("recovered"));
+	sidebar->setCurrentItem(sidebar->topLevelItem(6)); // Still needs source despite its tags.
+	QApplication::processEvents();
+	REQUIRE(grid->count() == 1);
+	Site *site = profile->getSites().value("danbooru.donmai.us");
+	Image remote(site, {{"id", "912"}, {"tags", "forest"}, {"file_url", "https://test.invalid/source.png"}}, profile.data());
+	REQUIRE(profile->library()->linkSource(key, remote, "User confirmed test candidate"));
+	QApplication::processEvents();
+	REQUIRE(grid->count() == 0);
+	REQUIRE(profile->library()->entry(key).liked);
+	REQUIRE(profile->library()->entry(key).favorite);
+	REQUIRE(profile->library()->entry(key).tags().contains("recovered"));
+	sidebar->setCurrentItem(sidebar->topLevelItem(7));
+	QApplication::processEvents();
+	REQUIRE(grid->count() == 0);
 }
