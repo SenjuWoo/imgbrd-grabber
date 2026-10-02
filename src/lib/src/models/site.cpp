@@ -1,6 +1,7 @@
 #include "models/site.h"
 #include <QCryptographicHash>
 #include <QDir>
+#include <QGuiApplication>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -170,7 +171,8 @@ void Site::loadConfig()
 		#else
 			const bool defaultUseQtUserAgent = false;
 		#endif
-		if (pSettings->value("useQtUserAgent", defaultUseQtUserAgent).toBool()) {
+		// The CLI uses QCoreApplication: constructing a browser profile there aborts.
+		if (pSettings->value("useQtUserAgent", defaultUseQtUserAgent).toBool() && qobject_cast<QGuiApplication*>(QCoreApplication::instance()) != nullptr) {
 			#if defined(USE_WEBENGINE)
 				m_userAgent = QWebEngineProfile::defaultProfile()->httpUserAgent();
 			#else

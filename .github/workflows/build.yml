@@ -213,7 +213,7 @@ jobs:
         with:
           cache: true
           version: ${{ env.QT_VERSION }}
-          modules: ${{ env.QT_MODULES }} ${{ env.IS_NIGHTLY && env.QT_MODULES_WEBENGINE || '' }}
+          modules: ${{ env.QT_MODULES }} ${{ env.IS_NIGHTLY == 'true' && env.QT_MODULES_WEBENGINE || '' }}
 
       - name: Vendor cache
         uses: actions/cache@v6
@@ -337,7 +337,7 @@ jobs:
         with:
           cache: true
           version: ${{ env.QT_VERSION }}
-          modules: ${{ env.QT_MODULES }} ${{ env.IS_NIGHTLY && env.QT_MODULES_WEBENGINE || '' }}
+          modules: ${{ env.QT_MODULES }} ${{ env.IS_NIGHTLY == 'true' && env.QT_MODULES_WEBENGINE || '' }}
 
 
       - name: Vendor cache
@@ -439,7 +439,7 @@ jobs:
         with:
           cache: true
           version: ${{ env.QT_VERSION }}
-          modules: ${{ env.QT_MODULES }} ${{ env.IS_NIGHTLY && env.QT_MODULES_WEBENGINE || '' }}
+          modules: ${{ env.QT_MODULES }} ${{ env.IS_NIGHTLY == 'true' && env.QT_MODULES_WEBENGINE || '' }}
           aqtsource: git+https://github.com/miurahr/aqtinstall.git@8c3695d
 
       - name: Vendor cache
@@ -569,6 +569,12 @@ jobs:
       - name: Generate package
         shell: cmd
         run: scripts\package-windows.bat && mv Grabber.zip Grabber_x64.zip
+
+      - name: Test extracted Windows package
+        shell: pwsh
+        run: |
+          Expand-Archive -LiteralPath Grabber_x64.zip -DestinationPath build/package-check
+          ./scripts/test-windows-package.ps1 -Root build/package-check -Evidence build/package-startup.json -QtVersion $env:QT_VERSION -OpenSslVersion $env:OPENSSL_VERSION
 
       - name: Upload package
         uses: actions/upload-artifact@v7
