@@ -33,7 +33,7 @@ $excludedDirs = Get-Content -LiteralPath (Join-Path $repo 'src\sites\exclude.txt
 $excludedDirs = @($excludedDirs | Where-Object {
     $_ -eq 'node_modules' -or !(Test-Path -LiteralPath (Join-Path (Join-Path $repo 'src\sites') ($_ + '\model.js')))
 })
-Copy-Tree (Join-Path $repo 'src\sites') (Join-Path $stage 'sites') (@('/XD') + $excludedDirs + @('/XF','*.ts','package*.json','*.config.js','tsconfig.json','tslint.json','exclude.txt','exclude_xcopy.txt','CMakeLists.txt'))
+Copy-Tree (Join-Path $repo 'src\sites') (Join-Path $stage 'sites') (@('/XD','resources') + $excludedDirs + @('/XF','*.ts','package*.json','*.config.js','tsconfig.json','tslint.json','exclude.txt','exclude_xcopy.txt','CMakeLists.txt'))
 Get-ChildItem -LiteralPath (Join-Path $build 'languages') -File -Filter '*.qm' | Where-Object Name -ne 'YourLanguage.qm' | Copy-Item -Destination (Join-Path $stage 'languages')
 $deploy = Join-Path $QtRoot 'bin\windeployqt.exe'
 & $deploy --dir $stage --release --no-quick-import --no-opengl-sw --force-openssl (Join-Path $stage 'Grabber.exe') (Join-Path $stage 'Grabber-cli.exe') (Join-Path $stage 'CrashReporter.exe')
