@@ -1,6 +1,6 @@
 # Grabber Woo Edit backend audit
 
-Audit date: October 1, 2026. Application version: 7.15.0.
+Audit date: October 1, 2026. Application version: 7.15.1.
 
 ## Source and dependency baseline
 
@@ -63,11 +63,11 @@ Internet-wide similarity services remain outside this release.
 Update checks reject HTTP errors, invalid JSON, missing tags, and invalid release
 URLs. An unsuccessful check does not emit the signal used for an up-to-date
 verdict. Requests have an inactivity timeout and reject HTTPS downgrades.
-Legacy fork revisions remain comparable, and 7.15.0 upgrades old Fable versions.
+Legacy fork revisions remain comparable, and 7.15.1 upgrades old Fable versions.
 
 Windows CI now executes GUI and crash-reporter tests as well as library/CLI
 tests; each failure propagates rather than being overwritten by a later command.
-The upstream Homebrew publisher is disabled on forks. Source metadata names the
+Fresh MSVC builds now set embedded debug information before compiler detection; the previous pre-project MSVC guard was ineffective. Stable Windows CI rejects shared PDB flags before compilation. The upstream Homebrew publisher is disabled on forks. Source metadata names the
 actual repository, and fork source publication is deferred until the matching
 application commit is green instead of publishing independently of its checks.
 
