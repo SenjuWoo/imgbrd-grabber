@@ -95,6 +95,8 @@ TEST_CASE("Offline Library viewer retains scoped actions and notes through navig
 		REQUIRE(viewer->property("libraryImageKey").toString() == second);
 		REQUIRE(view->scene()->items().size() == 1);
 	}
+	// Shortcuts need an active window even when the native test runner starts hidden.
+	QApplication::setActiveWindow(viewer);
 	view->setFocus();
 	QTest::keyClick(view, Qt::Key_Left);
 	REQUIRE(viewer->property("libraryImageKey").toString() == first);
