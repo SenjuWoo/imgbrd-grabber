@@ -18,6 +18,7 @@ env:
 jobs:
   homebrew-release:
     name: Homebrew release
+    if: github.repository == 'Bionus/imgbrd-grabber'
     runs-on: macos-latest
 
     steps:

@@ -6,7 +6,7 @@ int main(int argc, char *argv[])
 {
 	QApplication app(argc, argv);
 	app.setApplicationName("Grabber");
-	app.setApplicationDisplayName("Grabber");
+	app.setApplicationDisplayName("Grabber Woo Edit");
 	app.setOrganizationName("Bionus");
 	app.setOrganizationDomain("bionus.fr.cr");
 

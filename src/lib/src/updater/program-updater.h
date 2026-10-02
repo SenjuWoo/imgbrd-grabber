@@ -28,6 +28,7 @@ class ProgramUpdater : public Updater
 
 	signals:
 		void finished(const QString &newVersion, bool available, const QString &changelog);
+		void failed(const QString &message);
 		void downloadProgress(qint64 bytesReceived, qint64 bytesTotal);
 		void downloadFinished(const QString &path);
 

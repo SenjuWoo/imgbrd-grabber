@@ -100,7 +100,7 @@ OptionsWindow::OptionsWindow(Profile *profile, ThemeLoader *themeLoader, QWidget
 	ui->checkGetUnloadedPages->setChecked(settings->value("getunloadedpages", false).toBool());
 	ui->checkInvertToggle->setChecked(settings->value("invertToggle", false).toBool());
 	ui->checkConfirmClose->setChecked(settings->value("confirm_close", true).toBool());
-	ui->checkSendUsageData->setChecked(settings->value("send_usage_data", true).toBool());
+	ui->checkSendUsageData->setChecked(settings->value("send_usage_data", false).toBool());
 	const QList<int> checkForUpdates { 0, 24 * 60 * 60, 7 * 24 * 60 * 60, 30 * 24 * 60 * 60, -1 };
 	ui->comboCheckForUpdates->setCurrentIndex(checkForUpdates.indexOf(settings->value("check_for_updates", 24 * 60 * 60).toInt()));
 	ui->lineTempPathOverride->setText(settings->value("tempPathOverride").toString());

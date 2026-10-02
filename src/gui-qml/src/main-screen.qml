@@ -13,7 +13,7 @@ ApplicationWindow {
     visible: true
     width: 400
     height: 700
-    title: "Grabber"
+    title: "Grabber Woo Edit"
 
     property string currentPage: "search"
     property var activeSite: backend.sites.filter(site => site.url === gSettings.activeSource.value)[0]
@@ -91,7 +91,7 @@ ApplicationWindow {
     MainDrawer {
         id: drawer
 
-        headerTitle: "Grabber"
+        headerTitle: "Grabber Woo Edit"
         headerSubtitle: NIGHTLY
             ? "Nightly " + NIGHTLY_COMMIT.substring(0, 8)
             : "Version " + VERSION

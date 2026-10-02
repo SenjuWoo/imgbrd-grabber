@@ -59,3 +59,20 @@ TEST_CASE("HTML parsing utils")
 		}
 	}
 }
+
+TEST_CASE("HTML parsing preserves Unicode and children outlive their root")
+{
+	QScopedPointer<HtmlNode> root(HtmlNode::fromString(QString::fromUtf8("<main><p class='日本'>雪と🌲</p></main>"), true));
+	REQUIRE(root != nullptr);
+	auto children = root->find(QString::fromUtf8(".日本"));
+	REQUIRE(children.size() == 1);
+	root.reset();
+	REQUIRE(children.first().innerText() == QString::fromUtf8("雪と🌲"));
+	REQUIRE(children.first().outerHTML().contains(QString::fromUtf8("雪と🌲")));
+	REQUIRE(children.first().parent().tag() == "main");
+	REQUIRE(children.first().attr("class") == QString::fromUtf8("日本"));
+	REQUIRE(children.first().parent().parent().parent().tag().isEmpty());
+	for (int i = 0; i < 100; ++i) {
+		REQUIRE(children.first().find(".#~").isEmpty());
+	}
+}

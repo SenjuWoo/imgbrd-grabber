@@ -80,7 +80,7 @@ TEST_CASE("Updater")
 		REQUIRE(updater.compareVersions("1.0.0a3", "1.0.0b1") == -1);
 	}
 
-	SECTION("CompareFableRevisions")
+	SECTION("Compare legacy fork revisions and Woo upgrades")
 	{
 		REQUIRE(updater.compareVersions("7.14.0-fable.3", "7.14.0-fable.2") == 1);
 		REQUIRE(updater.compareVersions("7.14.0-fable.2", "7.14.0-fable.3") == -1);
@@ -89,6 +89,26 @@ TEST_CASE("Updater")
 		REQUIRE(updater.compareVersions("7.14.0", "7.14.0-fable.3") == -1);
 		REQUIRE(updater.compareVersions("7.14.1-fable.1", "7.14.0-fable.10") == 1);
 		REQUIRE(updater.compareVersions("7.15.0-fable.1", "7.14.0-fable.10") == 1);
+		REQUIRE(updater.compareVersions("7.15.0", "7.14.0-fable.5") == 1);
+		REQUIRE(updater.compareVersions("7.14.0-fable.5", "7.15.0") == -1);
+	}
+
+	SECTION("Failed or malformed release responses are not up-to-date verdicts")
+	{
+		for (const QString &body : {QString("500"), QString("404"), QString("not JSON"), QString("{}"),
+									QString(R"({"tag_name":"v999.0.0","html_url":"https://example.com/installer"})")}) {
+			QTemporaryFile response;
+			REQUIRE(response.open());
+			response.write(body.toUtf8());
+			response.flush();
+			CustomNetworkAccessManager::NextFiles.enqueue(body == "500" || body == "404" ? body : response.fileName());
+			QSignalSpy failed(&updater, &ProgramUpdater::failed);
+			QSignalSpy finished(&updater, &ProgramUpdater::finished);
+			updater.checkForUpdates();
+			REQUIRE(failed.wait());
+			REQUIRE(finished.isEmpty());
+			REQUIRE(updater.latestUrl().isEmpty());
+		}
 	}
 
 	#ifndef NIGHTLY

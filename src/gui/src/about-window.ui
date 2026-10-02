@@ -17,7 +17,7 @@
    </sizepolicy>
   </property>
   <property name="windowTitle">
-   <string>About Grabber</string>
+   <string>About Grabber Woo Edit</string>
   </property>
   <property name="windowIcon">
    <iconset resource="../resources/resources.qrc">
@@ -39,7 +39,7 @@
      <item>
       <widget class="QLabel" name="labelTitle">
        <property name="text">
-        <string notr="true">&lt;span style=&quot; font-size:30pt; font-weight:600; color:#505050;&quot;&gt;Grabber&lt;/p&gt;</string>
+        <string notr="true">&lt;span style=&quot; font-size:23pt; font-weight:600; color:#505050;&quot;&gt;Grabber Woo Edit&lt;/span&gt;</string>
        </property>
       </widget>
      </item>

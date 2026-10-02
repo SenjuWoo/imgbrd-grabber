@@ -21,7 +21,7 @@ AboutWindow::AboutWindow(const QString &version, QWidget *parent)
 	labelVersion += QString(" (%1)").arg(VERSION_PLATFORM);
 	ui->labelCurrent->setText(labelVersion);
 
-	ui->labelCreator->setText(ui->labelCreator->text().replace("{website}", PROJECT_WEBSITE_URL));
+	ui->labelCreator->setText(tr("Grabber Woo Edit is maintained by SenjuWoo, based on Grabber by Bionus and contributors.<br/><a href=\"%1\">Updates and source code</a>").arg(PROJECT_WEBSITE_URL));
 
 	// List contributors
 	const QString contributors = QString(CONTRIBUTORS).replace('\t', ", ");
@@ -30,6 +30,9 @@ AboutWindow::AboutWindow(const QString &version, QWidget *parent)
 	setFixedSize(600, heightForWidth(600));
 
 	connect(&m_updater, &ProgramUpdater::finished, this, &AboutWindow::finished);
+	connect(&m_updater, &ProgramUpdater::failed, this, [this]() {
+		ui->labelMessage->setText(tr("Unable to check for updates. Try again later."));
+	});
 	m_updater.checkForUpdates();
 }
 
@@ -40,7 +43,7 @@ AboutWindow::~AboutWindow()
 
 void AboutWindow::finished(const QString &newVersion, bool available)
 {
-	const QString msg = available ? tr("A new version is available: %1").arg(newVersion) : tr("Grabber is up to date");
+	const QString msg = available ? tr("A new version is available: %1").arg(newVersion) : tr("Grabber Woo Edit is up to date");
 	ui->labelMessage->setText("<p style=\"font-size:8pt; font-style:italic; color:#808080;\">" + msg + "</p>");
 
 	setFixedSize(600, heightForWidth(600));

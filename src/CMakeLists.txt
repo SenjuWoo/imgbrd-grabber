@@ -1,24 +1,19 @@
 cmake_minimum_required(VERSION 3.16)
 
 if((NOT DEFINED VERSION) OR ((DEFINED NIGHTLY) AND (NIGHTLY MATCHES "1")))
-	set(VERSION "7.14.0")
+	set(VERSION "7.15.0")
 else()
 	string(REGEX REPLACE "^v" "" VERSION "${VERSION}")
 endif()
-# CMake project() only accepts numeric versions. Fable tags like
-# 7.14.0-fable.2 still go into -DVERSION via VERSION_DISPLAY.
+# Keep the numeric project version separate from an optional display suffix.
 # Subdirs also call project(... VERSION ${VERSION}), so VERSION itself
 # must be numeric after this point. CI passes -DVERSION=$tag on releases.
 if(NOT DEFINED VERSION_DISPLAY)
-	if(VERSION MATCHES "-fable")
-		set(VERSION_DISPLAY "${VERSION}")
-	else()
-		set(VERSION_DISPLAY "${VERSION}-fable.5")
-	endif()
+	set(VERSION_DISPLAY "${VERSION}")
 endif()
 string(REGEX MATCH "^[0-9]+(\\.[0-9]+)*" VERSION_NUMERIC "${VERSION}")
 if(NOT VERSION_NUMERIC)
-	set(VERSION_NUMERIC "7.14.0")
+	set(VERSION_NUMERIC "7.15.0")
 endif()
 set(VERSION "${VERSION_NUMERIC}")
 # /Zi + parallel MSVC (and sccache wrapping cl) races on a shared PDB:
@@ -104,7 +99,7 @@ if((DEFINED NIGHTLY) AND (NIGHTLY MATCHES "1"))
 endif()
 
 # Android settings
-set(ANDROID_APP_NAME ${PROJECT_NAME})
+set(ANDROID_APP_NAME "Grabber Woo Edit")
 set(ANDROID_APP_VERSION_NAME ${VERSION_DISPLAY})
 set(ANDROID_APP_VERSION_CODE 1)
 set(ANDROID_APP_PACKAGE_NAME "org.bionus.grabber")
@@ -115,7 +110,7 @@ message(STATUS "Configuring for platform '${VERSION_PLATFORM}' (${CMAKE_SYSTEM_P
 
 add_definitions(-DVERSION="${VERSION_DISPLAY}")
 add_definitions(-DVERSION_PLATFORM="${VERSION_PLATFORM}")
-add_definitions(-DPROJECT_WEBSITE_URL="https://www.bionus.org/imgbrd-grabber")
+add_definitions(-DPROJECT_WEBSITE_URL="https://github.com/SenjuWoo/imgbrd-grabber")
 add_definitions(-DPROJECT_GITHUB_URL="https://github.com/SenjuWoo/imgbrd-grabber")
 add_definitions(-DPROJECT_DONATE_PAYPAL_URL="https://www.paypal.me/jvasti")
 add_definitions(-DPROJECT_DONATE_PATREON_URL="https://www.patreon.com/bionus")

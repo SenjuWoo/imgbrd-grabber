@@ -1,6 +1,7 @@
 #ifndef HTML_NODE_H
 #define HTML_NODE_H
 
+#include <memory>
 #include <QList>
 #include <QString>
 #include "lexbor/html/html.h"
@@ -9,9 +10,9 @@
 class HtmlNode
 {
 	public:
-		explicit HtmlNode(lxb_dom_node_t *node);
+		HtmlNode(lxb_dom_node_t *node, std::shared_ptr<lxb_html_document_t> document);
 		static HtmlNode *fromString(const QString &html, bool fragment = false);
-		~HtmlNode();
+		~HtmlNode() = default;
 
 		QString outerHTML() const;
 		QString innerHTML() const;
@@ -27,6 +28,7 @@ class HtmlNode
 
 	private:
 		lxb_dom_node_t *m_node;
+		std::shared_ptr<lxb_html_document_t> m_document;
 };
 
 #endif // HTML_NODE_H

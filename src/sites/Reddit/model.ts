@@ -116,11 +116,6 @@ function hasMedia(raw: any): boolean {
 	if (looksLikeMediaUrl(raw.url)) {
 		return true;
 	}
-	// Crossposts sometimes only expose media on the parent
-	const cross = raw.crosspost_parent_list && raw.crosspost_parent_list[0];
-	if (cross && hasMedia(cross)) {
-		return true;
-	}
 	return false;
 }
 
@@ -267,7 +262,10 @@ function parseImage(child: any): IImage | null {
 
 function buildSearchQuery(search: IRedditSearch): string {
 	const parts = search.tags.slice();
-	if (!search.raw) {
+	if (search.user) {
+		parts.push("author:" + search.user);
+	}
+	if (!search.raw && parts.length > 0) {
 		// Prefer link/media posts over text discussions
 		if (parts.indexOf("self:no") < 0 && parts.indexOf("self:yes") < 0) {
 			parts.push("self:no");
@@ -294,6 +292,9 @@ export const source: ISource = {
 			search: {
 				parseErrors: true,
 				url: (query: ISearchQuery, opts: IUrlOptions): string | IError => {
+					if (query.page > 1) {
+						return { error: "Reddit uses cursors. Browse from the first page instead of jumping to a page number." };
+					}
 					const search = parseSearch(query.search);
 					const q = buildSearchQuery(search);
 
@@ -311,7 +312,7 @@ export const source: ISource = {
 
 					const prefix = search.subreddit
 						? "/r/" + encodeURIComponent(search.subreddit)
-						: (search.user ? "/user/" + encodeURIComponent(search.user) : "");
+						: "";
 
 					if (q.length > 0) {
 						const searchArgs = {
@@ -338,7 +339,10 @@ export const source: ISource = {
 					const listing = search.sort && search.sort !== "relevance" ? "/" + search.sort : "";
 					return (prefix || "") + listing + ".json" + makeArgs(args);
 				},
-				parse: (src: string): IParsedSearch | IError => {
+				parse: (src: string, statusCode: number, requestUrl: string = ""): IParsedSearch | IError => {
+					if (statusCode === 401 || statusCode === 403) {
+						return { error: "Reddit denied API access. An approved API client or a signed-in session may be required; changing search tags will not resolve this." };
+					}
 					let data: any;
 					try {
 						data = JSON.parse(src);
@@ -351,7 +355,7 @@ export const source: ISource = {
 					if (data.error || data.message) {
 						return { error: String(data.message || data.error) };
 					}
-					if (data.kind !== "Listing") {
+					if (data.kind !== "Listing" || !Array.isArray(data.data?.children)) {
 						return { error: "No listing found in response" };
 					}
 
@@ -365,11 +369,14 @@ export const source: ISource = {
 						}
 					}
 
-					return {
-						images,
-						// Reddit uses "after" cursors; expose hasNext via residual children
-						imageCount: images.length,
-					};
+					let urlNextPage: string | undefined;
+					if (requestUrl && typeof data.data.after === "string" && /^t3_[a-z0-9]+$/i.test(data.data.after)) {
+						const [path, query = ""] = requestUrl.split("#")[0].split("?");
+						const params = query.split("&").filter((param) => param && !/^(after|before|count)=/.test(param));
+						params.push("after=" + encodeURIComponent(data.data.after));
+						urlNextPage = path + "?" + params.join("&");
+					}
+					return { images, urlNextPage };
 				},
 			},
 			gallery: {
@@ -378,7 +385,7 @@ export const source: ISource = {
 				},
 				parse: (src: string): IParsedGallery | IError => {
 					const data = JSON.parse(src)[0];
-					if (data.kind !== "Listing") {
+					if (data.kind !== "Listing" || !Array.isArray(data.data?.children)) {
 						return { error: "No listing found in response" };
 					}
 

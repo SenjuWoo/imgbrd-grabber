@@ -99,14 +99,14 @@ int main(int argc, char *argv[])
 	#ifdef NIGHTLY
 		QString commit(NIGHTLY_COMMIT);
 		if (!commit.isEmpty()) {
-			app.setApplicationDisplayName("Grabber Nightly - " + commit.left(8));
+			app.setApplicationDisplayName("Grabber Woo Edit Nightly - " + commit.left(8));
 			app.setApplicationVersion(QString(VERSION) + " - nightly " + commit.left(8));
 		} else {
-			app.setApplicationDisplayName("Grabber Nightly");
+			app.setApplicationDisplayName("Grabber Woo Edit Nightly");
 			app.setApplicationVersion(QString(VERSION) + " - nightly");
 		}
 	#else
-		app.setApplicationDisplayName("Grabber");
+		app.setApplicationDisplayName("Grabber Woo Edit");
 	#endif
 
 	// Copy settings files to writable directory
@@ -160,7 +160,7 @@ int main(int argc, char *argv[])
 	// Analytics
 	Analytics::getInstance().setTrackingID("UA-22768717-6");
 	Analytics::getInstance().setMeasurementID("G-15KZMHH7KG");
-	Analytics::getInstance().setEnabled(settings->value("send_usage_data", true).toBool());
+	Analytics::getInstance().setEnabled(settings->value("send_usage_data", false).toBool());
 	Analytics::getInstance().startSession();
 	Analytics::getInstance().sendEvent("lifecycle", "start");
 

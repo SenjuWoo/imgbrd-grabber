@@ -81,6 +81,13 @@ function parseSearch(search: string): { mode: string, tags: string[], bookmarks?
     return { mode, tags, bookmarks, user, followed, startDate, endDate, type };
 }
 
+function responseError(data: any): IError | undefined {
+    if (data?.error) {
+        return { error: String(data.error.user_message || data.error.message || "Pixiv API request failed. Check your login.") };
+    }
+    return undefined;
+}
+
 function parseImage(image: any, fromGallery: boolean): IImage {
     const map = {
         "name": "title",
@@ -239,8 +246,13 @@ export const source: ISource = {
                     }
                     return "https://app-api.pixiv.net/v1/search/illust?" + illustParams.join("&");
                 },
-                parse: (src: string): IParsedSearch => {
+                parse: (src: string): IParsedSearch | IError => {
                     const data = JSON.parse(src);
+                    const error = responseError(data);
+                    if (error) { return error; }
+                    if (!Array.isArray(data?.response || data?.illusts)) {
+                        return { error: "Pixiv returned no illustration list." };
+                    }
 
                     const images: IImage[] = [];
                     for (const image of (data["response"] || data["illusts"])) {
@@ -265,8 +277,14 @@ export const source: ISource = {
                 url: (query: IGalleryQuery): string => {
                     return "https://app-api.pixiv.net/v1/illust/detail?illust_id=" + query.id + "&image_sizes=large";
                 },
-                parse: (src: string): IParsedGallery => {
-                    const data = JSON.parse(src)["illust"];
+                parse: (src: string): IParsedGallery | IError => {
+                    const response = JSON.parse(src);
+                    const error = responseError(response);
+                    if (error) { return error; }
+                    const data = response?.illust;
+                    if (!data || !Array.isArray(data.meta_pages)) {
+                        return { error: "Pixiv returned no gallery pages." };
+                    }
                     return {
                         images: data["meta_pages"].map((page: any) => parseImage({ ...data, ...page }, true)),
                         tags: data["tags"],
@@ -280,8 +298,14 @@ export const source: ISource = {
                     if (id === "" || id === "0") { return ""; } // Gallery images don't have an ID
                     return "https://app-api.pixiv.net/v1/illust/detail?illust_id=" + id + "&image_sizes=large";
                 },
-                parse: (src: string): IImage => {
-                    const data = JSON.parse(src)["illust"];
+                parse: (src: string): IImage | IError => {
+                    const response = JSON.parse(src);
+                    const error = responseError(response);
+                    if (error) { return error; }
+                    const data = response?.illust;
+                    if (!data || !data.image_urls) {
+                        return { error: "Pixiv returned no illustration details." };
+                    }
                     const img = parseImage(data, false);
 
                     // For galleries, we should trust the original information from the gallery endpoint, not the new one which is always the first page

@@ -18,7 +18,7 @@ public class NotificationUtils
         if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.O) {
             int importance = NotificationManager.IMPORTANCE_DEFAULT;
             NotificationChannel notificationChannel;
-            notificationChannel = new NotificationChannel("org.bionus.grabber", "Grabber", importance);
+            notificationChannel = new NotificationChannel("org.bionus.grabber", "Grabber Woo Edit", importance);
             m_notificationManager.createNotificationChannel(notificationChannel);
             m_builder = new Notification.Builder(context, notificationChannel.getId());
         } else {

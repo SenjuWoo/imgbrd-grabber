@@ -14,7 +14,7 @@ Updater::~Updater()
 
 int Updater::compareVersions(QString a, QString b)
 {
-	// Fable releases extend the upstream version; compare their numbered revision.
+	// Keep numbered legacy fork revisions comparable when upgrading old installs.
 	static const QRegularExpression forkSuffix("-fable\\.([0-9]+)$");
 	const auto aForkMatch = forkSuffix.match(a);
 	const auto bForkMatch = forkSuffix.match(b);

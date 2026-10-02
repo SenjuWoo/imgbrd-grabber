@@ -1,4 +1,4 @@
-# Fable maintenance
+# Grabber Woo Edit maintenance
 
 Keep one portable app beside this checkout. The app profile stays outside Git:
 settings.ini, site settings/cookies, blacklists, history, favorites, tabs, queued
@@ -12,7 +12,7 @@ downloads, the MD5 database and library.sqlite are personal data. Never copy the
 3. Run `powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-local.ps1`.
    It discovers Qt/OpenSSL/Ninja from env or the CMake cache and MSVC with vswhere,
    builds the desktop GUI/CLI, runs CTest, site tests and site lint, then stages a
-   clean portable package in `release/`. Qt 6.9.3 and OpenSSL 3 are the current local SDKs.
+   clean portable package in `release/`. CI pins the release SDKs; an older local SDK is a development compatibility check, not the release runtime.
 4. Before deployment, close Grabber and make a verified ZIP of its personal files.
    Compare the app against its package-manifest.json: retain personal files and
    deliberately changed assets; take unchanged runtime files from the fresh package.
@@ -44,7 +44,7 @@ machine-specific drive letters or account names. They do not deploy over a live 
   Per-site settings and all profile files are retained; obsolete template language
   output and empty disabled sources are omitted from clean packages.
 - At this audit, source defaulted to 7.14.0-fable.3. This was a local build revision, not a claim that
-  a new public release exists. v7.14.0-fable.2 remains the latest published archive.
+  a new public release exists. v7.14.0-fable.2 was the latest published archive at that audit.
 
 - CTest now launches Jest through Node directly and runs CLI fixtures from src/lib.
   The save-failure regression uses a temporary file as the destination parent,

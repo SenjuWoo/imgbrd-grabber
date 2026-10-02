@@ -880,7 +880,7 @@ interface IApi {
         parseErrors?: boolean;
 
         url: (query: ISearchQuery, opts: IUrlOptions, previous: IPreviousSearch | undefined) => IRequest | IError | string;
-        parse: (src: string, statusCode: number) => IParsedSearch | IError;
+        parse: (src: string, statusCode: number, requestUrl?: string) => IParsedSearch | IError;
     };
 
     /**

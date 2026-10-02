@@ -1,4 +1,4 @@
-#define MyAppName "Grabber"
+#define MyAppName "Grabber Woo Edit"
 #define MyAppPublisher "Bionus"
 #define MyAppURL "https://github.com/Bionus/imgbrd-grabber"
 #define MyAppExeName "Grabber.exe"

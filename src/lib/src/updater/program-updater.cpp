@@ -26,7 +26,9 @@ void ProgramUpdater::checkForUpdates() const
 	#else
 		const QUrl url(m_baseUrl + "/releases/latest");
 	#endif
-	const QNetworkRequest request(url);
+	QNetworkRequest request(url);
+	request.setTransferTimeout(30000);
+	request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 
 	auto *reply = m_networkAccessManager->get(request);
 	connect(reply, &NetworkReply::finished, this, &ProgramUpdater::checkForUpdatesDone);
@@ -35,10 +37,21 @@ void ProgramUpdater::checkForUpdates() const
 void ProgramUpdater::checkForUpdatesDone()
 {
 	auto *reply = dynamic_cast<NetworkReply*>(sender());
-	m_source = reply->readAll();
-
-	QJsonDocument json = QJsonDocument::fromJson(m_source);
-	QJsonObject lastRelease = json.object();
+	const QByteArray response = reply->readAll();
+	QJsonParseError parseError;
+	const QJsonDocument json = QJsonDocument::fromJson(response, &parseError);
+	const QJsonObject lastRelease = json.object();
+	const QUrl releaseUrl(lastRelease["html_url"].toString());
+	if (reply->error() != NetworkReply::NetworkError::NoError || parseError.error != QJsonParseError::NoError
+		|| lastRelease["tag_name"].toString().isEmpty() || releaseUrl.scheme() != "https" || releaseUrl.host() != "github.com"
+		|| !releaseUrl.path().startsWith("/SenjuWoo/imgbrd-grabber/releases/")) {
+		m_source.clear();
+		log(QStringLiteral("Unable to check for updates: %1").arg(reply->errorString()), Logger::Warning);
+		emit failed(QStringLiteral("Unable to check for updates."));
+		reply->deleteLater();
+		return;
+	}
+	m_source = response;
 
 	#if defined NIGHTLY
 		static const QRegularExpression regexHead(R"(Head:\**\s*([a-f0-9]{40}))");
@@ -84,13 +97,15 @@ void ProgramUpdater::downloadUpdate()
 		}
 	}
 	if (lastAsset.isEmpty()) {
-		log("No proper release asset found for updatind", Logger::Error);
+		log("No compatible release installer found for updating", Logger::Error);
 		return;
 	}
 
 	QUrl url(lastAsset["browser_download_url"].toString());
 	m_updateFilename = url.fileName();
-	const QNetworkRequest request(url);
+	QNetworkRequest request(url);
+	request.setTransferTimeout(30000);
+	request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
 	log(QStringLiteral("Downloading installer from \"%1\".").arg(url.toString()));
 
 	m_downloadReply = m_networkAccessManager->get(request);

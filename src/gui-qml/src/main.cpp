@@ -49,6 +49,7 @@ int main(int argc, char *argv[])
 {
 	QGuiApplication app(argc, argv);
 	app.setApplicationName("Grabber");
+	app.setApplicationDisplayName("Grabber Woo Edit");
 	app.setApplicationVersion(VERSION);
 	app.setOrganizationName("Bionus");
 	app.setOrganizationDomain("bionus.fr.cr");
@@ -78,7 +79,7 @@ int main(int argc, char *argv[])
 	// Analytics
 	Analytics::getInstance().setTrackingID("UA-22768717-6");
 	Analytics::getInstance().setMeasurementID("G-15KZMHH7KG");
-	Analytics::getInstance().setEnabled(settings->value("send_usage_data", true).toBool());
+	Analytics::getInstance().setEnabled(settings->value("send_usage_data", false).toBool());
 	Analytics::getInstance().startSession();
 	Analytics::getInstance().sendEvent("lifecycle", "start");
 

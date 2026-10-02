@@ -331,7 +331,7 @@ ParsedPage JavascriptApi::parsePageInternal(const QString &type, Page *parentPag
 	Site *site = parentPage->site();
 	const QJSValue &api = m_source.property("apis").property(m_key);
 	QJSValue parseFunction = api.property(type).property("parse");
-	const QJSValue &results = parseFunction.call(QList<QJSValue> { source, statusCode });
+	const QJSValue &results = parseFunction.call(QList<QJSValue> { source, statusCode, parentPage->url().toString() });
 
 	// Script errors and exceptions
 	if (results.isError()) {

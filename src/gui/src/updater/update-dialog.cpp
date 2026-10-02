@@ -18,6 +18,8 @@ UpdateDialog::UpdateDialog(bool *shouldQuit, QWidget *parent)
 	resize(300, 0);
 
 	connect(&m_updater, &ProgramUpdater::finished, this, &UpdateDialog::checkForUpdatesDone);
+	// A failed startup check must release the startup event loop too.
+	connect(&m_updater, &ProgramUpdater::failed, this, &QDialog::reject);
 }
 
 UpdateDialog::~UpdateDialog()

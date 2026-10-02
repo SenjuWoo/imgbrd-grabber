@@ -37,11 +37,12 @@ function getLastCommit(path) {
 
 const args = process.argv.slice(2);
 const branch = args.length > 0 ? args[0] : "master";
+const repository = process.env.GITHUB_REPOSITORY || "SenjuWoo/imgbrd-grabber";
 const isNightly = branch === "develop";
 const output = {
-    name: "Official Grabber sources" + (isNightly ? " (nightly)" : ""),
-    home: "https://github.com/Bionus/imgbrd-grabber",
-    url: "https://github.com/Bionus/imgbrd-grabber/releases/download/sources-" + branch + "/",
+    name: "Grabber Woo Edit sources" + (isNightly ? " (nightly)" : ""),
+    home: "https://github.com/" + repository,
+    url: "https://github.com/" + repository + "/releases/download/sources-" + branch + "/",
     sources: [],
 };
 

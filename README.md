@@ -1,204 +1,88 @@
-<p align="center"><img src="src/gui/resources/images/readme-icon.png" alt="" /></p>
+<p align="center"><img src="src/gui/resources/images/readme-icon.png" alt="Grabber Woo Edit icon" width="96" /></p>
 
-<h1 align="center">Grabber <sup><sub>(Fable fork)</sub></sup></h1>
+# Grabber Woo Edit
 
-<p align="center">
-  <a href="https://github.com/SenjuWoo/imgbrd-grabber/releases/latest"><img src="https://img.shields.io/github/v/release/SenjuWoo/imgbrd-grabber?label=latest%20release" alt="Latest release" /></a>
-  <a href="https://github.com/SenjuWoo/imgbrd-grabber/releases"><img src="https://img.shields.io/github/downloads/SenjuWoo/imgbrd-grabber/total" alt="Downloads" /></a>
-  <a href="LICENSE"><img src="https://img.shields.io/github/license/SenjuWoo/imgbrd-grabber" alt="License" /></a>
-  <a href="https://github.com/Bionus/imgbrd-grabber"><img src="https://img.shields.io/badge/upstream-Bionus%2Fimgbrd--grabber-blue" alt="Upstream" /></a>
-</p>
+A desktop image downloader and personal picture Library for people who want to find, keep, and organize artwork across websites and their own folders.
 
-**This is a maintained fork of [Bionus/imgbrd-grabber](https://github.com/Bionus/imgbrd-grabber)** — the imageboard/booru downloader.
+[Download](https://github.com/SenjuWoo/imgbrd-grabber/releases/latest) · [Report an issue](https://github.com/SenjuWoo/imgbrd-grabber/issues) · [Upstream Grabber](https://github.com/Bionus/imgbrd-grabber) · [Apache 2.0 license](LICENSE)
 
-It tracks upstream `develop`, then layers Fable fixes for reliability, broken sources, packaging, and UI themes. Use **this** repo’s releases if you want those changes; use [upstream](https://github.com/Bionus/imgbrd-grabber) for the official project.
+![Native Library showing a local collection, picture likes, favorites, and collection covers](docs/assets/img/screenshots/woo-library.png)
 
----
+*The real desktop Library with generated demo artwork imported from local files. The collection has its own likes, favorites, notes, and cover.*
 
-## What this fork changes
+## Keep pictures, not just searches
 
-Compared to stock Grabber, this fork focuses on things that break real use: hung downloads, dead APIs, silent packaging bugs, and missing dark UI options.
+- **Like, Favorite, and Collection** actions work on search thumbnails, in the viewer, in context menus, and in Library. Favorites carry stronger preference weight than likes.
+- **Collections have independent preferences.** A picture can belong to several collections, each with its own likes, favorites, and notes. Library-wide preferences remain separate.
+- **Import existing downloads** by choosing files or folders, or dropping them into Library. Subfolders are included. Reference originals by default, or keep managed copies in the portable Library. SHA-256 identifies exact duplicates.
+- **View local pictures offline** with zoom, pan, notes, and the same picture actions. Organize several pictures at once; give collections names and covers.
+- **Recover available metadata** from embedded image text, adjacent JSON/XMP/tag files, Windows download-origin data, or optional ExifTool. Missing metadata stays unknown.
+- **Find or link a source** using recovered URLs, an exact MD5 query on a configured site, or visual comparisons against online images already cached in Library. Review candidates before linking them.
 
-### Reliability
+![Offline picture viewer with collection-scoped actions and notes](docs/assets/img/screenshots/woo-viewer.png)
 
-| Change | Why it matters |
-|--------|----------------|
-| **Download queue hang fix** | Aborted network replies no longer leak concurrency slots. Before this, canceling or failing requests could freeze *all* further downloads until you restarted the app. Also avoids a related shutdown crash. |
-| **Redirect / 503 crash loop** | Search, details, thumbnails, and downloads no longer follow OIDC/login redirects or 429/503 retries forever. Sankaku login bounces and Zerochan 503 storms were crashing Grabber in Qt6Core (`0xc0000005`). Also drops `deleteLater()` on `QSharedPointer<Image>` (use-after-free on filtered results). |
-| **Gelbooru 0.2 / Rule34 XML errors** | Still in this tree. The same fix is now **upstream 7.14.0** ([#3662](https://github.com/Bionus/imgbrd-grabber/pull/3662)). Sites that return HTTP 200 with an XML *error* body no longer crash the JS parser. |
+*An imported file opens without rediscovering its online post. The inspector shows available metadata and collection notes.*
 
-### Sources
+Existing tag bookmarks remain available as **Saved searches**, including monitors. Removing a Library entry or collection leaves original downloads on disk.
 
-| Change | Why it matters |
-|--------|----------------|
-| **Kemono → kemono.cr + v1 API** | Kemono left `kemono.su`; the old `/api/recent` path is dead. This fork uses `kemono.cr` and `/api/v1/posts` (tag search, attachments, required headers, HTTPS defaults). |
-| **Order / sort + free-text hygiene** | Real `order:` / `sort:` mapping across Gelbooru-family, Danbooru, E621, Moebooru, etc., plus freestyle aliases (`newest`, `popular`, …). Multi-site free-text search is cleaned so meta tags don’t poison APIs that don’t understand them. Also improves DeviantArt / Reddit / Twitter sort handling. |
-| **R34.xxx default source order** | Restores a sensible default source order for Rule34.xxx. |
+## Download and start
 
-### Picture Library
+The primary release is a **portable Windows x64 ZIP** for Windows 10 or 11. Qt, OpenSSL, image plugins, SQLite, source scripts, themes, and translations are bundled. Build tools and Node.js are unnecessary to run it.
 
-Keep individual pictures with **♥ Like**, **★ Favorite**, or **+ Collection** on
-search thumbnails and in the viewer. The **Library** tab has cached previews,
-search, Unsorted/Liked/Favorites/Recently saved views, picture notes and collection
-covers. Select several pictures to organize or rate them together. Double-click
-or press Enter to view it. Local files open in an offline viewer with zoom, pan,
-notes and the same picture actions.
+1. Download the Windows ZIP from [Releases](https://github.com/SenjuWoo/imgbrd-grabber/releases/latest).
+2. Extract it into a writable folder and run `Grabber.exe`.
+3. Use **Library → Import pictures…** for local downloads, or configure a website in **Sources** to search online.
 
-A picture can belong to multiple collections. Likes, favorites and notes in a
-collection apply only to that collection; the other Library views use separate
-Library-wide preferences. Use **More…** for notes, covers and removal, and
-**Manage collection…** to rename or delete a collection. Removal never deletes
-original downloads. Existing tag bookmarks are now labeled **Saved searches**;
-their data and monitors are preserved.
+For an existing portable install, close the app and back up its profile first. Preserve `settings.ini`, per-site settings/cookies, saved searches, history, blacklists, tabs, queues, `library.sqlite`, `library-media`, and other personal files. Replace the runtime with a clean package instead of mixing Qt DLL generations. See [maintenance](docs/woo-maintenance.md).
 
-Use **Import pictures…** to choose files or a folder (including subfolders), or
-drop pictures into Library. Imports go into the current collection. Existing files
-are referenced by default; **Copy into portable Library** keeps an extra copy in
-`library-media` without removing originals. Exact content duplicates share one entry.
+The display name is **Grabber Woo Edit**. The executable names and existing profile identifiers are retained so renaming the product does not move or reset your data. Historical Fable tags remain available in [Releases](https://github.com/SenjuWoo/imgbrd-grabber/releases).
 
-Embedded text, adjacent JSON/XMP/tag files and Windows download-origin information
-are recovered when available. **Find / link source…** searches a selected configured
-source by MD5 or compares cached Library thumbnails locally. Filename hashes and
-visual suggestions require review. Linking a source combines catalog preferences,
-notes and memberships. **Locate file…** reconnects a moved file by its recorded hash.
-Imports require no website identity, API key or cloud service to view and rate them.
+## Online sources and current limits
 
-The portable profile stores this catalog in `library.sqlite`, including bounded
-cached previews. Built-in backups include the catalog and managed copies; externally
-referenced originals remain outside the backup. Upgrades retain a catalog snapshot.
-AI recommendations, cloud
-processing and new source integrations are subsequent milestones.
+The upstream downloader features remain: multiple tabs and sources, tag autocomplete, blacklists, filters, filename tokens, authentication, downloads, and CLI commands. Sources include Danbooru, Gelbooru, Pixiv, Reddit, e621, Kemono, and others. Website availability and account requirements vary.
 
-### Packaging & UI
+- **Pixiv already exists** and requires authentication. API errors are reported explicitly.
+- **Reddit search uses keywords, authors, subreddits, and flair**, not booru tags. This fork removes irrelevant booru operators, follows Reddit cursors, and reports denied API access. Numbered page jumps are unavailable on that source.
+- **Pinterest is not integrated.** AI recommendations, collection-guided discovery, author following, and a Home feed are planned; this release establishes the Library and preference data they need.
+- Visual matching currently compares against cached Library images. It does not perform Internet-wide reverse searches or upload your files to an AI provider.
 
-| Change | Why it matters |
-|--------|----------------|
-| **Translations actually ship in zips** | Release packaging created `languages/` *after* copying `.qm` files, so every archive silently shipped `languages.ini` with **zero** compiled translations. The package script now creates the directory first (19 `.qm` files in current Windows builds). |
-| **8 modern dark themes** | Bundled alongside Default: **Catppuccin Mocha**, **Dracula**, **Fluent Dark**, **Gruvbox Dark**, **Nord Dark**, **One Dark**, **Solarized Dark**, **Tokyo Night** (plus existing QDarkStyleSheet). |
+The Library stores its catalog and bounded previews locally. Fresh profiles have usage analytics disabled by default; an existing explicit preference is retained. Built-in backups include the catalog and managed copies. Externally referenced originals need their own backup.
 
-### Upstream kept in sync
+The QWidget desktop UI contains the Library. Android uses a separate QML UI and does not yet contain this Library workflow. Cross-platform build checks do not establish live compatibility with every remote website. See [the backend audit](docs/woo-backend-audit.md) for evidence and limits.
 
-`develop` is periodically merged from [Bionus/imgbrd-grabber](https://github.com/Bionus/imgbrd-grabber) so you still get official fixes (Windows file-property crash, SQL worker cleanup, favorite/search-highlight fixes, and so on) **on top of** the Fable changes above.
+## Build and verify
 
----
+Use Qt 6, CMake, Ninja, Node.js, OpenSSL, and a C++17 compiler. Windows builds use MSVC. CI pins Qt **6.11.3**, Windows OpenSSL **3.5.9 LTS**, and the repository's exact source submodule revisions. The HTML parser is Lexbor **3.0.0**.
 
-## Download (this fork)
-
-**Latest Windows build:** [Releases](https://github.com/SenjuWoo/imgbrd-grabber/releases/latest)
-
-| Tag | Notes |
-|-----|--------|
-| [`v7.14.0-fable.2`](https://github.com/SenjuWoo/imgbrd-grabber/releases/tag/v7.14.0-fable.2) | Latest published archive. Crash-loop fix + latest Bionus develop on 7.14.0. Portable Windows x64 zip. |
-| [`v7.14.0-fable.1`](https://github.com/SenjuWoo/imgbrd-grabber/releases/tag/v7.14.0-fable.1) | Previous. Fable fixes on official 7.14.0. |
-| [`v7.13.0-fable.2`](https://github.com/SenjuWoo/imgbrd-grabber/releases/tag/v7.13.0-fable.2) | Previous Fable zip, before the 7.14.0 merge. |
-| [`v7.13.0-fable.1`](https://github.com/SenjuWoo/imgbrd-grabber/releases/tag/v7.13.0-fable.1) | First Fable package with translation packaging fix. |
-
-Unpack the zip and run `Grabber.exe`. No installer required.
-
-> Official upstream installers/nightlies remain at [Bionus releases](https://github.com/Bionus/imgbrd-grabber/releases) and do **not** include the Fable-only changes listed above.
-
-Upstream docs still apply for install/usage details:
-
-* [Windows](https://www.bionus.org/imgbrd-grabber/docs/install/windows.html) · [Linux](https://www.bionus.org/imgbrd-grabber/docs/install/linux.html) · [macOS](https://www.bionus.org/imgbrd-grabber/docs/install/macos.html) · [Android](https://www.bionus.org/imgbrd-grabber/docs/install/android.html)
-
----
-
-## What Grabber is (upstream feature set)
-
-Imageboard/booru downloader for bulk search and download across many sites, with powerful filename tokens, blacklists, multi-source tabs, themes, auth, CLI, and more.
-
-**Highlights:** multi-tab / multi-site search · tag autocomplete · blacklist & post-filter · bulk download · custom `%token%` or JS filenames · favorites / “view later” · CSS themes · optional local-booru / DB hooks.
-
-**Default sources include:** Danbooru, Gelbooru, E-Hentai, Pixiv, yande.re, Shimmie, e621, Konachan, rule34, safebooru, Anime-Pictures, Zerochan, Twitter, Kemono, and others you can add yourself.
-
-Full feature write-up and screenshots: [upstream README / site](https://github.com/Bionus/imgbrd-grabber).
-
----
-
-## Branches
-
-| Branch | Role |
-|--------|------|
-| `develop` | **Default.** Fable fixes on top of upstream 7.14.0 + later Bionus develop. Tagged Fable releases are cut from here. |
-| `master` | Historical release branch; active maintenance is on `develop`. |
-
----
-
-## Local maintenance (Windows)
-
-The current source defaults to **7.14.0-fable.4**. This is a local build revision;
-the latest published archive is still **v7.14.0-fable.2** until a release is explicitly published.
-
-Run `scripts/build-local.ps1` to rebuild, run the existing C++ and site checks,
-and create a clean portable package. Build dependencies are discovered from
-environment variables or the existing CMake cache; Visual Studio is found with `vswhere`.
-See [the maintenance notes](docs/fable-maintenance.md) before deploying or deleting old app copies.
-
-## Building from source
-
-Same stack as upstream (Qt 6, CMake/Ninja, OpenSSL). See [Compilation](https://bionus.github.io/imgbrd-grabber/docs/compilation.html).
-
-```bash
-# Linux
-./build.sh
-
-# macOS
-./build-mac.sh
+```powershell
+# Windows: discover SDKs from QT_ROOT_DIR / OPENSSL_ROOT_DIR or the CMake cache.
+powershell -NoProfile -ExecutionPolicy Bypass -File scripts/build-local.ps1
 ```
 
-Windows: run `scripts/build-local.ps1`, or configure CMake against Qt 6 + MSVC and build `Release`. `scripts/package-windows.ps1` packages the runtime with `windeployqt` and Windows tools; `package-windows.bat` remains the CI entry point.
+```sh
+git submodule update --init --recursive
+cd src/sites
+npm ci
+npm run build
+npm run check
+npm audit --audit-level=moderate
+npm test -- --runInBand
+```
 
-Local Windows builds use Qt **6.9.x** / MSVC; CI uses the Qt version in `.github/workflows/build.yml`. CMake `project()` needs a numeric version; an explicit local revision is `-DVERSION=7.14.0 -DVERSION_DISPLAY=7.14.0-fable.4`.
+`build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
 
----
+## Changes in 7.15.0
 
-## Relationship to upstream
+- Rename the product to Grabber Woo Edit while preserving profile compatibility and historical attribution.
+- Ship the desktop Library, collections, likes/favorites, scoped notes, covers, local imports, offline viewer, metadata recovery, and explicit source linking developed in the previous local milestones.
+- Repair Reddit cursor pagination, author searches, empty subreddit listings, and crosspost media; handle Pixiv error and incomplete responses.
+- Update Qt, Windows OpenSSL, Lexbor, and compatible Jest/ts-jest dependencies. Add the npm audit and Windows GUI test gates; use supported Node.js for source builds.
+- Repair HTML document/selector ownership, release temporary serialization buffers, preserve UTF-8 byte lengths, and keep child nodes valid after their original wrapper closes.
+- Distinguish failed update checks from an up-to-date result and retain legacy version comparisons.
+- Keep prior download queue, bounded redirects/retries, save failure, ZIP validation, transactional database, conversion, theme, and translation repairs.
 
-- **Upstream project:** [Bionus/imgbrd-grabber](https://github.com/Bionus/imgbrd-grabber) by [Jack Vasti (Bionus)](https://github.com/Bionus) and [contributors](https://github.com/Bionus/imgbrd-grabber#contributors).
-- **This fork:** [SenjuWoo/imgbrd-grabber](https://github.com/SenjuWoo/imgbrd-grabber).
-- License remains the upstream project license (see [`LICENSE`](LICENSE)).
-- Bug reports for **Fable-specific** behavior: open issues **here**. Core Grabber questions and PRs that belong upstream should go to Bionus when possible.
+## Provenance
 
-Support the original author if you use Grabber:
+This fork is maintained in [SenjuWoo/imgbrd-grabber](https://github.com/SenjuWoo/imgbrd-grabber), based on [Grabber by Bionus and contributors](https://github.com/Bionus/imgbrd-grabber). It includes earlier Fable fork contributions and current upstream `develop` changes. The Apache 2.0 license and third-party notices remain intact. The screenshots show generated sample artwork, not a user's private Library.
 
-* [PayPal](https://www.paypal.me/jvasti) · [Patreon](https://www.patreon.com/bionus) · [Discord](https://discord.gg/pWnY5eW3rz)
-
----
-
-## Changelog (Fable tags)
-
-### 7.14.0-fable.4 (local build, unpublished)
-- Add the portable picture Library, likes, favorites, named collections, covers, notes, search filters and batch actions.
-- Use one action set across thumbnails, viewer, menus and Library; keep Saved searches and monitors intact.
-- Correct Windows UTF-8 UI text and preserve thumbnail colors when selected.
-
-### 7.14.0-fable.3 (local build, unpublished)
-- Merge Bionus `develop` through `3eb00bcb` and `master` through `56f673c6` (September 26, 2026): transparent video overlay, Java CI update, and js-yaml 3.15.2.
-- Keep fork updates on SenjuWoo; read release tags and compare numbered Fable revisions correctly. Portable updates open the fork release page.
-- Package Windows runtimes from an empty staging directory; verify translations, source scripts and OpenSSL before replacing generated packages.
-- Repair Windows CTest launch and fixture paths; make the destination-folder failure regression independent of installed drive letters.
-
-### v7.14.0-fable.2
-- Stop unbounded HTTP redirect and 429/503 retry loops (Sankaku OIDC bounce and Zerochan 503 storms were crashing in Qt6Core).
-- Do not `deleteLater()` `QSharedPointer<Image>` objects; that raced the shared pointer and could AV on filtered results.
-- Guard Slushe/Reddit JSON and DeviantArt RSS parsers against empty/invalid bodies.
-- Package `CrashReporter.exe` in Windows zips.
-- Merged latest Bionus `develop` (Windows property-string ownership, SQL worker cleanup, favorite image tag, search highlight fonts, …).
-
-### v7.14.0-fable.1
-- Windows rebuild of Fable on official 7.14.0 (search history, cookie import, better backups, E621 v2, more Gelbooru/Rule34 fixes, crash fixes, …).
-- All prior Fable-only fixes kept (download hang, Kemono v1 API, order/sort hygiene, translation packaging, dark themes).
-- Gelbooru 0.2 XML error handling is now also upstream; this fork kept the upstream form.
-- CMake accepts hyphenated Fable display versions (`-DVERSION_DISPLAY=`).
-
-### v7.13.0-fable.2
-- Rebuild on latest upstream `develop` merge (referer defaults, ISO 8601 dates, blacklist `QStringList`, Danbooru UA, removable site headers, …).
-- Retains all fable.1 fixes below.
-
-### v7.13.0-fable.1
-- Fix release packaging so compiled translations (`.qm`) are included.
-- Fix network abort path that wedged the download queue / could crash on exit.
-- Gelbooru 0.2 XML error-document handling.
-- Kemono `kemono.cr` + v1 API.
-- Order/sort + free-text hygiene across major sources.
-- Eight bundled modern dark themes.
+Support the original author: [PayPal](https://www.paypal.me/jvasti) · [Patreon](https://www.patreon.com/bionus). Fork-specific bug reports belong in this repository; upstream contributions remain welcome.
