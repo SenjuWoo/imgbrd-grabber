@@ -509,7 +509,7 @@ QString LibraryStore::saveLocalImage(const LibraryImportData &data, qint64 colle
 {
 	static const QRegularExpression sha("^[0-9a-f]{64}$"), md5("^[0-9a-f]{32}$");
 	if (!m_ready || !data.error.isEmpty() || !sha.match(data.sha256).hasMatch() || !md5.match(data.md5).hasMatch()
-		|| data.path.isEmpty() || data.thumbnail.isEmpty()) {
+		|| data.path.isEmpty() || !data.size.isValid() || (data.thumbnail.isEmpty() && data.metadata.value("preview_error").toString().isEmpty())) {
 		m_error = data.error.isEmpty() ? tr("This file has no usable image or content hash.") : data.error;
 		return {};
 	}
@@ -609,6 +609,7 @@ QString LibraryStore::saveLocalImage(const LibraryImportData &data, qint64 colle
 		}
 		metadata.insert("tags", tags.join(' '));
 	}
+	local.insert("preview_error", data.metadata.value("preview_error"));
 	local.insert("extended_reader", data.metadata.value("extended_reader"));
 	metadata.insert("local_import", local);
 	const QString now = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);

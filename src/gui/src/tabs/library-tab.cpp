@@ -378,7 +378,10 @@ void LibraryTab::reload()
 			source = tr("Local file · source unlinked");
 		}
 		const QString metadataState = entry.tags().isEmpty() ? tr("Needs tags") : tr("%1 tags").arg(entry.tags().size());
-		const QString warning = entry.metadataErrors().isEmpty() ? QString() : tr(" · Metadata error");
+		QString warning = entry.metadataErrors().isEmpty() ? QString() : tr(" · Metadata error");
+		if (entry.thumbnail.isEmpty() && !entry.image.value("local_import").toObject().value("preview_error").toString().isEmpty()) {
+			warning += tr(" · Preview unavailable");
+		}
 		QString badges = (entry.liked ? QStringLiteral("♥ ") : QString()) + (entry.favorite ? QStringLiteral("★ ") : QString());
 		if (!entry.notes.isEmpty()) {
 			badges += tr("Note · ");

@@ -1,4 +1,7 @@
 #include <QCommandLineParser>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QNetworkProxy>
 #include <QSettings>
 #include <QString>
@@ -20,6 +23,8 @@
 #include "printers/simple-printer.h"
 #include "logger.h"
 #include "models/filtering/blacklist.h"
+#include "models/library-importer.h"
+#include "models/library-store.h"
 #include "models/profile.h"
 #include "models/site.h"
 
@@ -149,6 +154,8 @@ int parseAndRunCliArgs(QCoreApplication *app, Profile *profile, bool defaultToGu
 	const QCommandLineOption loadDetailsOption(QStringList() << "load-details", "request (more) details on found items.");
 	const QCommandLineOption getDetailsOption(QStringList() << "get-details", "parse details from given link.", "url-page");
 	const QCommandLineOption loadTagDatabaseOption(QStringList() << "load-tag-database", "load the tag database of the given sources.");
+	const QCommandLineOption importLibraryOption("import-library", "Import image files or folders into Library by reference. Supply their paths as positional arguments.");
+	parser.addOption(importLibraryOption);
 	parser.addOption(tagsOption);
 	parser.addOption(sourceOption);
 	parser.addOption(pageOption);
@@ -185,7 +192,7 @@ int parseAndRunCliArgs(QCoreApplication *app, Profile *profile, bool defaultToGu
 
 	parser.process(*app);
 
-	const bool gui = defaultToGui && !parser.isSet(cliOption);
+	const bool gui = defaultToGui && !parser.isSet(cliOption) && !parser.isSet(importLibraryOption);
 
 	// Log messages output and level
 	const bool verbose = parser.isSet(verboseOption);
@@ -213,6 +220,33 @@ int parseAndRunCliArgs(QCoreApplication *app, Profile *profile, bool defaultToGu
 		positionalArgs.append(parser.positionalArguments());
 
 		return -1;
+	}
+
+	if (parser.isSet(importLibraryOption)) {
+		auto *store = profile->library();
+		QJsonArray errors;
+		int processed = 0;
+		if (!store->isReady()) {
+			errors.append(store->lastError());
+		} else {
+			const auto files = LibraryImporter::imageFiles(parser.positionalArguments());
+			if (files.isEmpty()) {
+				errors.append("No supported image files were found in the supplied paths.");
+			}
+			for (const auto &file : files) {
+				const auto data = LibraryImporter::inspect(file);
+				if (!data.error.isEmpty()) {
+					errors.append(file + ": " + data.error);
+				} else if (store->saveLocalImage(data).isEmpty()) {
+					errors.append(file + ": " + store->lastError());
+				} else {
+					++processed;
+				}
+			}
+		}
+		const QJsonObject result {{"processed", processed}, {"failed", errors.size()}, {"total", store->entries().size()}, {"errors", errors}};
+		QTextStream(stdout) << QJsonDocument(result).toJson(QJsonDocument::Compact) << Qt::endl;
+		return errors.isEmpty() ? 0 : 1;
 	}
 
 	// Generate a runtime error when an error log arrives

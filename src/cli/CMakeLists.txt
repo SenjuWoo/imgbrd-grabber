@@ -2,8 +2,8 @@ project(cli VERSION ${VERSION})
 
 add_definitions(-DCLI=1)
 
-find_package(Qt6 COMPONENTS Core Gui Network REQUIRED)
-set(QT_LIBRARIES Qt6::Core Qt6::Gui Qt6::Network)
+find_package(Qt6 COMPONENTS Core Gui Network Sql REQUIRED)
+set(QT_LIBRARIES Qt6::Core Qt6::Gui Qt6::Network Qt6::Sql)
 
 file(GLOB_RECURSE SOURCES "src/*.cpp" "vendor/*.cpp")
 include_directories("src/" "../lib/src/" ".." ".")

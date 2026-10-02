@@ -366,10 +366,14 @@ LibraryImportData LibraryImporter::inspect(const QString &path, const QString &m
 	QImageReader reader(data.path);
 	reader.setAutoTransform(true);
 	data.size = reader.size();
-	// ponytail: bound decoded-image allocation; tiled decoders are needed for images above 40 million pixels.
-	if (!data.size.isValid() || qint64(data.size.width()) * data.size.height() > 40000000 || data.size.width() > 32768 || data.size.height() > 32768) {
-		data.error = "Image dimensions are invalid or exceed the 40 million pixel preview limit.";
+	if (!data.size.isValid() || !reader.canRead()) {
+		data.error = "Cannot read valid image dimensions.";
 		return data;
+	}
+	// ponytail: retain metadata above the bounded preview limit; tiled decoders can add previews later.
+	const bool previewLimited = qint64(data.size.width()) * data.size.height() > 40000000 || data.size.width() > 32768 || data.size.height() > 32768;
+	if (previewLimited) {
+		data.metadata.insert("preview_error", "The image exceeds the 40 million pixel preview limit. Open the original externally; metadata and ratings remain available.");
 	}
 	if (data.size.width() > 512 || data.size.height() > 512) {
 		reader.setScaledSize(data.size.scaled(QSize(512, 512), Qt::KeepAspectRatio));
@@ -393,20 +397,22 @@ LibraryImportData LibraryImporter::inspect(const QString &path, const QString &m
 	if (!text.isEmpty()) {
 		addEvidence(data, evidence, "embedded-text", data.path, text);
 	}
-	QImage image = reader.read();
-	if (image.isNull()) {
-		data.error = "Cannot decode image: " + reader.errorString();
-		return data;
-	}
-	if (image.width() > 512 || image.height() > 512) {
-		image = image.scaled(QSize(512, 512), Qt::KeepAspectRatio, Qt::SmoothTransformation);
-	}
-	data.visualHash = visualHash(image);
-	QBuffer buffer(&data.thumbnail);
-	buffer.open(QIODevice::WriteOnly);
-	if (!image.save(&buffer, "PNG")) {
-		data.error = "Cannot create image preview.";
-		return data;
+	if (!previewLimited) {
+		QImage image = reader.read();
+		if (image.isNull()) {
+			data.error = "Cannot decode image: " + reader.errorString();
+			return data;
+		}
+		if (image.width() > 512 || image.height() > 512) {
+			image = image.scaled(QSize(512, 512), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+		}
+		data.visualHash = visualHash(image);
+		QBuffer buffer(&data.thumbnail);
+		buffer.open(QIODevice::WriteOnly);
+		if (!image.save(&buffer, "PNG")) {
+			data.error = "Cannot create image preview.";
+			return data;
+		}
 	}
 	if (md5Value(original.completeBaseName())) {
 		data.sourceMd5 = original.completeBaseName().toLower();

@@ -265,6 +265,9 @@ void LibraryImageDialog::showCurrent()
 		+ "\n\n" + tr("Tags") + "\n" + (tags.isEmpty() ? tr("Needs tags — none available in the saved metadata") : tags.join(", "))
 		+ "\n\n" + tr("Known files") + "\n" + (paths.isEmpty() ? tr("No local file is linked.") : paths.join('\n'))
 		+ "\n\n" + tr("Metadata recovered from") + "\n" + (origins.isEmpty() ? tr("No source metadata found") : origins.join('\n'));
+	if (!local.value("preview_error").toString().isEmpty()) {
+		overview += "\n\n" + tr("Preview") + "\n" + local.value("preview_error").toString();
+	}
 	if (!warnings.isEmpty()) {
 		overview += "\n\n" + tr("Metadata read errors") + "\n" + warnings.join('\n');
 	}
@@ -316,7 +319,9 @@ void LibraryImageDialog::showCurrent()
 	}
 	m_view->scene()->clear();
 	if (image.isNull()) {
-		notice = tr("No local image or saved preview is available. Use Locate file to reconnect this picture.");
+		notice = !existing.isEmpty() && !local.value("preview_error").toString().isEmpty()
+			? tr("This picture exceeds the preview limit. Use Open file to view the original externally. Likes, favorites, notes and source linking still work.")
+			: tr("No local image or saved preview is available. Use Locate file to reconnect this picture.");
 	} else {
 		m_view->scene()->addPixmap(QPixmap::fromImage(image));
 	}
