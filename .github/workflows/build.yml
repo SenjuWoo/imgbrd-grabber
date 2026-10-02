@@ -415,8 +415,8 @@ jobs:
       MYSQL_DRIVER_DIR: ${{ github.workspace }}\vendor\MySQL_driver
       VCINSTALLDIR: C:\Program Files\Microsoft Visual Studio\2022\Enterprise\VC
       SCCACHE_DIR: ${{ github.workspace }}\.sccache
-      # Tag RelWithDebInfo + parallel cl.exe races on lexbor_static.pdb (C1041).
-      CMAKE_BUILD_PARALLEL_LEVEL: 1
+      # Bound concurrency for hosted-runner memory; MSVC debug info is handled in CMake.
+      CMAKE_BUILD_PARALLEL_LEVEL: 2
 
     steps:
       - name: Set environment
