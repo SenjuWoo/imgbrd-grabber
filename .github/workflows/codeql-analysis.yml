@@ -2,20 +2,17 @@ name: "CodeQL"
 
 on:
   push:
-    branches: [master]
+    branches: [master, develop]
   pull_request:
-    branches: [master]
+    branches: [master, develop]
+  workflow_dispatch:
   schedule:
     - cron: '30 15 * * 4'
 
-env:
-  QT_VERSION: 6.11.3
-  QT_MODULES: qtmultimedia qtimageformats qtnetworkauth qtshadertools
-
 jobs:
   analyze:
-    name: Analyze
-    runs-on: ubuntu-latest
+    name: Analyze (${{ matrix.language }})
+    runs-on: ubuntu-22.04
     permissions:
       actions: read
       contents: read
@@ -24,28 +21,21 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        language: ['cpp', 'javascript']
+        language: ['c-cpp', 'javascript-typescript', 'actions']
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
-
-      - name: Install Qt
-        if: matrix.language == 'cpp'
-        uses: jurplel/install-qt-action@v4
         with:
-          cache: true
-          version: ${{ env.QT_VERSION }}
-          modules: ${{ env.QT_MODULES }}
+          submodules: recursive
 
       - name: Initialize CodeQL
         uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
+          build-mode: none
+          queries: security-extended
           config-file: ./.github/codeql/codeql-config.yml
-
-      - name: Autobuild
-        uses: github/codeql-action/autobuild@v4
 
       - name: Perform CodeQL Analysis
         uses: github/codeql-action/analyze@v4
