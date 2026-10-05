@@ -100,7 +100,7 @@ Visual embeddings understand appearance; they do not recover original tags, auth
 - Add Home with local visual recommendations, independent collection taste, daily selection, recent saves, scoped hiding and shared image actions.
 - Ship a verified CPU runtime; stream and verify the frozen CLIP model, index previews in a cancellable background job, and reuse vectors only for unchanged thumbnails/model identity.
 - Preserve missing metadata labels and explain tagless ratings/index coverage. Keep explicit collection membership and viewer preference scope visible.
-- Restore Home sessions and target the actual current search widget after tabs are moved.
+- Restore Home sessions and target the actual current search widget after tabs are moved. Finalize local AI work before destroying the profile on every application exit path.
 - Add native UI, ranking, preprocessing/cache tests and real portable inference/reuse/corrupt-model CI checks.
 
 ## Changes in 7.15.4

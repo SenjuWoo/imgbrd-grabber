@@ -31,6 +31,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QPointer>
 #include <QSettings>
 #include <QSslSocket>
 #include <QString>
@@ -187,9 +188,12 @@ int main(int argc, char *argv[])
 	}
 
 	// Run the main window
-	auto *mainWindow = new MainWindow(&profile);
+	QPointer<MainWindow> mainWindow = new MainWindow(&profile);
 	mainWindow->init(positionalArgs, params);
 	mainWindow->show();
 
-	return app.exec();
+	const int result = app.exec();
+	// An exit request can leave the window alive. Finalize workers before Profile goes away.
+	delete mainWindow.data();
+	return result;
 }
