@@ -257,6 +257,16 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	reload();
 }
 
+void LibraryTab::showView(qint64 collection, int smartFilter)
+{
+	m_collection = collection;
+	m_smartFilter = collection > 0 ? 0 : qBound(0, smartFilter, 7);
+	m_page = 0;
+	m_search->clear();
+	m_filter->setCurrentIndex(0);
+	reload();
+}
+
 void LibraryTab::scheduleReload()
 {
 	if (m_reloadPending || m_importing) {
@@ -506,11 +516,16 @@ void LibraryTab::collectionMenu(const QPoint &pos)
 
 void LibraryTab::openImage(const QString &key)
 {
-	const auto entry = m_entries.value(key);
+	openPicture(key, m_viewKeys, m_collection);
+}
+
+void LibraryTab::openPicture(const QString &key, const QStringList &keys, qint64 collection)
+{
+	if (!m_store->contains(key, collection)) { return; }
+	const auto entry = m_store->entry(key, collection);
 	auto image = restoreImage(entry);
 	if (!entry.localPaths.isEmpty() || !image || !image->savePath().isEmpty()) {
-		const QStringList keys = m_viewKeys;
-		auto *viewer = new LibraryImageDialog(m_profile, keys, key, m_collection, this);
+		auto *viewer = new LibraryImageDialog(m_profile, keys, key, collection, this);
 		connect(viewer, &LibraryImageDialog::locateRequested, this, &LibraryTab::locateFile);
 		connect(viewer, &LibraryImageDialog::sourceRequested, this, &LibraryTab::findSource);
 		viewer->show();
@@ -521,14 +536,13 @@ void LibraryTab::openImage(const QString &key)
 		return;
 	}
 	QList<QSharedPointer<Image>> images;
-	for (int index = 0; index < m_grid->count(); ++index) {
-		const QString otherKey = m_grid->item(index)->data(Qt::UserRole).toString();
-		auto other = otherKey == key ? image : restoreImage(m_entries.value(otherKey));
+	for (const QString &otherKey : keys) {
+		auto other = otherKey == key ? image : restoreImage(m_store->entry(otherKey, collection));
 		if (other && !other->isGallery()) {
 			images.append(other);
 		}
 	}
-	auto *viewer = new ViewerWindow(images, image, image->parentSite(), m_profile, m_mainWindow, nullptr, m_collection);
+	auto *viewer = new ViewerWindow(images, image, image->parentSite(), m_profile, m_mainWindow, nullptr, collection);
 	viewer->show();
 }
 

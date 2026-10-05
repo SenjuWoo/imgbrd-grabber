@@ -1,4 +1,5 @@
 #include <QCommandLineParser>
+#include <QEventLoop>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -24,6 +25,7 @@
 #include "logger.h"
 #include "models/filtering/blacklist.h"
 #include "models/library-importer.h"
+#include "models/library-recommendations.h"
 #include "models/library-store.h"
 #include "models/profile.h"
 #include "models/site.h"
@@ -156,6 +158,8 @@ int parseAndRunCliArgs(QCoreApplication *app, Profile *profile, bool defaultToGu
 	const QCommandLineOption loadTagDatabaseOption(QStringList() << "load-tag-database", "load the tag database of the given sources.");
 	const QCommandLineOption importLibraryOption("import-library", "Import image files or folders into Library by reference. Supply their paths as positional arguments.");
 	parser.addOption(importLibraryOption);
+	const QCommandLineOption indexLibraryOption("index-library", "Build or update the local AI index. Requires the verified CLIP model in this profile; no uploads.");
+	parser.addOption(indexLibraryOption);
 	parser.addOption(tagsOption);
 	parser.addOption(sourceOption);
 	parser.addOption(pageOption);
@@ -192,7 +196,7 @@ int parseAndRunCliArgs(QCoreApplication *app, Profile *profile, bool defaultToGu
 
 	parser.process(*app);
 
-	const bool gui = defaultToGui && !parser.isSet(cliOption) && !parser.isSet(importLibraryOption);
+	const bool gui = defaultToGui && !parser.isSet(cliOption) && !parser.isSet(importLibraryOption) && !parser.isSet(indexLibraryOption);
 
 	// Log messages output and level
 	const bool verbose = parser.isSet(verboseOption);
@@ -222,6 +226,25 @@ int parseAndRunCliArgs(QCoreApplication *app, Profile *profile, bool defaultToGu
 		return -1;
 	}
 
+	if (parser.isSet(indexLibraryOption)) {
+		if (parser.isSet(importLibraryOption)) {
+			QTextStream(stderr) << "Use --import-library and --index-library separately." << Qt::endl;
+			return 1;
+		}
+		LibraryRecommendations recommendations(profile);
+		QEventLoop loop;
+		int resultCode = 1;
+		QObject::connect(&recommendations, &LibraryRecommendations::indexFinished, &loop, [&](const LibraryIndexResult &result) {
+			const QJsonObject output {{"total", result.total}, {"indexed", result.indexed}, {"reused", result.reused},
+				{"skipped", result.skipped}, {"failed", result.failed}, {"cancelled", result.cancelled}, {"error", result.error}, {"errors", QJsonArray::fromStringList(result.errors)}};
+			QTextStream(stdout) << QJsonDocument(output).toJson(QJsonDocument::Compact) << Qt::endl;
+			resultCode = result.error.isEmpty() && result.failed == 0 && !result.cancelled ? 0 : 1;
+			loop.quit();
+		});
+		QTimer::singleShot(0, &recommendations, &LibraryRecommendations::startIndexing);
+		loop.exec();
+		return resultCode;
+	}
 	if (parser.isSet(importLibraryOption)) {
 		auto *store = profile->library();
 		QJsonArray errors;

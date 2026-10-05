@@ -33,6 +33,8 @@ class LibraryTab : public QWidget
 		LibraryTab(Profile *profile, MainWindow *parent);
 		~LibraryTab() override;
 		void reload();
+		void showView(qint64 collection = 0, int smartFilter = 0);
+		void openPicture(const QString &key, const QStringList &keys, qint64 collection = 0);
 		void importPaths(const QStringList &paths, bool copy = false, const QString &expectedKey = {});
 		bool importing() const { return m_importing; }
 

@@ -1,0 +1,9 @@
+Local visual recommendations use OpenAI CLIP ViT-B/32, converted and quantized by Xenova.
+https://github.com/openai/CLIP
+https://huggingface.co/Xenova/clip-vit-base-patch32
+Frozen conversion revision: d15189d7028b43f1d3e65039190477f6af591c2a
+Model: onnx/vision_model_uint8.onnx
+SHA-256: b95448754a6ae56964ec80c570c80bb9863787ee85f51b664abed8c0e5f22a7a
+Images are processed locally. The model is downloaded only on explicit setup.
+ONNX Runtime telemetry is disabled through its API before model/session creation.
+The official Windows runtime can emit an initialization ETW event before API suppression; see licenses/onnxruntime/Privacy.md.

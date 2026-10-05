@@ -50,6 +50,7 @@ Get-ChildItem -LiteralPath (Join-Path $QtRoot 'lib') -File -Filter '*scintilla*q
 if ($env:MYSQL_DRIVER_DIR) {
     Copy-Item -LiteralPath (Join-Path $env:MYSQL_DRIVER_DIR 'libmysql.dll') -Destination $stage
 }
+& (Join-Path $PSScriptRoot 'install-ai-runtime.ps1') -Target $stage
 [IO.File]::WriteAllText((Join-Path $stage 'settings.ini'),'')
 $translations = @(Get-ChildItem -LiteralPath (Join-Path $stage 'languages') -File -Filter '*.qm')
 $expectedTranslations = @(Get-ChildItem -LiteralPath (Join-Path $repo 'src\languages') -File -Filter '*.ts' | Where-Object Name -ne 'YourLanguage.ts')

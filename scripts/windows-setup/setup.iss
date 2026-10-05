@@ -23,7 +23,7 @@
 #endif
 
 #ifndef MyAppVersion
-# define MyAppVersion "7.15.4"
+# define MyAppVersion "7.16.0"
 #endif
 
 #define PlatformNamePrefix ""
@@ -90,6 +90,9 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Name: "quicklaunchicon"; Description: "{cm:CreateQuickLaunchIcon}"; GroupDescription: "{cm:AdditionalIcons}"; Flags: unchecked; OnlyBelowVersion: 0,6.1
 
 [Files]
+Source: "{#BuildDir}\ai-runtime\*.dll"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#BuildDir}\ai-runtime\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "{#SrcDir}\dist\common\licenses\*"; DestDir: "{app}\licenses"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "resources\images\icon.ico";            DestDir: "{app}"; Flags: ignoreversion
 Source: "{#SrcDir}\dist\windows\CDR.exe";       DestDir: "{app}"; Flags: ignoreversion
 Source: "{#BuildDir}\CrashReporter\CrashReporter.exe"; DestDir: "{app}"; Flags: ignoreversion

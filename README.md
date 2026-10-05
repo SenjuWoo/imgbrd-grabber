@@ -47,7 +47,7 @@ The gallery shows 100 pictures per page, with **Previous page / Next page** and 
 
 Select one picture and click **Find / link source…** beside the rating buttons. Choose a source for exact MD5 lookup, or compare source pictures already cached in Library. Confirm a candidate to attach its post metadata. Similarity search does not search the whole Internet. **Import pictures… → Recheck metadata** retries local files without duplicating pictures or resetting ratings.
 
-Likes, favorites, notes, and collection membership work without tags and are preserved when a source is linked. Recommendations are still planned. Missing tags will limit future tag-based matching; the stored preferences remain available for later enrichment. Basic embedded text and sidecars are checked automatically. Optional [ExifTool](https://exiftool.org/install.html) extends EXIF/IPTC/XMP coverage; the Overview reports when that reader was unavailable.
+Likes, favorites, notes, and collection membership work without tags and are preserved when a source is linked. Home uses likes and favorites to rediscover saved pictures. Tagless pictures can guide visual recommendations after local AI setup; missing metadata remains visible and is not invented. Basic embedded text and sidecars are checked automatically. Optional [ExifTool](https://exiftool.org/install.html) extends EXIF/IPTC/XMP coverage; the Overview reports when that reader was unavailable.
 
 ## Online sources and current limits
 
@@ -55,7 +55,7 @@ The upstream downloader features remain: multiple tabs and sources, tag autocomp
 
 - **Pixiv already exists** and requires authentication. API errors are reported explicitly.
 - **Reddit search uses keywords, authors, subreddits, and flair**, not booru tags. This fork removes irrelevant booru operators, follows Reddit cursors, and reports denied API access. Numbered page jumps are unavailable on that source.
-- **Pinterest is not integrated.** AI recommendations, collection-guided discovery, author following, and a Home feed are planned; this release establishes the Library and preference data they need.
+- **Home recommends pictures already in your Library**, with separate collection and Library-wide taste. Pinterest, creator following, online recommendation fetching, and optional cloud providers remain future work.
 - Visual matching currently compares against cached Library images. It does not perform Internet-wide reverse searches or upload your files to an AI provider.
 
 The Library stores its catalog and bounded previews locally. Fresh profiles have usage analytics disabled by default; an existing explicit preference is retained. Built-in backups include the catalog and managed copies. Externally referenced originals need their own backup.
@@ -82,6 +82,26 @@ npm test -- --runInBand
 ```
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
+
+## Home and local recommendations
+
+![Native Home showing collection recommendations, match explanations and explicit collection membership](docs/assets/img/screenshots/woo-home.png)
+
+*Generated demo artwork, with collection suggestions based on saved tags before local AI setup. The selected picture shows its match and collection membership action.*
+
+Open **Home**, choose **Library-wide** or a collection, then **For you** or **Recently saved**. Only ratings in the selected scope guide recommendations. Favorites count three times as much as likes. Suggested pictures outside a collection need **Add to this collection** before rating in that scope. Hide a suggestion for this scope or restore hidden suggestions at any time.
+
+**Download local model** fetches the pinned 89 MB CLIP image model and builds a CPU image index. Images stay on this PC; no Python, GPU or AI server is required. Windows packages include ONNX Runtime 1.30.0; other desktop platforms can use tag matching until a compatible native runtime is supplied. Index coverage and skipped previews are visible. Existing likes, favorites, tags and files survive indexing failures and cancellation. The model/index are rebuildable profile data, separate from `library.sqlite`.
+
+Visual embeddings understand appearance; they do not recover original tags, authors or source URLs. Recommendations explain their strongest contributing liked/favorited picture and actual shared tags. Close matches rotate deterministically each day. Use `Grabber-cli.exe --index-library` to update an already configured local index with a JSON result. See [milestone evidence and limits](docs/recommendations-milestone.md).
+
+## Changes in 7.16.0
+
+- Add Home with local visual recommendations, independent collection taste, daily selection, recent saves, scoped hiding and shared image actions.
+- Ship a verified CPU runtime; stream and verify the frozen CLIP model, index previews in a cancellable background job, and reuse vectors only for unchanged thumbnails/model identity.
+- Preserve missing metadata labels and explain tagless ratings/index coverage. Keep explicit collection membership and viewer preference scope visible.
+- Restore Home sessions and target the actual current search widget after tabs are moved.
+- Add native UI, ranking, preprocessing/cache tests and real portable inference/reuse/corrupt-model CI checks.
 
 ## Changes in 7.15.4
 

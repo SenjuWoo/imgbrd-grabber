@@ -546,6 +546,10 @@ jobs:
           QTDIR: ${{ env.QT_ROOT_DIR }}
           QT_PLUGIN_PATH: ${{ env.QT_ROOT_DIR }}\plugins
 
+      - name: Deploy verified local AI runtime
+        shell: pwsh
+        run: ./scripts/install-ai-runtime.ps1 -Target build/ai-runtime
+
       - name: Generate installer
         shell: cmd
         run: |
@@ -575,6 +579,10 @@ jobs:
         run: |
           Expand-Archive -LiteralPath Grabber_x64.zip -DestinationPath build/package-check
           ./scripts/test-windows-package.ps1 -Root build/package-check -Evidence build/package-startup.json -QtVersion $env:QT_VERSION -OpenSslVersion $env:OPENSSL_VERSION
+
+      - name: Test portable CPU image indexing
+        shell: pwsh
+        run: ./scripts/test-local-ai.ps1 -Root build/package-check -TestDirectory build/local-ai-check
 
       - name: Upload package
         if: ${{ !cancelled() }}

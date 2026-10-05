@@ -49,6 +49,7 @@
 #include "tabs/downloads-tab.h"
 #include "tabs/favorites-tab.h"
 #include "tabs/library-tab.h"
+#include "tabs/home-tab.h"
 #include "tabs/gallery-tab.h"
 #include "tabs/log-tab.h"
 #include "tabs/monitors-tab.h"
@@ -318,6 +319,18 @@ void MainWindow::init(const QStringList &args, const QMap<QString, QString> &par
 	m_libraryTab = new LibraryTab(m_profile, this);
 	ui->tabWidget->insertTab(m_tabs.size(), m_libraryTab, m_libraryTab->windowTitle());
 
+	// Home uses the same Library viewers and actions, with explicit preference scope.
+	m_homeTab = new HomeTab(m_profile, this);
+	ui->tabWidget->insertTab(m_tabs.size(), m_homeTab, m_homeTab->windowTitle());
+	connect(m_homeTab, &HomeTab::libraryRequested, this, [this](qint64 collection, int smartFilter) {
+		m_libraryTab->showView(collection, smartFilter);
+		ui->tabWidget->setCurrentWidget(m_libraryTab);
+	});
+	connect(m_homeTab, &HomeTab::pictureRequested, this, [this](const QString &key, const QStringList &keys, qint64 collection) {
+		m_libraryTab->showView(collection);
+		m_libraryTab->openPicture(key, keys, collection);
+	});
+
 	// Tab corner widget
 	auto *cornerWidget = new QWidget(this);
 	auto *layout = new QHBoxLayout(cornerWidget);
@@ -344,6 +357,7 @@ void MainWindow::init(const QStringList &args, const QMap<QString, QString> &par
 		m_tabSelector->setFlat(true);
 		m_tabSelector->markStaticTab(m_favoritesTab);
 		m_tabSelector->markStaticTab(m_libraryTab);
+		m_tabSelector->markStaticTab(m_homeTab);
 		m_tabSelector->markStaticTab(m_downloadsTab);
 		m_tabSelector->markStaticTab(m_monitorsTab);
 		if (m_logTab != nullptr)
@@ -432,7 +446,9 @@ void MainWindow::initialLoginsDone()
 
 	if ((QMetaType::Type) m_forcedTab.type() == QMetaType::QString) {
 		QString name = m_forcedTab.toString();
-		if (name == "library") {
+		if (name == "home") {
+			ui->tabWidget->setCurrentWidget(m_homeTab);
+		} else if (name == "library") {
 			ui->tabWidget->setCurrentWidget(m_libraryTab);
 		} else if (name == "favorites") {
 			ui->tabWidget->setCurrentWidget(m_favoritesTab);
@@ -444,7 +460,8 @@ void MainWindow::initialLoginsDone()
 			ui->tabWidget->setCurrentWidget(m_logTab);
 		}
 	} else {
-		ui->tabWidget->setCurrentIndex(qMax(0, m_forcedTab.toInt()));
+		// Saved numbers index search tabs, not their movable positions in the widget.
+		ui->tabWidget->setCurrentWidget(m_tabs.value(qMax(0, m_forcedTab.toInt()), m_tabs.first()));
 	}
 	m_forcedTab.clear();
 
@@ -978,10 +995,11 @@ void MainWindow::loadTag(const QString &tag, bool newTab, bool background, bool 
 		return;
 	}
 
-	if (newTab || m_tabs.isEmpty()) {
+	auto *current = qobject_cast<SearchTab*>(ui->tabWidget->currentWidget());
+	if (newTab || current == nullptr || !m_tabs.contains(current)) {
 		addTab(tag, background, save, source);
-	} else if (m_tabs.count() > 0 && ui->tabWidget->currentIndex() < m_tabs.count()) {
-		m_tabs[ui->tabWidget->currentIndex()]->setTags(tag);
+	} else {
+		current->setTags(tag);
 	}
 }
 void MainWindow::loadTagTab(const QString &tag)

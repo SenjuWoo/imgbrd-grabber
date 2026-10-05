@@ -1,0 +1,11 @@
+# Home and local recommendations milestone
+
+Home rediscovers images already saved in Library. It offers Library-wide taste, independent collection taste, a daily stable selection, recent saves, and existing image actions. A favorite has weight 3; a like has weight 1, with no double counting. Collection recommendations use only that collection's ratings. Suggested nonmembers require an explicit add before collection ratings.
+
+Real image understanding uses the CPU CLIP image encoder through native ONNX Runtime. A user-initiated model download is pinned to a frozen revision, exact size and SHA-256. Images stay on this PC; cloud providers, creator following and new site integrations are later milestones. Inference cannot recover authoritative tags, authors or sources. Tag matching uses actual existing tags and is clearly described while the visual index is unavailable.
+
+The index is rebuildable derived data, stored separately from library.sqlite. Entries are keyed by image key, cached thumbnail SHA-256 and model/preprocessing identity. Jobs use a snapshot on a worker thread, support cancellation, and atomically save validated vectors. Missing previews are counted as skipped. Ratings and originals survive index failure or deletion.
+
+Acceptance: independent scope/favorite weighting and malformed-vector tests; actual pinned-model CPU inference and image preprocessing comparison; index reuse/cancellation/error evidence; native Home cold start, metadata coverage, action/membership and movable-tab/session tests; rendered light/dark layouts; fresh portable startup and inference without developer SDKs. Publish only after all required CI checks pass on the exact source commit and published assets match verified bytes. Back up the latest live profile before replacing the installed app.
+
+Local validation: all five local CTest suites pass. Six independent Pillow pixel hashes match preprocessing. The actual pinned model passed native download, cancellation with partial retention, shutdown/reopen recovery, resume and reuse; portable CLI inference produced finite normalized 512-dimensional vectors, reused every fixture and preserved its index after same-size model corruption. Native Windows Home widget checks and compact geometry pass. Release validation additionally requires exact-commit CI and stable extracted artifact verification.
