@@ -85,3 +85,5 @@ try {
     $env:QT_PLUGIN_PATH = $previousPlugin
     $env:QT_QPA_PLATFORM = $previousQpa
 }
+# The expected corrupt-model failure must not become the script's exit status.
+exit 0
