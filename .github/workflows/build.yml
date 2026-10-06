@@ -60,7 +60,7 @@ jobs:
         id: bin-cache
         with:
           path: bin
-          key: ${{ runner.os }}-uncrustify-${{ env.UNCRUSTIFY_COMMIT }}
+          key: ${{ runner.os }}-ubuntu22-uncrustify-${{ env.UNCRUSTIFY_COMMIT }}
 
       - name: Build uncrustify
         if: steps.bin-cache.outputs.cache-hit != 'true'

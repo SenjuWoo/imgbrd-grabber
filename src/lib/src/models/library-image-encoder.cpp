@@ -53,8 +53,8 @@ namespace
 		const double support = 2.0 * filterScale;
 		QVector<Filter> result;
 		result.reserve(ImageSize);
-		for (int position = cropStart; position < cropStart + ImageSize; ++position) {
-			const double center = (position + 0.5) * scale;
+		for (int offset = 0; offset < ImageSize; ++offset) {
+			const double center = (double(cropStart) + offset + 0.5) * scale;
 			const int start = std::max(0, int(center - support + 0.5));
 			const int end = std::min(sourceSize, int(center + support + 0.5));
 			QVector<double> coefficients;
