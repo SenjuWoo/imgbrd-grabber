@@ -28,6 +28,12 @@ For a new checkout, install the normal upstream prerequisites and set QT_ROOT_DI
 OPENSSL_ROOT_DIR and put Ninja, CMake, Node/npm in PATH. The scripts contain no
 machine-specific drive letters or account names. They do not deploy over a live app.
 
+The Windows portable ZIP includes official x64 Microsoft C++ runtime DLLs beside
+Qt and the AI runtime, so it does not require running a separate runtime installer.
+Package startup checks verify that Qt and Microsoft C++ libraries load from the
+package directory. App updates also refresh these app-local libraries. See
+[Microsoft deployment documentation](https://learn.microsoft.com/en-us/cpp/windows/deployment-in-visual-cpp).
+
 ## September 29, 2026 audit
 
 - Official v7.14.0 was released August 14; the fresh installer is older than the

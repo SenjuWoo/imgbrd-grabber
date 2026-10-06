@@ -1,0 +1,10 @@
+Microsoft Visual C++ runtime libraries
+
+The Windows portable package redistributes the official x64 runtime DLLs from
+Microsoft Visual Studio VC\Redist\MSVC\*\x64\Microsoft.VC*.CRT.
+These Microsoft binaries retain their original signatures and copyright notices.
+They are governed by Microsoft Software License Terms, not Grabber's Apache license.
+
+License terms: https://visualstudio.microsoft.com/license-terms/
+Redistribution: https://learn.microsoft.com/en-us/cpp/windows/redistributing-visual-cpp-files
+App-local deployment: https://learn.microsoft.com/en-us/cpp/windows/deployment-in-visual-cpp

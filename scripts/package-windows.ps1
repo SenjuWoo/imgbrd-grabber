@@ -37,8 +37,23 @@ Copy-Tree (Join-Path $repo 'src\sites') (Join-Path $stage 'sites') (@('/XD','res
 Get-ChildItem -LiteralPath (Join-Path $build 'languages') -File -Filter '*.qm' | Where-Object Name -ne 'YourLanguage.qm' | Copy-Item -Destination (Join-Path $stage 'languages')
 # QScintilla is copied separately; explicitly deploy its Qt PrintSupport dependency.
 $deploy = Join-Path $QtRoot 'bin\windeployqt.exe'
-& $deploy --dir $stage --release --printsupport --no-quick-import --no-opengl-sw --force-openssl (Join-Path $stage 'Grabber.exe') (Join-Path $stage 'Grabber-cli.exe') (Join-Path $stage 'CrashReporter.exe')
+& $deploy --dir $stage --release --printsupport --no-compiler-runtime --no-quick-import --no-opengl-sw --force-openssl (Join-Path $stage 'Grabber.exe') (Join-Path $stage 'Grabber-cli.exe') (Join-Path $stage 'CrashReporter.exe')
 if ($LASTEXITCODE -ne 0) { throw "windeployqt failed ($LASTEXITCODE)" }
+# Portable apps carry the official app-local CRT instead of a separate installer.
+$vcRoot = $env:VCINSTALLDIR
+if (!$vcRoot) {
+    $compiler = Get-CacheValue 'CMAKE_CXX_COMPILER'
+    if ($compiler -notmatch '^(.*[\\/]VC)[\\/]Tools[\\/]MSVC[\\/]') { throw 'Cannot locate the compiler redistributable directory.' }
+    $vcRoot = $matches[1]
+}
+$crt = Get-ChildItem -Path (Join-Path $vcRoot 'Redist\MSVC\*\x64\Microsoft.VC*.CRT') -Directory | Where-Object {
+    Test-Path -LiteralPath (Join-Path $_.FullName 'vcruntime140_1.dll')
+} | Sort-Object { [Version](Get-Item -LiteralPath (Join-Path $_.FullName 'vcruntime140.dll')).VersionInfo.FileVersion } -Descending | Select-Object -First 1
+if (!$crt) { throw 'Missing official x64 Microsoft C++ redistributable DLLs.' }
+foreach ($name in @('msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll')) {
+    if (!(Test-Path -LiteralPath (Join-Path $crt.FullName $name))) { throw "Missing Microsoft C++ runtime: $name" }
+}
+Get-ChildItem -LiteralPath $crt.FullName -File -Filter '*.dll' | Copy-Item -Destination $stage
 foreach ($pattern in @('libcrypto-3*.dll','libssl-3*.dll')) {
     $sslFiles = @(Get-ChildItem -LiteralPath $OpenSslRoot -File -Filter $pattern)
     if (!$sslFiles) { $sslFiles = @(Get-ChildItem -LiteralPath (Join-Path $OpenSslRoot 'bin') -File -Filter $pattern) }

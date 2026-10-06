@@ -4,6 +4,10 @@ $ErrorActionPreference = 'Stop'
 $Root = [IO.Path]::GetFullPath($Root)
 if (!(Test-Path -LiteralPath (Join-Path $Root 'package-manifest.json'))) { throw 'Extract the package before testing it.' }
 if ((Test-Path -LiteralPath (Join-Path $Root 'qscintilla2_qt6.dll')) -and !(Test-Path -LiteralPath (Join-Path $Root 'Qt6PrintSupport.dll'))) { throw 'QScintilla requires the bundled Qt6PrintSupport.dll.' }
+$crtNames = @('msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll')
+foreach ($name in $crtNames) {
+    if (!(Test-Path -LiteralPath (Join-Path $Root $name))) { throw "Missing portable Microsoft C++ runtime: $name" }
+}
 $settingsPath = Join-Path $Root 'settings.ini'
 $originalSettings = [IO.File]::ReadAllBytes($settingsPath)
 $environment = @{}
@@ -58,8 +62,16 @@ try {
     $module = $process.Modules | Where-Object ModuleName -eq 'Qt6Core.dll' | Select-Object -First 1
     if (!$module -or [IO.Path]::GetFullPath($module.FileName) -ne (Join-Path $Root 'Qt6Core.dll')) { throw 'Qt loaded outside the package.' }
     if ($QtVersion -and $module.FileVersionInfo.FileVersion -notlike ($QtVersion + '.*')) { throw 'Unexpected Qt version.' }
+    $crtModules = @($process.Modules | Where-Object ModuleName -Match '^(msvcp140.*|vcruntime140.*|concrt140)\.dll$')
+    foreach ($name in $crtNames) {
+        if (!($crtModules | Where-Object ModuleName -eq $name)) { throw "Microsoft C++ runtime not loaded: $name" }
+    }
+    foreach ($crtModule in $crtModules) {
+        if ([IO.Path]::GetFullPath($crtModule.FileName) -ne (Join-Path $Root $crtModule.ModuleName)) { throw "Microsoft C++ runtime loaded outside the package: $($crtModule.FileName)" }
+    }
     $result = @{cli_version=$version; initialized=$true; qt=$module.FileVersionInfo.FileVersion; qt_path=$module.FileName; ssl=($log -split "`n" | Where-Object { $_ -match 'SSL libraries:' } | Select-Object -First 1).Trim(); title=$process.MainWindowTitle}
-    $json = $result | ConvertTo-Json
+    $result.crt = @($crtModules | ForEach-Object { @{name=$_.ModuleName; path=$_.FileName; version=$_.FileVersionInfo.FileVersion} })
+    $json = $result | ConvertTo-Json -Depth 4
     if ($Evidence) { $json | Set-Content -LiteralPath $Evidence -Encoding utf8 }
     $json
 } finally {
