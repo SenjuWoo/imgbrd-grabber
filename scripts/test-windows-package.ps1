@@ -47,7 +47,7 @@ try {
         $process.Refresh()
         if ($process.HasExited) { throw "Packaged GUI exited during startup ($($process.ExitCode))." }
         $latest = Get-ChildItem -LiteralPath (Join-Path $Root 'logs') -File -Filter 'main_*.log' -ErrorAction SilentlyContinue | Where-Object { $_.FullName -notin $previousLogs } | Sort-Object LastWriteTimeUtc -Descending | Select-Object -First 1
-        if ($latest) { $log = Get-Content -LiteralPath $latest.FullName -Raw }
+        if ($latest) { $log = (Get-Content -LiteralPath $latest.FullName -Raw) -join '' }
         if ($log.Contains('End of initialization')) { break }
         Start-Sleep -Milliseconds 250
     }
