@@ -109,3 +109,7 @@ Primary implementation references: [ExifTool JSON output](https://exiftool.sourc
 [Qt image decoding](https://doc.qt.io/qt-6/qimagereader.html),
 [Windows download origin](https://techcommunity.microsoft.com/blog/microsoftdefenderatpblog/hunting-tip-of-the-month-browser-downloads/220454),
 and [SQLite consistent snapshots](https://www.sqlite.org/lang_vacuum.html).
+
+## Site development dependencies
+
+The npm override keeps argparse at 2.0.1 to remove the vulnerable sprintf-js dependency while retaining the legacy CLI aliases used by js-yaml 3 in the lint and coverage tools. Argparse 3 removes those aliases. Check updates with a fresh npm ci, the YAML CLI, and npm run check/build/test before changing the override. Development dependencies are excluded from the portable app.
