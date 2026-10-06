@@ -104,7 +104,7 @@ jobs:
           submodules: recursive
 
       - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
         with:
           key: ${{ runner.os }}-${{ github.job }}
 
@@ -114,7 +114,7 @@ jobs:
           sudo apt install libpulse-dev lcov libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxkbcommon-x11-0
 
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
         with:
           cache: true
           version: ${{ env.QT_VERSION }}
@@ -159,7 +159,7 @@ jobs:
           lcov --list coverage.info
 
       - name: Upload coverage results
-        uses: codecov/codecov-action@v7
+        uses: codecov/codecov-action@303a32d7a59b442fa8d48b6a1cc6825c09c847a5 # v7
         with:
           token: ${{ secrets.CODECOV_TOKEN }}
 
@@ -199,7 +199,7 @@ jobs:
           submodules: recursive
 
       - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
         with:
           key: ${{ runner.os }}-${{ github.job }}
 
@@ -209,7 +209,7 @@ jobs:
           sudo apt install libfuse2 libpulse-dev libxcb-icccm4 libxcb-image0 libxcb-keysyms1 libxcb-render-util0 libxcb-xinerama0 libxcb-cursor0 libxkbcommon-x11-0 libgstreamer-plugins-base1.0-0 zsync xvfb
 
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
         with:
           cache: true
           version: ${{ env.QT_VERSION }}
@@ -328,12 +328,12 @@ jobs:
           submodules: recursive
 
       - name: Setup ccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
         with:
           key: ${{ runner.os }}-${{ github.job }}
 
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
         with:
           cache: true
           version: ${{ env.QT_VERSION }}
@@ -441,13 +441,13 @@ jobs:
           "MSVC toolset: $($toolsets[0].Name)"
 
       - name: Setup sccache
-        uses: hendrikmuhs/ccache-action@v1.2
+        uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
         with:
           variant: sccache
           key: ${{ runner.os }}-${{ github.job }}
 
       - name: Install Qt
-        uses: jurplel/install-qt-action@v4
+        uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
         with:
           cache: true
           version: ${{ env.QT_VERSION }}
@@ -647,7 +647,7 @@ jobs:
         submodules: recursive
 
     - name: Setup ccache
-      uses: hendrikmuhs/ccache-action@v1.2
+      uses: hendrikmuhs/ccache-action@5ebbd400eff9e74630f759d94ddd7b6c26299639 # v1.2
       with:
         key: ${{ runner.os }}-${{ github.job }}
 
@@ -667,14 +667,14 @@ jobs:
           **/gradle-wrapper.properties
 
     - name: Setup Android Environment
-      uses: android-actions/setup-android@v4
+      uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4
       with:
         cmdline-tools-version: 12266719
         packages: 'platform-tools platforms;android-35 build-tools;35.0.0 ndk;${{ env.ANDROID_NDK_VERSION }}'
         log-accepted-android-sdk-licenses: false
 
     - name: Install Qt (host)
-      uses: jurplel/install-qt-action@v4
+      uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
       with:
         cache: true
         version: ${{ env.QT_VERSION }}
@@ -684,7 +684,7 @@ jobs:
         arch: linux_gcc_64
 
     - name: Install Qt (android)
-      uses: jurplel/install-qt-action@v4
+      uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
       with:
         cache: true
         version: ${{ env.QT_VERSION }}
@@ -694,7 +694,7 @@ jobs:
         arch: android_armv7
 
     - name: Install Qt (android ARM64)
-      uses: jurplel/install-qt-action@v4
+      uses: jurplel/install-qt-action@a9c63c7c123f3069cff414e7e482d95dfa9d8125 # v4
       with:
         cache: true
         version: ${{ env.QT_VERSION }}
@@ -832,7 +832,7 @@ jobs:
         run: echo "date=$(date +'%Y-%m-%d %H:%M:%S %Z')" >> $GITHUB_OUTPUT
 
       - name: Nightly
-        uses: ncipollo/release-action@v1
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
         if: needs.version.outputs.nightly == '1'
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
@@ -850,7 +850,7 @@ jobs:
             **Date:** ${{ steps.date.outputs.date }}
 
       - name: Release
-        uses: ncipollo/release-action@v1
+        uses: ncipollo/release-action@339a81892b84b4eeb0f6e744e4574d79d0d9b8dd # v1
         if: needs.version.outputs.release == '1'
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
