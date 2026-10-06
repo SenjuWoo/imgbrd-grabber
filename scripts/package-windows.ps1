@@ -48,7 +48,10 @@ if (!$vcRoot) {
 }
 $crt = Get-ChildItem -Path (Join-Path $vcRoot 'Redist\MSVC\*\x64\Microsoft.VC*.CRT') -Directory | Where-Object {
     Test-Path -LiteralPath (Join-Path $_.FullName 'vcruntime140_1.dll')
-} | Sort-Object { [Version](Get-Item -LiteralPath (Join-Path $_.FullName 'vcruntime140.dll')).VersionInfo.FileVersion } -Descending | Select-Object -First 1
+} | Sort-Object {
+    $info = (Get-Item -LiteralPath (Join-Path $_.FullName 'vcruntime140.dll')).VersionInfo
+    [Version]::new($info.FileMajorPart, $info.FileMinorPart, $info.FileBuildPart, $info.FilePrivatePart)
+} -Descending | Select-Object -First 1
 if (!$crt) { throw 'Missing official x64 Microsoft C++ redistributable DLLs.' }
 foreach ($name in @('msvcp140.dll','msvcp140_1.dll','vcruntime140.dll','vcruntime140_1.dll')) {
     if (!(Test-Path -LiteralPath (Join-Path $crt.FullName $name))) { throw "Missing Microsoft C++ runtime: $name" }
