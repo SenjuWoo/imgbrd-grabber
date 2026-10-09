@@ -103,6 +103,7 @@ Visual embeddings understand appearance; they do not recover original tags, auth
 - Add image-only grids, shared density controls and Library page sizes; show actions after selecting a picture. Render cached/missing previews consistently, preserve aspect ratios, bound decoding and retry real thumbnail alternatives.
 - Merge only exact checksums or identical full URLs without checksums; preserve edits, variants, uncertain matches and stable viewer bindings.
 - Fix source-limit paging, estimated-total cutoffs, cursor isolation, batch progress, failed-source handling and truthful visible counts.
+- Update the site test tooling's transitive Handlebars dependency to the security-patched 4.7.10 release.
 
 ## Changes in 7.16.0
 
