@@ -95,7 +95,7 @@ Open **Home**, choose **Library-wide** or a collection, then **For you**, **Rece
 
 Visual embeddings understand appearance; they do not recover original tags, authors or source URLs. Recommendations explain their strongest contributing liked/favorited picture and actual shared tags. Close matches rotate each day and with Refresh. Saved recommendations balance distinct interests; online discovery rotates source topics and pages. Compact, Comfortable and Large density settings are shared with Library and search. Image details are in tooltips and the viewer; rating controls appear after selection. Library offers 50, 100 or 200 pictures per page. Use `Grabber-cli.exe --index-library` to update an already configured local index with a JSON result. See [browsing milestone evidence and limits](docs/browsing-milestone.md) and [local AI evidence](docs/recommendations-milestone.md).
 
-## Changes in 7.17.0
+## Changes in 7.17.1
 
 - Add opt-in online Home discovery from existing selected sources, with scoped weighted tag topics, refresh rotation, bounded requests, cancellation, clear failures and explicit saving.
 - Diversify local saved recommendations across interests while keeping collection preferences independent.
