@@ -2,6 +2,7 @@
 #define SEARCH_TAB_H
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QLabel>
 #include <QLayout>
 #include <QList>
@@ -62,6 +63,7 @@ class SearchTab : public QWidget
 		void setLocked(bool locked);
 
 	protected:
+		void showEvent(QShowEvent *event) override;
 		void setSelectedSources(QSettings *settings);
 		void setTagsFromPages(const QMap<QString, QList<QSharedPointer<Page>>> &pages);
 		void addHistory(const SearchQuery &query, int page, int ipp, int cols);
@@ -118,8 +120,6 @@ class SearchTab : public QWidget
 		void finishedLoadingPreview();
 		// Merged
 		QList<QSharedPointer<Image>> mergeResults(int page, const QList<QSharedPointer<Image>> &results);
-		void addMergedMd5(int page, const QString &md5);
-		bool containsMergedMd5(int page, const QString &md5);
 		// Loading
 		void finishedLoading(Page *page);
 		void failedLoading(Page *page);
@@ -152,7 +152,6 @@ class SearchTab : public QWidget
 		Profile *m_profile;
 		DownloadQueue *m_downloadQueue;
 		QString m_screenName;
-		PageInformation m_lastPageInformation;
 		const QMap<QString, Site*> &m_sites;
 		QMap<Image*, ImagePreview*> m_boutons;
 		QList<QUrl> m_selectedImages;
@@ -166,6 +165,8 @@ class SearchTab : public QWidget
 		QSettings *m_settings;
 		QString m_wiki;
 		QMap<Page*, QList<QSharedPointer<Image>>> m_validImages;
+		QMap<Page*, int> m_filteredImages;
+		QSet<Page*> m_pendingPages, m_failedPages;
 		QMap<QString, QMap<QString, QString>> m_lastUrls;
 		bool m_isLocked = false;
 
@@ -192,7 +193,8 @@ class SearchTab : public QWidget
 		QList<QMap<QString, QString>> m_history;
 		SearchQuery m_lastQuery;
 		bool m_hasLastQuery = false;
-		QList<QPair<int, QSet<QString>>> m_mergedMd5s;
+		int m_lastRequestedLimit = 0;
+		QComboBox *m_density = nullptr;
 
 		// UI stuff
 		TextEdit *m_postFiltering = nullptr;

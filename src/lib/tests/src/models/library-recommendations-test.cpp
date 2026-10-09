@@ -177,7 +177,7 @@ TEST_CASE("Preference changes keep indexed previews and changed previews invalid
 	REQUIRE(recommendations.indexedCount() == 1);
 	REQUIRE(savePicture(profile.data(), "12", Qt::blue) == key);
 	REQUIRE(recommendations.indexedCount() == 0);
-	REQUIRE(profile->library()->entry(key).liked);
+	REQUIRE_FALSE(profile->library()->entry(key).liked);
 	REQUIRE(profile->library()->entry(key).favorite);
 	REQUIRE(profile->library()->entry(key).notes == "Existing personal note");
 }

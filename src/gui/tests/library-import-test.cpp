@@ -145,7 +145,7 @@ TEST_CASE("Metadata review views keep untagged ratings and source identification
 	REQUIRE(profile->library()->linkSource(key, remote, "User confirmed test candidate"));
 	QApplication::processEvents();
 	REQUIRE(grid->count() == 0);
-	REQUIRE(profile->library()->entry(key).liked);
+	REQUIRE_FALSE(profile->library()->entry(key).liked);
 	REQUIRE(profile->library()->entry(key).favorite);
 	REQUIRE(profile->library()->entry(key).tags().contains("recovered"));
 	sidebar->setCurrentItem(sidebar->topLevelItem(7));

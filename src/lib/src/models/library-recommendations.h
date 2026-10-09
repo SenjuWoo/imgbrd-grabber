@@ -38,10 +38,11 @@ class LibraryRecommendations : public QObject
 		bool modelAvailable() const;
 		int indexedCount() const;
 		QString status() const;
-		LibraryRecommendationResult recommendations(qint64 scope = 0, const QDate &day = QDate::currentDate(), int limit = 24);
+		LibraryRecommendationResult recommendations(qint64 scope = 0, const QDate &day = QDate::currentDate(), int limit = 24, quint64 rotation = 0);
 		void startIndexing();
 		void downloadModel();
 		void cancel();
+		QSet<QString> hiddenKeys(qint64 scope) const;
 		void hide(const QString &key, qint64 scope);
 		void restoreHidden(qint64 scope);
 		static QString cachePath(const QString &profileDirectory);

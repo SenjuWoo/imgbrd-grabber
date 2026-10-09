@@ -125,7 +125,7 @@ void FixedSizeGridLayout::setGeometry(const QRect &rect)
 
 int FixedSizeGridLayout::doLayout(QRect rect, bool testOnly) const
 {
-	const int fixedWidth = m_fixedWidth / parentWidget()->devicePixelRatio();
+	const int fixedWidth = qMax(1, m_fixedWidth); // Qt layout coordinates are already device-independent.
 
 	int left, top, right, bottom;
 	getContentsMargins(&left, &top, &right, &bottom);

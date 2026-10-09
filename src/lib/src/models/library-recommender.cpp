@@ -1,5 +1,6 @@
 #include "models/library-recommender.h"
 #include <QCryptographicHash>
+#include <QMap>
 #include <algorithm>
 #include <cmath>
 
@@ -57,13 +58,12 @@ namespace
 	struct Ranked
 	{
 		LibraryRecommendation recommendation;
-		int bucket;
 		QByteArray dailyOrder;
 	};
 }
 
 LibraryRecommendationResult LibraryRecommender::rank(const QList<LibraryEntry> &candidates, const QList<LibraryEntry> &scopeSeeds,
-													 const QHash<QString, QVector<float>> &embeddings, qint64 scope, const QDate &day, int limit, const QSet<QString> &hidden)
+													 const QHash<QString, QVector<float>> &embeddings, qint64 scope, const QDate &day, int limit, const QSet<QString> &hidden, quint64 rotation)
 {
 	LibraryRecommendationResult result;
 	if (limit <= 0) {
@@ -78,6 +78,7 @@ LibraryRecommendationResult LibraryRecommender::rank(const QList<LibraryEntry> &
 	QList<Seed> seeds;
 	QSet<QString> ratedKeys;
 	int totalWeight = 0;
+	int strongestWeight = 1;
 	QStringList seedKeys = scopedEntries.keys();
 	std::sort(seedKeys.begin(), seedKeys.end());
 	for (const auto &key : seedKeys) {
@@ -102,13 +103,14 @@ LibraryRecommendationResult LibraryRecommender::rank(const QList<LibraryEntry> &
 		const int weight = entry.favorite ? 3 : 1;
 		seeds.append({key, tags, embedding, norm, weight});
 		totalWeight += weight;
+		strongestWeight = std::max(strongestWeight, weight);
 	}
 	if (seeds.isEmpty()) {
 		return result;
 	}
 	QList<Ranked> ranked;
 	QSet<QString> seen;
-	const QByteArray dailySalt = QByteArray::number(scope) + ':' + (day.isValid() ? day.toString(Qt::ISODate).toUtf8() : QByteArray("undated")) + ':';
+	const QByteArray dailySalt = QByteArray::number(scope) + ':' + (day.isValid() ? day.toString(Qt::ISODate).toUtf8() : QByteArray("undated")) + ':' + QByteArray::number(rotation) + ':';
 	for (const auto &entry : candidates) {
 		if (entry.key.isEmpty() || seen.contains(entry.key) || ratedKeys.contains(entry.key) || hidden.contains(entry.key)) {
 			continue;
@@ -149,23 +151,88 @@ LibraryRecommendationResult LibraryRecommender::rank(const QList<LibraryEntry> &
 		if (strongest <= 0) {
 			continue;
 		}
-		recommendation.score /= totalWeight;
-		// Close scores rotate deterministically each day; they are not confidence values.
-		const int bucket = static_cast<int>(recommendation.score * 50);
+		// A clear match to one taste should survive a Library with many different tastes.
+		recommendation.score = 0.7 * strongest / strongestWeight + 0.3 * recommendation.score / totalWeight;
 		const auto dailyOrder = QCryptographicHash::hash(dailySalt + entry.key.toUtf8(), QCryptographicHash::Sha256);
-		ranked.append({recommendation, bucket, dailyOrder});
+		ranked.append({recommendation, dailyOrder});
 	}
-	std::sort(ranked.begin(), ranked.end(), [](const Ranked &left, const Ranked &right) {
-		if (left.bucket != right.bucket) {
-			return left.bucket > right.bucket;
+	QHash<QString, int> shownPerSeed;
+	// ponytail: scan the pool per selected card; current Home views are bounded to 96 cards.
+	while (!ranked.isEmpty() && result.items.size() < limit) {
+		int best = 0;
+		int bestBucket = -1;
+		for (int i = 0; i < ranked.size(); ++i) {
+			const auto &candidate = ranked[i];
+			const double diversityScore = candidate.recommendation.score / (1 + 0.15 * shownPerSeed.value(candidate.recommendation.basedOnKey));
+			// Only close relevance scores rotate. This ordering is not a confidence value.
+			const int bucket = static_cast<int>(diversityScore * 50);
+			if (bucket > bestBucket || (bucket == bestBucket && (candidate.dailyOrder < ranked[best].dailyOrder
+																 || (candidate.dailyOrder == ranked[best].dailyOrder && candidate.recommendation.entry.key < ranked[best].recommendation.entry.key)))) {
+				best = i;
+				bestBucket = bucket;
+			}
 		}
-		if (left.dailyOrder != right.dailyOrder) {
-			return left.dailyOrder < right.dailyOrder;
+		const auto selected = ranked.takeAt(best).recommendation;
+		++shownPerSeed[selected.basedOnKey];
+		result.items.append(selected);
+	}
+	return result;
+}
+
+QList<LibraryDiscoveryTopic> LibraryRecommender::topics(const QList<LibraryEntry> &scopeSeeds, const QStringList &sources, qint64 scope,
+														const QDate &day, int limit, quint64 rotation)
+{
+	struct Topic { LibraryDiscoveryTopic value; int count = 0; double order = 0; };
+	QMap<QString, Topic> pool;
+	QHash<QString, int> sourceCounts;
+	const QSet<QString> selectedSources(sources.begin(), sources.end());
+	for (const auto &entry : scopeSeeds) {
+		const QString website = entry.image.value("website").toString();
+		if ((!entry.liked && !entry.favorite) || !selectedSources.contains(website)) {
+			continue;
 		}
-		return left.recommendation.entry.key < right.recommendation.entry.key;
+		++sourceCounts[website];
+		const int weight = entry.favorite ? 3 : 1;
+		QSet<QString> actualTags;
+		for (const auto &tag : entry.tags()) {
+			actualTags.insert(tag.trimmed());
+		}
+		for (const auto &tag : actualTags) {
+			// A source tag is data, not an instruction to add a query operator.
+			if (tag.isEmpty() || tag.size() > 160 || tag.contains(':') || tag.startsWith('-') || tag.startsWith('~')
+				|| std::any_of(tag.begin(), tag.end(), [](QChar ch) { return ch.isSpace() || ch.category() == QChar::Other_Control; })) {
+				continue;
+			}
+			auto &topic = pool[website + '\n' + tag];
+			topic.value.website = website;
+			topic.value.tag = tag;
+			topic.value.weight += weight;
+			++topic.count;
+		}
+	}
+	const QSet<QString> generic {"1girl", "1boy", "solo", "rating:safe", "rating:explicit"};
+	const QByteArray salt = QByteArray::number(scope) + ':' + day.toString(Qt::ISODate).toUtf8() + ':' + QByteArray::number(rotation) + ':';
+	for (auto it = pool.begin(); it != pool.end(); ++it) {
+		auto &topic = it.value();
+		const double prevalence = static_cast<double>(topic.count) / sourceCounts.value(topic.value.website, 1);
+		topic.value.weight *= (1.1 - prevalence) * (generic.contains(topic.value.tag) ? 0.15 : 1);
+		const auto digest = QCryptographicHash::hash(salt + it.key().toUtf8(), QCryptographicHash::Sha256);
+		quint64 random = 0;
+		for (int i = 0; i < 8; ++i) {
+			random = (random << 8) | static_cast<unsigned char>(digest[i]);
+		}
+		const double uniform = (static_cast<double>(random >> 11) + 1) / 9007199254740993.0;
+		// Weighted sampling rotates real topics without allowing common tags to drown out specific tastes.
+		topic.order = -std::log(uniform) / topic.value.weight;
+	}
+	QList<Topic> ordered = pool.values();
+	std::sort(ordered.begin(), ordered.end(), [](const Topic &left, const Topic &right) {
+		return left.order != right.order ? left.order < right.order
+			: left.value.website + left.value.tag < right.value.website + right.value.tag;
 	});
-	for (int i = 0; i < std::min(limit, static_cast<int>(ranked.size())); ++i) {
-		result.items.append(ranked[i].recommendation);
+	QList<LibraryDiscoveryTopic> result;
+	for (const auto &topic : ordered.mid(0, qBound(0, limit, 3))) {
+		result.append(topic.value);
 	}
 	return result;
 }

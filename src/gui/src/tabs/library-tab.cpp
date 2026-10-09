@@ -42,8 +42,6 @@
 #include "viewer/viewer-window.h"
 
 
-namespace { constexpr int LibraryPageSize = 100; }
-
 LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	: QWidget(parent), m_profile(profile), m_mainWindow(parent), m_store(profile->library())
 {
@@ -163,9 +161,24 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	m_count = new QLabel(content);
 	auto *pageRow = new QHBoxLayout();
 	pageRow->addWidget(m_count, 1);
-	m_previousPage = new QPushButton(tr("Previous page"), content);
+	m_density = new QComboBox(content);
+	m_density->setObjectName("libraryDensity");
+	m_density->setAccessibleName(tr("Image density"));
+	m_density->setToolTip(tr("Image density, shared with Home and search."));
+	m_density->addItems({tr("Compact"), tr("Comfortable"), tr("Large")});
+	m_density->setCurrentIndex(qBound(0, profile->getSettings()->value("Gallery/density", 1).toInt(), 2));
+	pageRow->addWidget(m_density);
+	m_pageSizeControl = new QComboBox(content);
+	m_pageSizeControl->setObjectName("libraryPageSize");
+	m_pageSizeControl->setAccessibleName(tr("Pictures per page"));
+	for (int size : {50, 100, 200}) { m_pageSizeControl->addItem(tr("%1 / page").arg(size), size); }
+	const int savedSize = profile->getSettings()->value("Library/pageSize", 100).toInt();
+	m_pageSizeControl->setCurrentIndex(qMax(0, m_pageSizeControl->findData(savedSize)));
+	m_pageSize = m_pageSizeControl->currentData().toInt();
+	pageRow->addWidget(m_pageSizeControl);
+	m_previousPage = new QPushButton(tr("Previous"), content);
 	m_previousPage->setObjectName("libraryPreviousPage");
-	m_nextPage = new QPushButton(tr("Next page"), content);
+	m_nextPage = new QPushButton(tr("Next"), content);
 	m_nextPage->setObjectName("libraryNextPage");
 	m_pageLabel = new QLabel(content);
 	m_pageLabel->setObjectName("libraryPage");
@@ -174,7 +187,7 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	pageRow->addWidget(m_nextPage);
 	contentLayout->addLayout(pageRow);
 	connect(m_previousPage, &QPushButton::clicked, this, [this]() { if (m_page > 0) { --m_page; reload(); } });
-	connect(m_nextPage, &QPushButton::clicked, this, [this]() { if ((m_page + 1) * LibraryPageSize < m_viewKeys.size()) { ++m_page; reload(); } });
+	connect(m_nextPage, &QPushButton::clicked, this, [this]() { if ((m_page + 1) * m_pageSize < m_viewKeys.size()) { ++m_page; reload(); } });
 	m_stack = new QStackedWidget(content);
 	m_grid = new QListWidget(m_stack);
 	m_grid->setObjectName("libraryGrid");
@@ -182,9 +195,7 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	m_grid->setResizeMode(QListView::Adjust);
 	m_grid->setMovement(QListView::Static);
 	m_grid->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-	m_grid->setIconSize(QSize(224, 160));
-	m_grid->setGridSize(QSize(248, 222));
-	m_grid->setSpacing(8);
+	m_grid->setSpacing(4);
 	m_grid->setWordWrap(false);
 	m_grid->setUniformItemSizes(true);
 	m_grid->setSelectionMode(QAbstractItemView::ExtendedSelection);
@@ -217,7 +228,7 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	splitter->setSizes({ 220, 1000 });
 	setStyleSheet("#librarySidebar { border: 0; background: transparent; } "
 		"#librarySidebar::item { padding: 9px 6px; border-radius: 6px; } "
-		"#libraryGrid::item { padding: 8px; border-radius: 8px; } "
+		"#libraryGrid::item { padding: 2px; border-radius: 6px; } "
 		"#librarySearch { padding: 8px; border-radius: 6px; }");
 	connect(create, &QPushButton::clicked, this, &LibraryTab::newCollection);
 	connect(m_manage, &QPushButton::clicked, this, [this]() {
@@ -232,6 +243,17 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 			m_grid->scrollToItem(item);
 			imageMenu(m_grid->visualItemRect(item).center());
 		}
+	});
+	connect(m_density, &QComboBox::currentIndexChanged, this, [this](int density) {
+		m_profile->getSettings()->setValue("Gallery/density", density);
+		scheduleReload();
+	});
+	connect(m_pageSizeControl, &QComboBox::currentIndexChanged, this, [this]() {
+		const int first = m_page * m_pageSize;
+		m_pageSize = m_pageSizeControl->currentData().toInt();
+		m_page = first / m_pageSize;
+		m_profile->getSettings()->setValue("Library/pageSize", m_pageSize);
+		scheduleReload();
 	});
 	connect(m_store, &LibraryStore::imageChanged, this, &LibraryTab::scheduleReload);
 	connect(m_store, &LibraryStore::collectionsChanged, this, &LibraryTab::scheduleReload);
@@ -255,6 +277,13 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	connect(m_grid, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) { openImage(item->data(Qt::UserRole).toString()); });
 	connect(m_grid, &QListWidget::customContextMenuRequested, this, &LibraryTab::imageMenu);
 	reload();
+}
+
+void LibraryTab::showEvent(QShowEvent *event)
+{
+	QWidget::showEvent(event);
+	const int density = qBound(0, m_profile->getSettings()->value("Gallery/density", 1).toInt(), 2);
+	m_density->setCurrentIndex(density);
 }
 
 void LibraryTab::showView(qint64 collection, int smartFilter)
@@ -330,6 +359,12 @@ void LibraryTab::reload()
 	m_title->setText(title);
 	m_hint->setText(m_collection > 0 ? tr("Likes, favorites and notes apply to this collection. A picture can belong to several collections.")
 		: tr("Library-wide likes and favorites. Organize pictures into collections for separate preferences."));
+	const int sizes[] = {128, 180, 256};
+	const int density = qBound(0, m_profile->getSettings()->value("Gallery/density", 1).toInt(), 2);
+	const QSignalBlocker densityBlock(m_density);
+	m_density->setCurrentIndex(density);
+	m_grid->setIconSize(QSize(sizes[density], sizes[density]));
+	m_grid->setGridSize(QSize(sizes[density] + 12, sizes[density] + 12));
 	m_grid->clear();
 	m_entries.clear();
 	m_viewKeys.clear();
@@ -337,7 +372,7 @@ void LibraryTab::reload()
 	m_manage->setEnabled(m_store->isReady() && m_collection > 0);
 	const int preference = m_filter->currentIndex();
 	const auto entries = m_store->entries(m_collection);
-	// ponytail: read metadata in one pass, render 100 cards; query pages if catalogs exceed tens of thousands of pictures.
+	// ponytail: read metadata in one pass, render one page; query pages if catalogs exceed tens of thousands of pictures.
 	for (const auto &entry : entries) {
 		if ((m_collection == 0 && m_smartFilter == 1 && entry.collectionCount > 0) || (m_collection == 0 && m_smartFilter == 2 && !entry.liked) || (m_collection == 0 && m_smartFilter == 3 && !entry.favorite) || (preference == 1 && !entry.liked) || (preference == 2 && !entry.favorite)) {
 			continue;
@@ -359,11 +394,11 @@ void LibraryTab::reload()
 		m_entries.insert(entry.key, entry);
 		m_viewKeys.append(entry.key);
 	}
-	m_page = qBound(0, m_page, qMax(0, int((m_viewKeys.size() - 1) / LibraryPageSize)));
+	m_page = qBound(0, m_page, qMax(0, int((m_viewKeys.size() - 1) / m_pageSize)));
 	m_previousPage->setEnabled(m_page > 0 && !m_importing);
-	m_nextPage->setEnabled((m_page + 1) * LibraryPageSize < m_viewKeys.size() && !m_importing);
-	m_pageLabel->setText(tr("Page %1 of %2").arg(m_page + 1).arg(qMax(1, int((m_viewKeys.size() + LibraryPageSize - 1) / LibraryPageSize))));
-	const bool paged = m_viewKeys.size() > LibraryPageSize;
+	m_nextPage->setEnabled((m_page + 1) * m_pageSize < m_viewKeys.size() && !m_importing);
+	m_pageLabel->setText(tr("Page %1 of %2").arg(m_page + 1).arg(qMax(1, int((m_viewKeys.size() + m_pageSize - 1) / m_pageSize))));
+	const bool paged = m_viewKeys.size() > m_pageSize;
 	m_previousPage->setVisible(paged);
 	m_nextPage->setVisible(paged);
 	m_pageLabel->setVisible(paged);
@@ -374,7 +409,7 @@ void LibraryTab::reload()
 	} else if (m_collection == 0 && m_smartFilter == 7) {
 		m_hint->setText(tr("The picture was imported, but one or more metadata readers reported an error. Open the picture's Overview for the reason, then recheck metadata after correcting it."));
 	}
-	for (const auto &key : m_viewKeys.mid(m_page * LibraryPageSize, LibraryPageSize)) {
+	for (const auto &key : m_viewKeys.mid(m_page * m_pageSize, m_pageSize)) {
 		const auto &entry = m_entries[key];
 		QString name = entry.image.value("name").toString();
 		if (name.isEmpty()) {
@@ -392,13 +427,12 @@ void LibraryTab::reload()
 		if (entry.thumbnail.isEmpty() && !entry.image.value("local_import").toObject().value("preview_error").toString().isEmpty()) {
 			warning += tr(" · Preview unavailable");
 		}
-		QString badges = (entry.liked ? QStringLiteral("♥ ") : QString()) + (entry.favorite ? QStringLiteral("★ ") : QString());
-		if (!entry.notes.isEmpty()) {
-			badges += tr("Note · ");
-		}
-		auto *item = new QListWidgetItem(name + "\n" + source + " · " + metadataState + warning + "\n" + badges + (entry.collectionCount == 1 ? tr("1 collection") : tr("%1 collections").arg(entry.collectionCount)), m_grid);
+		auto *item = new QListWidgetItem(QString(), m_grid);
 		item->setData(Qt::UserRole, entry.key);
-		item->setToolTip(name + "\n" + source + "\n" + metadataState + "\n" + entry.tags().join(", ") + "\n" + entry.metadataErrors().join("\n") + "\n" + entry.notes);
+		const QString details = name + "\n" + source + "\n" + metadataState + warning + "\n" + entry.tags().join(", ") + "\n" + entry.metadataErrors().join("\n") + "\n" + entry.notes;
+		item->setToolTip(details);
+		item->setData(Qt::AccessibleTextRole, name);
+		item->setData(Qt::AccessibleDescriptionRole, details);
 		QPixmap thumbnail;
 		thumbnail.loadFromData(entry.thumbnail);
 		if (thumbnail.isNull()) {
@@ -457,10 +491,13 @@ void LibraryTab::updateSelection()
 		images.append(restoreImage(m_entries.value(key)));
 	}
 	m_actions->setSelection(images, keys, m_collection);
+	m_actions->setVisible(!keys.isEmpty());
+	m_more->setVisible(!keys.isEmpty());
+	m_findSource->setVisible(!keys.isEmpty());
 	m_more->setEnabled(!keys.isEmpty());
 	m_findSource->setEnabled(keys.size() == 1 && !m_importing);
 	const int total = m_viewKeys.size();
-	const QString count = total > LibraryPageSize ? tr("%1–%2 of %3 pictures").arg(m_page * LibraryPageSize + 1).arg(m_page * LibraryPageSize + m_grid->count()).arg(total)
+	const QString count = total > m_pageSize ? tr("%1–%2 of %3 pictures").arg(m_page * m_pageSize + 1).arg(m_page * m_pageSize + m_grid->count()).arg(total)
 		: (total == 1 ? tr("1 picture") : tr("%1 pictures").arg(total));
 	m_count->setText(count + (keys.isEmpty() ? QString() : tr(" · %1 selected").arg(keys.size())));
 }

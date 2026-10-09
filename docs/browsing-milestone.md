@@ -1,0 +1,15 @@
+# Dynamic browsing and clean galleries
+
+Home has three modes: saved For you, Recently saved, and opt-in Discover online. Online discovery runs at most three source-specific, single-tag searches of sixteen posts, using the existing selected sources, authentication and request throttling. Favorites have weight three, likes one; each collection uses its own ratings. Refresh rotates topic/page choices. Candidates explain the actual searched topic, not an inferred authoritative tag or a visual AI match. Missing tags remain missing. Pictures are saved only by a Library action. Collection ratings require explicit membership.
+
+Local CLIP recommendations remain local and use cached saved-image previews. They balance separate interests and rotate close matches without promoting unrelated weak matches. Online topic search does not upload pictures or require a cloud AI provider. Website permissions, login requirements and limits still apply; failures and the forty-second discovery timeout are visible.
+
+Like and Favorite are exclusive in each preference scope. Enabling either clears the other in one database statement. For legacy overlapping ratings, Favorite wins only after a unique catalog backup succeeds. Source linking uses the same precedence. Restoring a backup validates a temporary copy and leaves the selected backup unchanged.
+
+Grids show pictures; titles, source details and metadata status are in tooltips and accessible descriptions. Selection exposes actions. Density is shared across Home, Library and search, and Library supports fifty, one hundred or two hundred pictures per page. Search requests respect each source's effective page limit. Estimated tag totals do not end sequential browsing; explicit advancing cursors take precedence over stale totals. Failed sources cannot suppress another source's continuation, and merged totals count visible unique pictures without claiming an exact global total.
+
+Merged deduplication uses normalized valid MD5 values, or identical full file URLs when both records lack a checksum. Different valid checksums always retain variants, including two edits served at one URL. No visual similarity, stripped query parameters or guessed identities remove results. Displayed image objects remain stable for navigation and actions.
+
+Preview decoding is bounded by sixteen MiB, an 8192-pixel axis and sixteen million pixels. Cached pictures and missing thumbnails still have a usable tile. Retry uses real thumbnail/sample alternatives and preserves bounded redirect handling. Originals and saved ratings remain independent of a preview failure.
+
+Validation uses existing native C++/Qt tests with generated pictures and actual mocked site responses. Checks cover scope/exclusivity and legacy backups, all Library page sizes, variant preservation, cursor/count/limit handling, source failure, bounded decoding, cache rendering, keyboard actions and real online-candidate saving. Release gates also require all exact-commit CI checks, fresh portable startup, real CPU inference, staged profile preservation, and published-byte verification.

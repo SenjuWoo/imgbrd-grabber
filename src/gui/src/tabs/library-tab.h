@@ -44,6 +44,7 @@ class LibraryTab : public QWidget
 	protected:
 		void dragEnterEvent(QDragEnterEvent *event) override;
 		void dropEvent(QDropEvent *event) override;
+		void showEvent(QShowEvent *event) override;
 
 	private:
 		void scheduleReload();
@@ -67,6 +68,8 @@ class LibraryTab : public QWidget
 		QLabel *m_pageLabel;
 		QStringList m_viewKeys;
 		int m_page = 0;
+		int m_pageSize = 100;
+		QComboBox *m_density, *m_pageSizeControl;
 		QListWidget *m_grid;
 		QLineEdit *m_search;
 		QComboBox *m_filter;

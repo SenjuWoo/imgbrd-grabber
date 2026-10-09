@@ -45,9 +45,11 @@ Page::Page(Profile *profile, Site *site, const QList<Site*> &sites, SearchQuery 
 		// Get the list of all enabled modifiers
 		QStringList modifiers = QStringList();
 		for (Site *ste : sites) {
-			modifiers.append(ste->getApis().first()->modifiers());
+			if (!ste->getApis().isEmpty()) {
+				modifiers.append(ste->getApis().first()->modifiers());
+			}
 		}
-		const QStringList mods = m_site->getApis().first()->modifiers();
+		const QStringList mods = m_site->getApis().isEmpty() ? QStringList() : m_site->getApis().first()->modifiers();
 		for (const QString &mod : mods) {
 			modifiers.removeAll(mod);
 		}
@@ -65,18 +67,19 @@ Page::Page(Profile *profile, Site *site, const QList<Site*> &sites, SearchQuery 
 
 	// Generate pages
 	PostFilter postFilter(postFiltering);
-	m_siteApis = m_site->getLoggedInApis();
-	m_pageApis.reserve(m_siteApis.count());
-	for (Api *api : qAsConst(m_siteApis)) {
+	const QList<Api*> availableApis = m_site->getLoggedInApis();
+	m_pageApis.reserve(availableApis.count());
+	for (Api *api : availableApis) {
 		// Only use APIs supporting the requested endpoint
 		if (!m_query.endpoint.isEmpty() && !api->endpoints().contains(m_query.endpoint)) {
 			continue;
 		}
 
-		auto *pageApi = new PageApi(this, profile, m_site, api, m_query, page, limit, postFilter, smart, parent, pool, lastPageInformation);
+		auto *pageApi = new PageApi(this, profile, m_site, api, m_query, page, limit, postFilter, smart, this, pool, lastPageInformation);
 		if (m_pageApis.count() == 0) {
 			connect(pageApi, &PageApi::httpsRedirect, this, &Page::httpsRedirectSlot);
 		}
+		m_siteApis.append(api);
 		m_pageApis.append(pageApi);
 		if (api->getName() == QLatin1String("Html") && m_regexApi < 0) {
 			m_regexApi = m_pageApis.count() - 1;
@@ -117,7 +120,7 @@ void Page::fallback(bool loadIfPossible)
 
 PageInformation Page::pageInformation() const
 {
-	return m_pageApis[m_currentApi]->pageInformation();
+	return currentApi() ? currentApi()->pageInformation() : PageInformation{};
 }
 
 void Page::setLastPage(const PageInformation& info)
@@ -139,12 +142,12 @@ void Page::load(bool rateLimit)
 		return;
 	}
 
-	connect(m_pageApis[m_currentApi], &PageApi::finishedLoading, this, &Page::loadFinished);
+	connect(m_pageApis[m_currentApi], &PageApi::finishedLoading, this, &Page::loadFinished, Qt::UniqueConnection);
 	m_pageApis[m_currentApi]->load(rateLimit);
 }
 void Page::loadFinished(PageApi *api, PageApi::LoadResult status)
 {
-	if (api != m_pageApis[m_currentApi]) {
+	if (api != currentApi()) {
 		return;
 	}
 
@@ -175,7 +178,7 @@ void Page::loadTags()
 		return;
 	}
 
-	connect(m_pageApis[m_regexApi], &PageApi::finishedLoading, this, &Page::loadTagsFinished);
+	connect(m_pageApis[m_regexApi], &PageApi::finishedLoading, this, &Page::loadTagsFinished, Qt::UniqueConnection);
 	m_pageApis[m_regexApi]->load();
 }
 void Page::loadTagsFinished(PageApi *api, PageApi::LoadResult status)
@@ -208,23 +211,51 @@ void Page::clear()
 	}
 }
 
+PageApi *Page::currentApi() const
+{
+	return m_pageApis.value(m_currentApi, nullptr);
+}
+
 Site *Page::site() const { return m_site; }
 const QString &Page::website() const { return m_website; }
-const QString &Page::wiki() const { return m_pageApis[m_regexApi < 0 ? m_currentApi : m_regexApi]->wiki(); }
+const QString &Page::wiki() const
+{
+	static const QString empty;
+	const auto *api = m_regexApi < 0 ? currentApi() : m_pageApis[m_regexApi];
+	return api ? api->wiki() : empty;
+}
 const SearchQuery &Page::query() const { return m_query; }
 const QStringList &Page::search() const { return m_search; }
 const QStringList &Page::errors() const { return m_errors; }
-int Page::imagesPerPage() const { return m_imagesPerPage; }
+int Page::imagesPerPage() const { return currentApi() ? currentApi()->imagesPerPage() : qMax(1, m_imagesPerPage); }
 int Page::page() const { return m_page; }
-int Page::pageImageCount() const { return m_pageApis[m_currentApi]->pageImageCount(); }
-int Page::filteredImageCount() const { return m_pageApis[m_currentApi]->filteredImageCount(); }
-const QList<QSharedPointer<Image>> &Page::images() const { return m_pageApis[m_currentApi]->images(); }
-const QUrl &Page::url() const { return m_pageApis[m_currentApi]->url(); }
-const QUrl &Page::friendlyUrl() const { return m_pageApis[m_regexApi < 0 ? m_currentApi : m_regexApi]->url(); }
-const QList<Tag> &Page::tags() const { return m_pageApis[m_regexApi < 0 || m_pageApis[m_regexApi]->tags().isEmpty() ? m_currentApi : m_regexApi]->tags(); }
-int Page::highLimit() const { return m_pageApis[m_currentApi]->highLimit(); }
-bool Page::hasNext() const { return m_pageApis[m_currentApi]->hasNext(); }
-bool Page::isLoaded() const { return m_pageApis[m_currentApi]->isLoaded(); }
+int Page::pageImageCount() const { return currentApi() ? currentApi()->pageImageCount() : 0; }
+int Page::filteredImageCount() const { return currentApi() ? currentApi()->filteredImageCount() : 0; }
+const QList<QSharedPointer<Image>> &Page::images() const
+{
+	static const QList<QSharedPointer<Image>> empty;
+	return currentApi() ? currentApi()->images() : empty;
+}
+const QUrl &Page::url() const
+{
+	static const QUrl empty;
+	return currentApi() ? currentApi()->url() : empty;
+}
+const QUrl &Page::friendlyUrl() const
+{
+	static const QUrl empty;
+	const auto *api = m_regexApi < 0 ? currentApi() : m_pageApis[m_regexApi];
+	return api ? api->url() : empty;
+}
+const QList<Tag> &Page::tags() const
+{
+	static const QList<Tag> empty;
+	const auto *api = m_regexApi < 0 || m_pageApis[m_regexApi]->tags().isEmpty() ? currentApi() : m_pageApis[m_regexApi];
+	return api ? api->tags() : empty;
+}
+int Page::highLimit() const { return currentApi() ? currentApi()->highLimit() : 0; }
+bool Page::hasNext() const { return currentApi() && currentApi()->hasNext(); }
+bool Page::isLoaded() const { return currentApi() && currentApi()->isLoaded(); }
 bool Page::isValid() const { return !m_pageApis.isEmpty(); }
 
 QMap<QString, QUrl> Page::urls() const
@@ -253,6 +284,9 @@ bool Page::hasSource() const
 
 int Page::imagesCount(bool guess) const
 {
+	if (!currentApi()) {
+		return -1;
+	}
 	if (m_regexApi >= 0 && !m_pageApis[m_currentApi]->isImageCountSure()) {
 		const int count = m_pageApis[m_regexApi]->imagesCount(guess);
 		if (count >= 0) {
@@ -263,6 +297,9 @@ int Page::imagesCount(bool guess) const
 }
 int Page::maxImagesCount() const
 {
+	if (!currentApi()) {
+		return -1;
+	}
 	if (m_regexApi >= 0 && !m_pageApis[m_currentApi]->isImageCountSure()) {
 		const int count = m_pageApis[m_regexApi]->maxImagesCount();
 		if (count >= 0) {
@@ -273,6 +310,9 @@ int Page::maxImagesCount() const
 }
 int Page::pagesCount(bool guess) const
 {
+	if (!currentApi()) {
+		return -1;
+	}
 	if (m_regexApi >= 0 && !m_pageApis[m_currentApi]->isPageCountSure()) {
 		const int count = m_pageApis[m_regexApi]->pagesCount(guess);
 		if (count >= 0) {
@@ -283,6 +323,9 @@ int Page::pagesCount(bool guess) const
 }
 int Page::maxPagesCount() const
 {
+	if (!currentApi()) {
+		return -1;
+	}
 	if (m_regexApi >= 0 && !m_pageApis[m_currentApi]->isPageCountSure()) {
 		const int count = m_pageApis[m_regexApi]->maxPagesCount();
 		if (count >= 0) {

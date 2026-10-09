@@ -72,6 +72,7 @@ class Page : public QObject
 		void httpsRedirect(Page*);
 
 	private:
+		PageApi *currentApi() const;
 		Site *m_site;
 		int m_currentApi;
 		QList<Api*> m_siteApis;

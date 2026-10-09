@@ -1,4 +1,5 @@
 #include "ui/QBouton.h"
+#include <QKeyEvent>
 #include <QPainter>
 #include <QPainterPath>
 #include <QPaintEvent>
@@ -11,12 +12,19 @@ QBouton::QBouton(QVariant id, bool resizeInsteadOfCropping, bool smartSizeHint, 
 
 void QBouton::scale(const QPixmap &image, QSize bounds)
 {
-	const QSize size = image.size().scaled(bounds, Qt::KeepAspectRatio);
-	if (size != image.size()) {
-		setIcon(image.scaled(bounds, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-	} else {
-		setIcon(image);
+	if (image.isNull() || !bounds.isValid()) {
+		setIcon(QIcon());
+		setIconSize(QSize());
+		return;
 	}
+	const QSize size = image.deviceIndependentSize().toSize().scaled(bounds, Qt::KeepAspectRatio);
+	QPixmap scaled = image.scaled(size * image.devicePixelRatio(), Qt::KeepAspectRatio, Qt::SmoothTransformation);
+	QIcon icon;
+	icon.addPixmap(scaled, QIcon::Normal, QIcon::Off);
+	icon.addPixmap(scaled, QIcon::Normal, QIcon::On);
+	icon.addPixmap(scaled, QIcon::Selected, QIcon::Off);
+	icon.addPixmap(scaled, QIcon::Selected, QIcon::On);
+	setIcon(icon);
 	setIconSize(size);
 	resize(size);
 }
@@ -57,7 +65,7 @@ void QBouton::paintEvent(QPaintEvent *event)
 	int h = iconSize.height() + 2 * p;
 
 	// Ignore invalid images
-	if (w == 0 || h == 0) {
+	if (iconSize.width() <= 0 || iconSize.height() <= 0) {
 		return;
 	}
 
@@ -69,11 +77,7 @@ void QBouton::paintEvent(QPaintEvent *event)
 
 	// Draw image
 	const QIcon::Mode mode = this->isChecked() ? QIcon::Selected : QIcon::Normal;
-	if (w > h) {
-		icon().paint(&painter, x + p, y + p, w - 2 * p, w - 2 * p, Qt::AlignLeft | Qt::AlignTop, mode);
-	} else {
-		icon().paint(&painter, x + p, y + p, h - 2 * p, h - 2 * p, Qt::AlignLeft | Qt::AlignTop, mode);
-	}
+	icon().paint(&painter, x + p, y + p, w - 2 * p, h - 2 * p, Qt::AlignCenter, mode);
 
 	// Clip borders overflows
 	painter.setClipRect(x, y, w, h);
@@ -131,8 +135,11 @@ QSize QBouton::getIconSize(int regionWidth, int regionHeight, bool wOnly) const
 	int w = iconSize().width();
 	int h = iconSize().height();
 
+	if (w <= 0 || h <= 0 || regionWidth <= 0 || (!wOnly && regionHeight <= 0)) {
+		return {};
+	}
 	if (wOnly && w <= regionWidth) {
-		return iconSize() / devicePixelRatio();
+		return iconSize();
 	}
 
 	// Calculate ratio to resize by keeping proportions
@@ -184,6 +191,7 @@ void QBouton::mousePressEvent(QMouseEvent *event)
 	}
 
 	if (event->button() == Qt::LeftButton) {
+		setFocus(Qt::MouseFocusReason);
 		const bool ctrlPressed = event->modifiers().testFlag(Qt::ControlModifier);
 		if (ctrlPressed != m_invertToggle) {
 			this->toggle();
@@ -210,4 +218,23 @@ void QBouton::mousePressEvent(QMouseEvent *event)
 	}
 
 	event->accept();
+}
+
+void QBouton::keyPressEvent(QKeyEvent *event)
+{
+	if (event->key() == Qt::Key_Space && isCheckable()) {
+		toggle();
+		const bool range = event->modifiers().testFlag(Qt::ShiftModifier);
+		emit toggled(m_id, isChecked(), range);
+		emit toggled(m_id.toString(), isChecked(), range);
+		emit toggled(m_id.toInt(), isChecked(), range);
+		event->accept();
+	} else if (event->key() == Qt::Key_Return || event->key() == Qt::Key_Enter || event->key() == Qt::Key_Space) {
+		emit appui(m_id);
+		emit appui(m_id.toString());
+		emit appui(m_id.toInt());
+		event->accept();
+	} else {
+		QPushButton::keyPressEvent(event);
+	}
 }

@@ -87,7 +87,7 @@ QNetworkReply *CustomNetworkAccessManager::makeTestReply(const QNetworkRequest &
 
 			// LCOV_EXCL_START
 			if (!f.open(QFile::ReadOnly)) {
-				return nullptr;
+				return makeErrorReply(request, "404");
 			}
 			// LCOV_EXCL_STOP
 		}

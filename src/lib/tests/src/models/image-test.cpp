@@ -1,5 +1,6 @@
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QScopedPointer>
 #include <QSettings>
@@ -101,6 +102,28 @@ TEST_CASE("Image")
 		details["date"] = "2016-08-26T16:26:30+01:00";
 		img = ImageFactory::build(site, details, profile);
 		REQUIRE(img->createdAt().toString("yyyy-MM-dd HH:mm:ss") == QString("2016-08-26 16:26:30"));
+	}
+
+	SECTION("Validity accepts full images without thumbnails and rejects malformed URLs")
+	{
+		Image original(site, {{"id", "7"}, {"file_url", "https://example.com/original.png"}}, profile);
+		REQUIRE(original.url(Image::Size::Thumbnail).isEmpty());
+		REQUIRE(original.name().isEmpty());
+		REQUIRE(original.isValid());
+		original.setUrl(QUrl("https://[broken-host/original.png"));
+		REQUIRE_FALSE(original.url().isValid());
+		REQUIRE_FALSE(original.isValid());
+		original.setUrl(QUrl());
+		REQUIRE_FALSE(original.isValid());
+		original.setUrl(QUrl::fromLocalFile(QDir::tempPath() + "/local picture.png"));
+		REQUIRE(original.isValid());
+
+		Image thumbnail(site, {{"preview_url", "https://example.com/preview.png"}}, profile);
+		REQUIRE(thumbnail.isValid());
+		Image namedGallery(site, {{"type", "gallery"}, {"name", "A gallery"}}, profile);
+		REQUIRE(namedGallery.isValid());
+		Image uninitialized;
+		REQUIRE_FALSE(uninitialized.isValid());
 	}
 
 	SECTION("Copy")
@@ -372,6 +395,23 @@ TEST_CASE("Image")
 		tokens = img->tokens(profile);
 		REQUIRE(tokens["grabber"].value().toStringList().contains("favorited"));
 		profile->removeFavorite(fav);
+	}
+
+	SECTION("Detached preview coloring preserves the saved search")
+	{
+		Favorite favorite("tag2");
+		profile->addFavorite(favorite);
+		QJsonObject json;
+		img->write(json);
+		Image detached(profile);
+		REQUIRE(detached.read(json, profile->getSites()));
+		REQUIRE(detached.page() == nullptr);
+		REQUIRE(detached.color() == QColor("#ffc0cb"));
+		json["search"] = QJsonArray::fromStringList({"tag2"});
+		Image exactSearch(profile);
+		REQUIRE(exactSearch.read(json, profile->getSites()));
+		REQUIRE(exactSearch.color() == QColor(204, 204, 0));
+		profile->removeFavorite(favorite);
 	}
 
 	SECTION("Serialization")

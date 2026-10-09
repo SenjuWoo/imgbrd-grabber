@@ -1,4 +1,6 @@
 #include <QApplication>
+#include <QJsonArray>
+#include <QImage>
 #include <QComboBox>
 #include <QFile>
 #include <QFileInfo>
@@ -21,8 +23,11 @@
 #include <QTest>
 #include <QToolButton>
 #include "catch.h"
+#include "custom-network-access-manager.h"
+#include "models/site.h"
 #include "image-library-actions.h"
 #include "models/image.h"
+#include "models/page.h"
 #include "models/profile.h"
 #include "source-helpers.h"
 #include "tabs/home-tab.h"
@@ -175,6 +180,11 @@ TEST_CASE("Home keeps recommendation actions inside their explicit preference sc
 	REQUIRE(mode != nullptr);
 	REQUIRE(grid->count() == 1);
 	REQUIRE(homeItem(grid, forestMatch) != nullptr);
+	REQUIRE(grid->selectedItems().isEmpty());
+	REQUIRE_FALSE(home.findChild<QToolButton*>("libraryLike")->isVisible());
+	REQUIRE_FALSE(home.findChild<QPushButton*>("homeViewPicture")->isVisible());
+	REQUIRE(grid->item(0)->text().isEmpty());
+	REQUIRE(grid->item(0)->data(Qt::AccessibleTextRole).toString() == "Forest river");
 	scope->setCurrentIndex(scope->findData(collection));
 	REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 2; }, 3000));
 	REQUIRE(homeItem(grid, forestMatch) == nullptr);
@@ -283,7 +293,7 @@ TEST_CASE("Home explains tagless ratings and keeps recent cards bounded", "[libr
 	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
 	const QString seed = saveHomePicture(profile.data(), 301, "Untitled favorite", {});
 	REQUIRE(profile->library()->setFavorite(seed, true));
-	for (int index = 0; index < 30; ++index) { REQUIRE(!saveHomePicture(profile.data(), 302 + index, "Saved picture", {}).isEmpty()); }
+	for (int index = 0; index < 60; ++index) { REQUIRE(!saveHomePicture(profile.data(), 302 + index, "Saved picture", {}).isEmpty()); }
 	HomeTab home(profile.data(), nullptr);
 	auto *empty = home.findChild<QLabel*>("homeEmpty");
 	REQUIRE(empty->text().contains("likes and favorites are saved"));
@@ -291,8 +301,22 @@ TEST_CASE("Home explains tagless ratings and keeps recent cards bounded", "[libr
 	auto *mode = home.findChild<QComboBox*>("homeMode");
 	auto *grid = home.findChild<QListWidget*>("homeGrid");
 	mode->setCurrentIndex(1);
+	REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 48; }, 3000));
+	REQUIRE(grid->item(0)->text().isEmpty());
+	REQUIRE(grid->item(0)->toolTip().contains("Needs tags"));
+	auto *count = home.findChild<QComboBox*>("homePictureCount");
+	count->setCurrentIndex(count->findData(24));
 	REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 24; }, 3000));
-	REQUIRE(grid->item(0)->text().contains("Needs tags"));
+	count->setCurrentIndex(count->findData(96));
+	REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 61; }, 3000));
+	auto *density = home.findChild<QComboBox*>("homeDensity");
+	density->setCurrentIndex(0);
+	REQUIRE(grid->iconSize() == QSize(128, 128));
+	REQUIRE(grid->gridSize() == QSize(140, 140));
+	density->setCurrentIndex(2);
+	REQUIRE(grid->iconSize() == QSize(256, 256));
+	REQUIRE(profile->getSettings()->value("Gallery/density").toInt() == 2);
+	REQUIRE(profile->getSettings()->value("Home/pictureCount").toInt() == 96);
 	REQUIRE(profile->library()->entry(seed).favorite);
 }
 
@@ -331,4 +355,170 @@ TEST_CASE("Home and movable search tabs retain named and numeric session identit
 	REQUIRE(tabs.indexOf(second) != current.toInt());
 	REQUIRE(restored.value(current.toInt())->tags() == "city");
 	qDeleteAll(restored);
+}
+
+TEST_CASE("Home refresh rotates suitable pictures and reveals actions on keyboard selection", "[library][home]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	const QString seed = saveHomePicture(profile.data(), 501, "Forest favorite", "forest green");
+	REQUIRE(profile->library()->setFavorite(seed, true));
+	for (int index = 0; index < 60; ++index) {
+		saveHomePicture(profile.data(), 502 + index, "Forest " + QString::number(index), "forest green");
+	}
+	HomeTab home(profile.data(), nullptr);
+	home.resize(900, 700);
+	home.show();
+	QApplication::processEvents();
+	auto *grid = home.findChild<QListWidget*>("homeGrid");
+	auto *refresh = home.findChild<QPushButton*>("homeRefreshSuggestions");
+	REQUIRE(grid->count() == 48);
+	QStringList original;
+	for (int i = 0; i < grid->count(); ++i) { original.append(grid->item(i)->data(Qt::UserRole).toString()); }
+	REQUIRE_FALSE(home.findChild<QToolButton*>("libraryLike")->isVisible());
+	QTest::mouseClick(refresh, Qt::LeftButton);
+	REQUIRE(QTest::qWaitFor([grid, original]() {
+		QStringList refreshed;
+		for (int i = 0; i < grid->count(); ++i) { refreshed.append(grid->item(i)->data(Qt::UserRole).toString()); }
+		return refreshed != original;
+	}, 3000));
+	REQUIRE(grid->selectedItems().isEmpty());
+	grid->setFocus();
+	QTest::keyClick(grid, Qt::Key_Down);
+	REQUIRE(QTest::qWaitFor([grid]() { return !grid->selectedItems().isEmpty(); }, 3000));
+	REQUIRE(home.findChild<QToolButton*>("libraryLike")->isVisible());
+	REQUIRE(home.findChild<QToolButton*>("libraryFavorite")->isVisible());
+	REQUIRE(home.findChild<QLabel*>("homeSelectionHint")->text().contains("Shared tags"));
+	grid->clearSelection();
+	REQUIRE_FALSE(home.findChild<QToolButton*>("libraryLike")->isVisible());
+	REQUIRE_FALSE(home.findChild<QPushButton*>("homeHideSuggestion")->isVisible());
+	REQUIRE_FALSE(profile->library()->entry(seed).liked);
+	REQUIRE(profile->library()->entry(seed).favorite);
+}
+
+TEST_CASE("Home discovers real source candidates when every saved picture is rated", "[library][home][discovery]")
+{
+	auto clearReplies = qScopeGuard([]() { CustomNetworkAccessManager::NextFiles.clear(); });
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	auto *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	site->setSetting("sources/usedefault", false, true);
+	site->setSetting("sources/source_1", "Json", "Xml");
+	site->setSetting("sources/source_2", "", "Json");
+	site->setSetting("sources/source_3", "", "Regex");
+	site->setSetting("sources/source_4", "", "Rss");
+	site->loadConfig();
+	profile->getSettings()->setValue("sites", QStringList{site->url()});
+	const QString globalSeed = saveHomePicture(profile.data(), 801, "Forest favorite", "forest");
+	REQUIRE(profile->library()->setFavorite(globalSeed, true));
+	qint64 collection = 0;
+	QString queryTag = "forest";
+	bool tagless = false;
+	bool failFirst = false;
+	bool cancelBeforeReply = false;
+	SECTION("Failed source requests are visible and refresh can recover") { failFirst = true; }
+	SECTION("Changing mode cancels pending discovery without stale results") { cancelBeforeReply = true; }
+	SECTION("Library-wide discovery saves the actual source only when rated") {}
+	SECTION("Collection discovery requires membership and never changes global ratings")
+	{
+		collection = profile->library()->createCollection("City only");
+		const QString scopedSeed = saveHomePicture(profile.data(), 802, "City favorite", "city");
+		REQUIRE(profile->library()->setLiked(scopedSeed, true));
+		REQUIRE(profile->library()->addToCollection(scopedSeed, collection));
+		REQUIRE(profile->library()->setFavorite(scopedSeed, true, collection));
+		queryTag = "city";
+		tagless = true;
+	}
+	HomeTab home(profile.data(), nullptr);
+	home.resize(1100, 850);
+	home.show();
+	QApplication::processEvents();
+	auto *grid = home.findChild<QListWidget*>("homeGrid");
+	REQUIRE(grid != nullptr);
+	REQUIRE(grid->count() == 0);
+	if (collection > 0) {
+		auto *scope = home.findChild<QComboBox*>("homeScope");
+		scope->setCurrentIndex(scope->findData(collection));
+		QApplication::processEvents();
+	}
+	const QString responsePath = directory.filePath("discovery.json");
+	QFile response(responsePath);
+	REQUIRE(response.open(QIODevice::WriteOnly));
+	const QJsonArray payload {QJsonObject {
+		{"id", 901}, {"md5", "1234567890abcdef1234567890abcdef"},
+		{"file_url", "https://test.invalid/discovered.png"}, {"tag_string", tagless ? QString() : queryTag}
+	}};
+	REQUIRE(response.write(QJsonDocument(payload).toJson()) > 0);
+	response.close();
+	const QString previewPath = directory.filePath("discovery-preview.png");
+	QImage preview(4, 4, QImage::Format_RGB32);
+	preview.fill(Qt::blue);
+	REQUIRE(preview.save(previewPath));
+	auto queueResponse = [&]() {
+		CustomNetworkAccessManager::NextFiles.enqueue(responsePath);
+		CustomNetworkAccessManager::NextFiles.enqueue(previewPath);
+	};
+	if (failFirst) { CustomNetworkAccessManager::NextFiles.enqueue("500"); }
+	else { queueResponse(); }
+	auto *mode = home.findChild<QComboBox*>("homeMode");
+	mode->setCurrentIndex(2);
+	if (cancelBeforeReply) {
+		home.reload();
+		QPointer<Page> cancelled = home.findChild<Page*>();
+		REQUIRE(!cancelled.isNull());
+		mode->setCurrentIndex(1);
+		REQUIRE(QTest::qWaitFor([&cancelled]() { return cancelled.isNull(); }, 3000));
+		REQUIRE(grid->count() == 1);
+		REQUIRE(grid->item(0)->data(Qt::UserRole).toString() == globalSeed);
+		CustomNetworkAccessManager::NextFiles.clear();
+		queueResponse();
+		mode->setCurrentIndex(2);
+	}
+	if (failFirst) {
+		auto *hint = home.findChild<QLabel*>("homeHint");
+		REQUIRE(QTest::qWaitFor([hint]() { return hint->text().contains("could not load this topic"); }, 5000));
+		REQUIRE(grid->count() == 0);
+		REQUIRE(hint->text().contains(site->url()));
+		queueResponse();
+		QTest::mouseClick(home.findChild<QPushButton*>("homeRefreshSuggestions"), Qt::LeftButton);
+	}
+	REQUIRE(QTest::qWaitFor([grid, queryTag]() {
+		return grid->count() == 1 && grid->item(0)->toolTip().contains("Searched " + queryTag)
+			&& !grid->item(0)->toolTip().contains("Preview unavailable or still loading");
+	}, 5000));
+	const QString candidate = grid->item(0)->data(Qt::UserRole).toString();
+	REQUIRE_FALSE(candidate.isEmpty());
+	REQUIRE_FALSE(profile->library()->contains(candidate));
+	REQUIRE(grid->item(0)->text().isEmpty());
+	REQUIRE(grid->item(0)->toolTip().contains("Searched " + queryTag));
+	REQUIRE(grid->item(0)->toolTip().contains("not been analyzed by local AI"));
+	if (tagless) { REQUIRE(grid->item(0)->toolTip().contains("Tags unavailable")); }
+	grid->setCurrentRow(0);
+	grid->currentItem()->setSelected(true);
+	auto *like = home.findChild<QToolButton*>("libraryLike");
+	REQUIRE(like->isVisible());
+	REQUIRE(like->isEnabled() == (collection == 0));
+	if (collection > 0) {
+		QTest::mouseClick(like, Qt::LeftButton);
+		REQUIRE_FALSE(profile->library()->contains(candidate));
+		QTest::mouseClick(home.findChild<QPushButton*>("homeAddToCollection"), Qt::LeftButton);
+		REQUIRE(QTest::qWaitFor([like]() { return like->isEnabled(); }, 3000));
+		REQUIRE(profile->library()->contains(candidate, collection));
+	}
+	QTest::mouseClick(like, Qt::LeftButton);
+	const auto saved = profile->library()->entry(candidate, collection);
+	REQUIRE(saved.liked);
+	REQUIRE_FALSE(saved.favorite);
+	REQUIRE(saved.image.value("website").toString() == site->url());
+	REQUIRE(saved.image.value("id").toString() == "901");
+	REQUIRE(saved.tags() == (tagless ? QStringList() : QStringList{queryTag}));
+	if (collection > 0) { REQUIRE_FALSE(profile->library()->entry(candidate).liked); }
+	REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 0; }, 3000));
+	REQUIRE(profile->library()->entry(globalSeed).favorite);
+	REQUIRE_FALSE(profile->library()->entry(globalSeed).liked);
+	home.findChild<QComboBox*>("homeMode")->setCurrentIndex(1);
+	REQUIRE(QTest::qWaitFor([grid]() { return grid->count() >= 2; }, 3000));
 }

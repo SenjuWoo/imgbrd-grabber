@@ -1115,7 +1115,7 @@ QColor Image::color() const
 	// Favorited (except for exact favorite search)
 	auto favorites = m_profile->getFavorites();
 	for (const Tag &tag : m_tags) {
-		if (!m_parent->search().contains(tag.text())) {
+		if (!m_search.contains(tag.text())) {
 			for (const Favorite &fav : favorites) {
 				if (fav.getName() == tag.text()) {
 					return QColor(m_settings->value("Coloring/Borders/favorites", "#ffc0cb").toString());
@@ -1438,7 +1438,9 @@ QString Image::postSave(const QString &path, Size size, SaveResult res, bool add
 
 bool Image::isValid() const
 {
-	return !url(Image::Size::Thumbnail).isEmpty()
+	const auto thumbnail = m_sizes.value(Image::Size::Thumbnail);
+	return (!m_url.isEmpty() && m_url.isValid())
+		|| (thumbnail && !thumbnail->url.isEmpty() && thumbnail->url.isValid())
 		|| !m_name.isEmpty();
 }
 

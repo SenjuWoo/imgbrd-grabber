@@ -1,4 +1,5 @@
 #include <QApplication>
+#include <QComboBox>
 #include <QFile>
 #include <QScrollBar>
 #include <QWheelEvent>
@@ -66,6 +67,8 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	REQUIRE(viewerActions.findChild<QToolButton*>("libraryLike")->isChecked());
 	auto *grid = library.findChild<QListWidget*>("libraryGrid");
 	REQUIRE(grid->count() == 1);
+	REQUIRE(grid->item(0)->text().isEmpty());
+	REQUIRE_FALSE(library.findChild<QToolButton*>("libraryLike")->isVisible());
 	REQUIRE(grid->item(0)->icon().pixmap(QSize(224, 160), QIcon::Selected).toImage().pixelColor(112, 70) == QColor("#406b59"));
 	QTest::mouseClick(star, Qt::LeftButton);
 	QApplication::processEvents();
@@ -88,14 +91,15 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	QApplication::processEvents();
 	REQUIRE(profile->library()->entry(key, collection).favorite);
 	REQUIRE(!profile->library()->entry(key, collection).liked);
-	REQUIRE(profile->library()->entry(key).liked);
+	REQUIRE_FALSE(profile->library()->entry(key).liked);
 	ImageContextMenu menu(profile->getSettings(), image, nullptr);
 	auto *menuLike = menu.findChild<QAction*>("libraryLikeAction");
 	REQUIRE(menuLike != nullptr);
-	REQUIRE(menuLike->isChecked());
+	REQUIRE_FALSE(menuLike->isChecked());
 	menuLike->trigger();
 	QApplication::processEvents();
-	REQUIRE(!like->isChecked());
+	REQUIRE(like->isChecked());
+	REQUIRE_FALSE(star->isChecked());
 	REQUIRE(profile->library()->entry(key, collection).favorite);
 	library.findChild<QLineEdit*>("librarySearch")->setText("missing tag");
 	REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 0; }, 3000));
@@ -170,7 +174,12 @@ TEST_CASE("Large Library galleries keep the final picture reachable", "[library]
 	ThemeLoader theme(QFileInfo(QString::fromUtf8(__FILE__)).absolutePath() + "/../../dist/common/themes/", profile->getSettings());
 	REQUIRE(theme.setTheme("Tokyo Night"));
 	LibraryTab library(profile.data(), nullptr);
+	for (int pageSize : {50, 100, 200}) {
 	for (const QSize &size : {QSize(900, 660), QSize(1500, 820)}) {
+		library.showView();
+		auto *pageControl = library.findChild<QComboBox*>("libraryPageSize");
+		REQUIRE(pageControl != nullptr);
+		pageControl->setCurrentIndex(pageControl->findData(pageSize));
 		library.resize(size);
 		library.show();
 		QApplication::processEvents();
@@ -181,7 +190,7 @@ TEST_CASE("Large Library galleries keep the final picture reachable", "[library]
 		REQUIRE(next != nullptr);
 		REQUIRE(previous != nullptr);
 		do {
-			REQUIRE(grid->count() <= 100);
+			REQUIRE(grid->count() <= pageSize);
 			for (int index = 0; index < grid->count(); ++index) {
 				const auto key = grid->item(index)->data(Qt::UserRole).toString();
 				REQUIRE_FALSE(seen.contains(key));
@@ -211,7 +220,8 @@ TEST_CASE("Large Library galleries keep the final picture reachable", "[library]
 		library.findChild<QLineEdit*>("librarySearch")->setText("no_such_tag");
 		REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 0; }, 3000));
 		library.findChild<QLineEdit*>("librarySearch")->clear();
-		REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 100; }, 3000));
+		REQUIRE(QTest::qWaitFor([grid, pageSize]() { return grid->count() == pageSize; }, 3000));
 		REQUIRE_FALSE(previous->isEnabled());
+	}
 	}
 }

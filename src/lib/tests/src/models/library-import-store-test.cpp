@@ -93,6 +93,7 @@ TEST_CASE("Source linking merges catalog state and keeps one stable identity", "
 	REQUIRE(store->setNotes(key, "First"));
 	REQUIRE(store->setNotes(online, "Second"));
 	REQUIRE(store->setLiked(online, true, a));
+	REQUIRE(store->setLiked(online, true, b));
 	REQUIRE(store->setFavorite(key, true, a));
 	REQUIRE(store->setNotes(key, "Local", a));
 	REQUIRE(store->setNotes(online, "Remote", a));
@@ -101,15 +102,17 @@ TEST_CASE("Source linking merges catalog state and keeps one stable identity", "
 	REQUIRE(store->entries().size() == 1);
 	REQUIRE(store->keyForImage(source) == key);
 	REQUIRE_FALSE(store->contains(online));
-	REQUIRE(store->entry(key).liked);
+	REQUIRE_FALSE(store->entry(key).liked);
 	REQUIRE(store->entry(key).favorite);
 	REQUIRE(store->entry(key).notes.contains("First"));
 	REQUIRE(store->entry(key).notes.contains("Second"));
-	REQUIRE(store->entry(key, a).liked);
+	REQUIRE_FALSE(store->entry(key, a).liked);
 	REQUIRE(store->entry(key, a).favorite);
 	REQUIRE(store->entry(key, a).notes.contains("Local"));
 	REQUIRE(store->entry(key, a).notes.contains("Remote"));
 	REQUIRE(store->entry(key).collectionCount == 2);
+	REQUIRE(store->entry(key, b).liked);
+	REQUIRE_FALSE(store->entry(key, b).favorite);
 	REQUIRE(store->entry(key).localPaths.contains(file));
 	REQUIRE(store->entry(key).image.value("local_import").toObject().value("sha256").toString() == local.sha256);
 	REQUIRE(store->saveImage(source) == key);

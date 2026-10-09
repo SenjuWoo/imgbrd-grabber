@@ -226,7 +226,7 @@ void LibraryRecommendations::invalidate(const QString &key)
 	emit changed();
 }
 
-LibraryRecommendationResult LibraryRecommendations::recommendations(qint64 scope, const QDate &day, int limit)
+LibraryRecommendationResult LibraryRecommendations::recommendations(qint64 scope, const QDate &day, int limit, quint64 rotation)
 {
 	const auto candidates = m_profile->library()->entries();
 	QHash<QString, QVector<float>> currentVectors;
@@ -236,8 +236,7 @@ LibraryRecommendationResult LibraryRecommendations::recommendations(qint64 scope
 		}
 	}
 	const auto seeds = scope > 0 ? m_profile->library()->entries(scope) : candidates;
-	const auto hiddenList = m_profile->getSettings()->value(hiddenSetting(scope)).toStringList();
-	return LibraryRecommender::rank(candidates, seeds, currentVectors, scope, day, limit, QSet<QString>(hiddenList.begin(), hiddenList.end()));
+	return LibraryRecommender::rank(candidates, seeds, currentVectors, scope, day, limit, hiddenKeys(scope), rotation);
 }
 
 void LibraryRecommendations::startIndexing()
@@ -384,4 +383,10 @@ void LibraryRecommendations::downloadModel()
 		}
 	});
 	emit changed();
+}
+
+QSet<QString> LibraryRecommendations::hiddenKeys(qint64 scope) const
+{
+	const auto keys = m_profile->getSettings()->value(hiddenSetting(scope)).toStringList();
+	return QSet<QString>(keys.begin(), keys.end());
 }

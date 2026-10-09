@@ -1,3 +1,4 @@
+#include <QDir>
 #include <QFile>
 #include <QJsonObject>
 #include <QPixmap>
@@ -167,4 +168,169 @@ TEST_CASE("Library preserves corrupt and unrecognized databases", "[library]")
 		REQUIRE(bytes.open(QIODevice::ReadOnly));
 		REQUIRE(bytes.readAll() == before);
 	}
+}
+
+TEST_CASE("Library ratings are exclusive and independent in every scope", "[library]")
+{
+	QTemporaryDir directory;
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	Image image(site, {{"id", "72"}, {"file_url", "https://test.invalid/exclusive.png"}}, profile.data());
+	const QString path = directory.filePath("ratings.sqlite");
+	QString key;
+	qint64 collection;
+	{
+		LibraryStore store(path);
+		REQUIRE(store.isReady());
+		key = store.saveImage(image);
+		REQUIRE(!key.isEmpty());
+		collection = store.createCollection("References");
+		REQUIRE(collection > 0);
+		REQUIRE(store.addToCollection(key, collection));
+		REQUIRE(store.setNotes(key, "Global note"));
+		REQUIRE(store.setNotes(key, "Collection note", collection));
+		bool observedOverlap = false;
+		QObject::connect(&store, &LibraryStore::imageChanged, &store, [&](const QString &) {
+			for (const qint64 scope : {qint64(0), collection}) {
+				const auto state = store.entry(key, scope);
+				observedOverlap = observedOverlap || (state.liked && state.favorite);
+			}
+		});
+		for (const qint64 scope : {qint64(0), collection}) {
+			REQUIRE(store.setLiked(key, true, scope));
+			REQUIRE(store.entry(key, scope).liked);
+			REQUIRE_FALSE(store.entry(key, scope).favorite);
+			REQUIRE(store.setFavorite(key, false, scope));
+			REQUIRE(store.entry(key, scope).liked); // Clearing an inactive choice preserves the active one.
+			REQUIRE(store.setFavorite(key, true, scope));
+			REQUIRE_FALSE(store.entry(key, scope).liked);
+			REQUIRE(store.entry(key, scope).favorite);
+			REQUIRE(store.setLiked(key, false, scope));
+			REQUIRE(store.entry(key, scope).favorite);
+			REQUIRE(store.setLiked(key, true, scope));
+			REQUIRE(store.entry(key, scope).liked);
+			REQUIRE_FALSE(store.entry(key, scope).favorite);
+			REQUIRE(store.setLiked(key, false, scope));
+			REQUIRE_FALSE(store.entry(key, scope).liked);
+			REQUIRE_FALSE(store.entry(key, scope).favorite);
+			REQUIRE(store.setFavorite(key, true, scope));
+			REQUIRE(store.setFavorite(key, false, scope));
+			REQUIRE_FALSE(store.entry(key, scope).liked);
+			REQUIRE_FALSE(store.entry(key, scope).favorite);
+			REQUIRE(store.setFavorite(key, true, scope));
+		}
+		REQUIRE_FALSE(observedOverlap);
+		REQUIRE(store.entry(key).favorite);
+		REQUIRE(store.entry(key, collection).favorite);
+		REQUIRE(store.setLiked(key, true, collection));
+		REQUIRE(store.entry(key).favorite); // Collection choices do not alter global preferences.
+		REQUIRE_FALSE(store.entry(key).liked);
+		REQUIRE_FALSE(store.entry(key, collection).favorite);
+		REQUIRE_FALSE(store.setFavorite(key, true, collection + 1));
+		REQUIRE(store.entry(key).collectionCount == 1);
+		REQUIRE(store.entry(key).notes == "Global note");
+		REQUIRE(store.entry(key, collection).notes == "Collection note");
+	}
+	LibraryStore reopened(path);
+	REQUIRE(reopened.isReady());
+	REQUIRE(reopened.entry(key).favorite);
+	REQUIRE_FALSE(reopened.entry(key).liked);
+	REQUIRE(reopened.entry(key, collection).liked);
+	REQUIRE_FALSE(reopened.entry(key, collection).favorite);
+	REQUIRE(QDir(directory.path()).entryList({"ratings.sqlite.before-exclusive-ratings-*.bak"}, QDir::Files).isEmpty());
+}
+
+TEST_CASE("Legacy overlapping ratings retain favorites and a recoverable backup", "[library][backup]")
+{
+	QTemporaryDir directory;
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	Image image(site, {{"id", "73"}, {"file_url", "https://test.invalid/legacy.png"}}, profile.data());
+	const QString path = directory.filePath("legacy.sqlite");
+	QString key;
+	qint64 collection;
+	{
+		LibraryStore original(path);
+		key = original.saveImage(image);
+		REQUIRE(!key.isEmpty());
+		collection = original.createCollection("Keep this collection");
+		REQUIRE(original.addToCollection(key, collection));
+		REQUIRE(original.setNotes(key, "Keep global note"));
+		REQUIRE(original.setNotes(key, "Keep scoped note", collection));
+	}
+	{
+		auto db = QSqlDatabase::addDatabase("QSQLITE", "legacy-rating-fixture");
+		db.setDatabaseName(path);
+		REQUIRE(db.open());
+		QSqlQuery query(db);
+		REQUIRE(query.exec("UPDATE images SET liked=1,favorite=1"));
+		REQUIRE(query.exec("UPDATE members SET liked=1,favorite=1"));
+		query.finish();
+		db.close();
+	}
+	QSqlDatabase::removeDatabase("legacy-rating-fixture");
+	const QString restoreCopy = directory.filePath("incoming.sqlite");
+	REQUIRE(QFile::copy(path, restoreCopy));
+	QFile incoming(restoreCopy);
+	REQUIRE(incoming.open(QIODevice::ReadOnly));
+	const QByteArray incomingBytes = incoming.readAll();
+	incoming.close();
+	{
+		LibraryStore normalized(path);
+		REQUIRE(normalized.isReady());
+		REQUIRE_FALSE(normalized.entry(key).liked);
+		REQUIRE(normalized.entry(key).favorite);
+		REQUIRE_FALSE(normalized.entry(key, collection).liked);
+		REQUIRE(normalized.entry(key, collection).favorite);
+		REQUIRE(normalized.entry(key).notes == "Keep global note");
+		REQUIRE(normalized.entry(key, collection).notes == "Keep scoped note");
+		REQUIRE(normalized.entry(key).collectionCount == 1);
+		REQUIRE(normalized.collections().first().id == collection);
+	}
+	const auto backups = QDir(directory.path()).entryList({"legacy.sqlite.before-exclusive-ratings-*.bak"}, QDir::Files);
+	REQUIRE(backups.size() == 1);
+	{
+		auto db = QSqlDatabase::addDatabase("QSQLITE", "legacy-rating-backup");
+		db.setDatabaseName(directory.filePath(backups.first()));
+		REQUIRE(db.open());
+		QSqlQuery query(db);
+		for (const QString &table : {QString("images"), QString("members")}) {
+			REQUIRE(query.exec("SELECT liked,favorite,notes FROM " + table));
+			REQUIRE(query.next());
+			REQUIRE(query.value(0).toBool());
+			REQUIRE(query.value(1).toBool());
+			REQUIRE_FALSE(query.value(2).toString().isEmpty());
+		}
+		query.finish();
+		db.close();
+	}
+	QSqlDatabase::removeDatabase("legacy-rating-backup");
+	{
+		LibraryStore reopened(path);
+		REQUIRE(reopened.isReady());
+	}
+	REQUIRE(QDir(directory.path()).entryList({"legacy.sqlite.before-exclusive-ratings-*.bak"}, QDir::Files).size() == 1);
+	for (const bool damaged : {false, true}) {
+		const QString target = directory.filePath(damaged ? "damaged.sqlite" : "restore.sqlite");
+		if (damaged) {
+			QFile corrupt(target);
+			REQUIRE(corrupt.open(QIODevice::WriteOnly));
+			REQUIRE(corrupt.write("Keep damaged bytes") > 0);
+		}
+		LibraryStore restored(target);
+		REQUIRE(restored.isReady() != damaged);
+		REQUIRE(restored.restoreFrom(restoreCopy));
+		REQUIRE(restored.isReady());
+		REQUIRE_FALSE(restored.entry(key).liked);
+		REQUIRE(restored.entry(key).favorite);
+		REQUIRE_FALSE(restored.entry(key, collection).liked);
+		REQUIRE(restored.entry(key, collection).favorite);
+		REQUIRE(restored.entry(key).notes == "Keep global note");
+		REQUIRE(restored.entry(key, collection).notes == "Keep scoped note");
+		REQUIRE(restored.collections().first().id == collection);
+	}
+	REQUIRE(incoming.open(QIODevice::ReadOnly));
+	REQUIRE(incoming.readAll() == incomingBytes); // Restore validation must not modify the supplied backup.
 }

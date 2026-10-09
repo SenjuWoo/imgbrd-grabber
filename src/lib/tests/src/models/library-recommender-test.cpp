@@ -60,8 +60,8 @@ TEST_CASE("Favorites influence recommendations three times as strongly as likes"
 	const auto beach = picture("beach", {"beach"});
 	const auto result = LibraryRecommender::rank({forest, beach, favorite, liked}, {liked, favorite}, {}, 0, Day);
 	REQUIRE(keys(result) == QStringList {"forest", "beach"});
-	REQUIRE(result.items[0].score == Catch::Approx(0.75));
-	REQUIRE(result.items[1].score == Catch::Approx(0.25));
+	REQUIRE(result.items[0].score == Catch::Approx(0.925));
+	REQUIRE(result.items[1].score == Catch::Approx(0.925 / 3));
 	REQUIRE(result.items[0].basedOnKey == "favorite");
 	REQUIRE(result.items[1].basedOnKey == "liked");
 }
@@ -141,4 +141,111 @@ TEST_CASE("Malformed semantic vectors cannot create recommendations or suppress 
 	REQUIRE_FALSE(result.items[0].visual);
 	REQUIRE(result.items[0].score == Catch::Approx(1));
 	REQUIRE(result.items[0].sharedTags == QStringList {"forest"});
+}
+
+TEST_CASE("Clear recommendations survive unrelated tastes and balance matched seeds", "[library][recommendations]")
+{
+	const auto forest = picture("forest-seed", {"forest"}, false, true);
+	QList<LibraryEntry> seeds {forest};
+	QList<LibraryEntry> pool {picture("forest-match", {"forest"}), picture("unrelated", {"unknown"})};
+	for (int i = 0; i < 20; ++i) {
+		seeds.append(picture("taste-" + QString::number(i), {"taste-" + QString::number(i)}, false, true));
+	}
+	const auto clear = LibraryRecommender::rank(pool, seeds, {}, 0, Day);
+	REQUIRE(keys(clear) == QStringList {"forest-match"});
+	REQUIRE(clear.items.first().score >= 0.7);
+	REQUIRE(clear.items.first().basedOnKey == forest.key);
+
+	seeds = {forest, picture("city-seed", {"city"}, false, true), picture("beach-seed", {"beach"}, false, true)};
+	pool.clear();
+	for (const QString &taste : {QString("forest"), QString("city"), QString("beach")}) {
+		for (int i = 0; i < 20; ++i) {
+			pool.append(picture(taste + QString::number(i), {taste}));
+		}
+	}
+	const auto diverse = LibraryRecommender::rank(pool, seeds, {}, 0, Day, 9);
+	REQUIRE(diverse.items.size() == 9);
+	QHash<QString, int> counts;
+	for (const auto &item : diverse.items) {
+		++counts[item.basedOnKey];
+		REQUIRE(item.sharedTags.size() == 1);
+	}
+	REQUIRE(counts.size() == 3);
+	for (const int count : counts) {
+		REQUIRE(count == 3);
+	}
+}
+
+TEST_CASE("Refreshing rotates close matches without admitting irrelevant or hidden pictures", "[library][recommendations]")
+{
+	const auto seed = picture("seed", {"forest"}, false, true);
+	QList<LibraryEntry> pool {seed, picture("unrelated", {"city"}), picture("hidden", {"forest"})};
+	for (int i = 0; i < 60; ++i) {
+		pool.append(picture(QString::number(i), {"forest"}));
+	}
+	const QSet<QString> hidden {"hidden"};
+	const auto first = LibraryRecommender::rank(pool, {seed}, {}, 42, Day, 12, hidden);
+	const auto refreshed = LibraryRecommender::rank(pool, {seed}, {}, 42, Day, 12, hidden, 1);
+	REQUIRE(keys(first) != keys(refreshed));
+	std::reverse(pool.begin(), pool.end());
+	REQUIRE(keys(refreshed) == keys(LibraryRecommender::rank(pool, {seed}, {}, 42, Day, 12, hidden, 1)));
+	REQUIRE(keys(first) == keys(LibraryRecommender::rank(pool, {seed}, {}, 42, Day, 12, hidden)));
+	for (const auto &item : refreshed.items) {
+		REQUIRE(item.entry.key != seed.key);
+		REQUIRE(item.entry.key != "unrelated");
+		REQUIRE(item.entry.key != "hidden");
+		REQUIRE(item.sharedTags == QStringList {"forest"});
+	}
+}
+
+TEST_CASE("Online discovery uses scoped source tags and weighted reproducible topic rotation", "[library][recommendations]")
+{
+	auto favorite = picture("favorite", {"forest", "1girl", "solo", "-exclude", "rating:explicit", "two words"}, false, true);
+	auto liked = picture("liked", {"city", "1girl", "solo"}, true);
+	auto other = picture("other-site", {"private-other-source"}, false, true);
+	favorite.image["website"] = "first.test";
+	liked.image["website"] = "first.test";
+	other.image["website"] = "second.test";
+	const auto scoped = LibraryRecommender::topics({favorite}, {"first.test"}, 42, Day);
+	REQUIRE(scoped.size() == 3);
+	for (const auto &topic : scoped) {
+		REQUIRE(topic.website == "first.test");
+		REQUIRE((topic.tag == "forest" || topic.tag == "1girl" || topic.tag == "solo"));
+	}
+	REQUIRE(LibraryRecommender::topics({other}, {"first.test"}, 42, Day).isEmpty());
+	REQUIRE(LibraryRecommender::topics({favorite}, {"first.test"}, 42, Day, 0).isEmpty());
+	const auto weighted = LibraryRecommender::topics({favorite, liked, other}, {"first.test"}, 0, Day, 3);
+	for (const auto &topic : weighted) {
+		REQUIRE(topic.tag != "private-other-source");
+	}
+	// Inspect the pure weights using two equally prevalent source tags.
+	auto favoriteOnly = favorite;
+	favoriteOnly.image["tags"] = QJsonArray::fromStringList({"forest"});
+	auto likedOnly = liked;
+	likedOnly.image["tags"] = QJsonArray::fromStringList({"city"});
+	const auto pair = LibraryRecommender::topics({favoriteOnly, likedOnly}, {"first.test"}, 0, Day);
+	REQUIRE(pair.size() == 2);
+	QHash<QString, double> weights;
+	for (const auto &topic : pair) {
+		weights.insert(topic.tag, topic.weight);
+	}
+	REQUIRE(weights["forest"] == Catch::Approx(weights["city"] * 3));
+	QStringList first;
+	for (const auto &topic : weighted) {
+		first.append(topic.website + '/' + topic.tag);
+	}
+	QStringList reversed;
+	for (const auto &topic : LibraryRecommender::topics({other, liked, favorite}, {"first.test"}, 0, Day)) {
+		reversed.append(topic.website + '/' + topic.tag);
+	}
+	REQUIRE(first == reversed);
+	bool rotated = false;
+	for (quint64 rotation = 1; rotation < 20; ++rotation) {
+		QStringList next;
+		for (const auto &topic : LibraryRecommender::topics({favorite, liked}, {"first.test"}, 0, Day, 3, rotation)) {
+			next.append(topic.website + '/' + topic.tag);
+		}
+		rotated = rotated || next != first;
+	}
+	REQUIRE(rotated);
 }

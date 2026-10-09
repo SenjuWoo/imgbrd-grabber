@@ -12,6 +12,7 @@
 #include <QRegularExpression>
 #include <QSqlError>
 #include <QSqlQuery>
+#include <QTemporaryDir>
 #include <QUuid>
 #include "models/image.h"
 #include "models/library-importer.h"
@@ -152,8 +153,40 @@ LibraryStore::LibraryStore(const QString &path, QObject *parent)
 			return;
 		}
 	}
-	m_ready = execute("SELECT path,image_key,sha256,md5,source_md5,visual_hash FROM local_files LIMIT 0")
-		&& execute("SELECT source_key,image_key FROM source_links LIMIT 0");
+	if (!execute("SELECT path,image_key,sha256,md5,source_md5,visual_hash FROM local_files LIMIT 0")
+		|| !execute("SELECT source_key,image_key FROM source_links LIMIT 0")) {
+		return;
+	}
+	if (!check.exec("SELECT 1 FROM images WHERE liked=1 AND favorite=1 UNION ALL SELECT 1 FROM members WHERE liked=1 AND favorite=1 LIMIT 1")) {
+		m_error = check.lastError().text();
+		return;
+	}
+	const bool overlappingRatings = check.next();
+	check.finish();
+	if (overlappingRatings) {
+		// Preserve legacy choices before reducing overlapping ratings to the stronger favorite.
+		if (path != ":memory:") {
+			const QString backup = path + ".before-exclusive-ratings-" + QDateTime::currentDateTimeUtc().toString("yyyyMMdd-HHmmss-zzz") + "-" + QUuid::createUuid().toString(QUuid::Id128) + ".bak";
+			if (!execute("VACUUM INTO ?", {backup})) {
+				m_error = tr("Cannot back up the Library before updating ratings: %1").arg(m_error);
+				return;
+			}
+		}
+		if (!m_database.transaction()) {
+			m_error = m_database.lastError().text();
+			return;
+		}
+		const bool ok = execute("UPDATE images SET liked=0 WHERE liked=1 AND favorite=1")
+			&& execute("UPDATE members SET liked=0 WHERE liked=1 AND favorite=1");
+		if (!ok || !m_database.commit()) {
+			if (ok) {
+				m_error = m_database.lastError().text();
+			}
+			m_database.rollback();
+			return;
+		}
+	}
+	m_ready = true;
 }
 
 LibraryStore::~LibraryStore()
@@ -360,9 +393,13 @@ bool LibraryStore::setValue(const QString &key, const QString &column, const QVa
 		}
 		return false;
 	}
+	QString assignment = column + "=?";
+	if (value.toBool() && (column == "liked" || column == "favorite")) {
+		assignment += column == "liked" ? ",favorite=0" : ",liked=0";
+	}
 	const bool ok = collection > 0
-		? execute("UPDATE members SET " + column + "=? WHERE image_key=? AND collection_id=?", { value, key, collection })
-		: execute("UPDATE images SET " + column + "=? WHERE key=?", { value, key });
+		? execute("UPDATE members SET " + assignment + " WHERE image_key=? AND collection_id=?", { value, key, collection })
+		: execute("UPDATE images SET " + assignment + " WHERE key=?", { value, key });
 	if (ok) {
 		emit imageChanged(key);
 	}
@@ -678,11 +715,13 @@ bool LibraryStore::linkSource(const QString &key, const Image &image, const QStr
 	}
 	bool ok = true;
 	if (other != key && contains(other)) {
-		ok = execute("UPDATE images SET liked=max(liked,(SELECT liked FROM images WHERE key=?)),favorite=max(favorite,(SELECT favorite FROM images WHERE key=?)), "
+		ok = execute("UPDATE images SET liked=CASE WHEN max(favorite,(SELECT favorite FROM images WHERE key=?))=1 THEN 0 ELSE max(liked,(SELECT liked FROM images WHERE key=?)) END, "
+			"favorite=max(favorite,(SELECT favorite FROM images WHERE key=?)), "
 			"notes=CASE WHEN notes='' THEN (SELECT notes FROM images WHERE key=?) WHEN (SELECT notes FROM images WHERE key=?)='' OR notes=(SELECT notes FROM images WHERE key=?) THEN notes "
-			"ELSE notes || char(10) || (SELECT notes FROM images WHERE key=?) END WHERE key=?", {other, other, other, other, other, other, key})
-			&& execute("INSERT INTO members(image_key,collection_id,liked,favorite,notes) SELECT ?,collection_id,liked,favorite,notes FROM members WHERE image_key=? "
-			"ON CONFLICT(image_key,collection_id) DO UPDATE SET liked=max(members.liked,excluded.liked),favorite=max(members.favorite,excluded.favorite), "
+			"ELSE notes || char(10) || (SELECT notes FROM images WHERE key=?) END WHERE key=?", {other, other, other, other, other, other, other, key})
+			&& execute("INSERT INTO members(image_key,collection_id,liked,favorite,notes) SELECT ?,collection_id,CASE WHEN favorite=1 THEN 0 ELSE liked END,favorite,notes FROM members WHERE image_key=? "
+			"ON CONFLICT(image_key,collection_id) DO UPDATE SET liked=CASE WHEN max(members.favorite,excluded.favorite)=1 THEN 0 ELSE max(members.liked,excluded.liked) END, "
+			"favorite=max(members.favorite,excluded.favorite), "
 			"notes=CASE WHEN members.notes='' THEN excluded.notes WHEN excluded.notes='' OR members.notes=excluded.notes THEN members.notes ELSE members.notes || char(10) || excluded.notes END", {key, other})
 			&& execute("UPDATE collections SET cover_key=? WHERE cover_key=?", {key, other})
 			&& execute("UPDATE local_files SET image_key=? WHERE image_key=?", {key, other})
@@ -724,8 +763,14 @@ bool LibraryStore::restoreFrom(const QString &path)
 	if (incoming.canonicalFilePath() == QFileInfo(m_database.databaseName()).canonicalFilePath()) {
 		return true;
 	}
+	QTemporaryDir validationDirectory;
+	const QString validated = validationDirectory.filePath("library.sqlite");
+	if (!validationDirectory.isValid() || !QFile::copy(incoming.absoluteFilePath(), validated)) {
+		m_error = tr("Cannot prepare a copy of this Library backup for validation.");
+		return false;
+	}
 	{
-		LibraryStore validation(incoming.absoluteFilePath());
+		LibraryStore validation(validated);
 		if (!validation.isReady()) {
 			m_error = tr("Cannot restore this Library: %1").arg(validation.lastError());
 			return false;
@@ -739,7 +784,7 @@ bool LibraryStore::restoreFrom(const QString &path)
 			m_error = tr("The Library has no usable restore location."); return false;
 		}
 		m_database.close();
-		if ((QFileInfo::exists(target) && !QFile::copy(target, backup)) || !atomicCopyFile(incoming.absoluteFilePath(), target)) {
+		if ((QFileInfo::exists(target) && !QFile::copy(target, backup)) || !atomicCopyFile(validated, target)) {
 			m_database.open();
 			m_error = tr("Cannot preserve or replace the damaged Library.");
 			return false;
@@ -753,7 +798,7 @@ bool LibraryStore::restoreFrom(const QString &path)
 		}
 		return m_ready;
 	}
-	if (!backupTo(backup) || !execute("ATTACH DATABASE ? AS library_restore", {incoming.absoluteFilePath()})) {
+	if (!backupTo(backup) || !execute("ATTACH DATABASE ? AS library_restore", {validated})) {
 		return false;
 	}
 	if (!m_database.transaction()) {

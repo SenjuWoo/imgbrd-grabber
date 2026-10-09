@@ -2,6 +2,7 @@
 #define IMAGE_PREVIEW_H
 
 #include <functional>
+#include <QList>
 #include <QObject>
 #include <QPixmap>
 #include <QPointer>
@@ -13,6 +14,7 @@
 
 class DownloadQueue;
 class Image;
+class ImageLibraryActions;
 class MainWindow;
 class NetworkReply;
 class Profile;
@@ -35,10 +37,12 @@ class ImagePreview : public QObject
 		void abort();
 		void setChecked(bool checked);
 		void setDownloadProgress(qint64 v1, qint64 v2);
+		void refreshDensity();
 
 	protected:
 		void showLoadingMessage();
 		void finishedLoading();
+		bool eventFilter(QObject *object, QEvent *event) override;
 
 	protected slots:
 		void finishedLoadingPreview();
@@ -55,7 +59,7 @@ class ImagePreview : public QObject
 
 	private:
 		QSharedPointer<Image> m_image;
-		QWidget *m_container;
+		QPointer<QWidget> m_container;
 		Profile *m_profile;
 		DownloadQueue *m_downloadQueue;
 		MainWindow *m_mainWindow;
@@ -68,9 +72,16 @@ class ImagePreview : public QObject
 		int m_redirectHops = 0;
 
 		QUrl m_thumbnailUrl;
-		QString m_name;
+		QList<QUrl> m_fallbackUrls;
+		QString m_previewError;
+		QPixmap m_displayImage;
+		int m_borderSize = 0;
 		QString m_counter;
 		QPointer<QBouton> m_bouton = nullptr;
+		QPointer<ImageLibraryActions> m_actions = nullptr;
+		void resetThumbnailUrls();
+		void failThumbnail(const QString &reason);
+		void updateActionsVisibility();
 		std::function<void (QMenu *, const QSharedPointer<Image> &)> m_customContextMenu = nullptr;
 };
 

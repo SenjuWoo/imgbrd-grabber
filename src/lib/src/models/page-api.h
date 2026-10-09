@@ -36,6 +36,7 @@ class PageApi : public QObject
 		};
 
 		explicit PageApi(Page *parentPage, Profile *profile, Site *site, Api *api, SearchQuery query, int page = 1, int limit = 25, PostFilter postFiltering = PostFilter(), bool smart = false, QObject *parent = nullptr, int pool = 0, PageInformation lastPageInformation = {});
+		~PageApi() override;
 		PageInformation pageInformation() const;
 		void setLastPage(const PageInformation& info);
 		const QList<QSharedPointer<Image>> &images() const;
@@ -93,7 +94,7 @@ class PageApi : public QObject
 		SearchQuery m_query;
 		QStringList m_errors;
 		PostFilter m_postFiltering;
-		int m_imagesPerPage, m_page, m_pool;
+		int m_requestedImagesPerPage, m_imagesPerPage, m_page, m_pool;
 		PageInformation m_lastPageInformation;
 		bool m_smart, m_isAltPage;
 		QString m_format, m_source, m_wiki, m_originalUrl;
@@ -104,7 +105,7 @@ class PageApi : public QObject
 		QList<QSharedPointer<Image>> m_images;
 		QList<Tag> m_tags;
 		NetworkReply *m_reply;
-		int m_imagesCount, m_maxImagesCount, m_pagesCount, m_pageImageCount, m_filteredImageCount;
+		int m_imagesCount, m_maxImagesCount, m_pagesCount, m_pageImageCount = 0, m_filteredImageCount = 0;
 		bool m_imagesCountSafe, m_pagesCountSafe;
 		bool m_loading = false;
 		bool m_loaded = false;

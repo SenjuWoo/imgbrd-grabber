@@ -39,7 +39,7 @@ The display name is **Grabber Woo Edit**. The executable names and existing prof
 
 ## Imported pictures and missing metadata
 
-The gallery shows 100 pictures per page, with **Previous page / Next page** and the current range. Search and filters cover the entire Library, including pictures on other pages.
+The gallery offers 50, 100 or 200 pictures per page, with **Previous page / Next page** and the current range. Search and filters cover the entire Library, including pictures on other pages.
 
 - **Needs tags** lists pictures without usable tags. A successful picture import does not imply that tags were present in the downloaded file.
 - **Needs source** lists pictures without an identified website post, including pictures whose file tags were recovered.
@@ -55,7 +55,7 @@ The upstream downloader features remain: multiple tabs and sources, tag autocomp
 
 - **Pixiv already exists** and requires authentication. API errors are reported explicitly.
 - **Reddit search uses keywords, authors, subreddits, and flair**, not booru tags. This fork removes irrelevant booru operators, follows Reddit cursors, and reports denied API access. Numbered page jumps are unavailable on that source.
-- **Home recommends pictures already in your Library**, with separate collection and Library-wide taste. Pinterest, creator following, online recommendation fetching, and optional cloud providers remain future work.
+- **Home recommends saved pictures and offers opt-in Discover online**, using likes and favorites in the selected collection or Library-wide scope to search your configured sources. Pinterest, creator following, and optional cloud providers remain future work.
 - Visual matching currently compares against cached Library images. It does not perform Internet-wide reverse searches or upload your files to an AI provider.
 
 The Library stores its catalog and bounded previews locally. Fresh profiles have usage analytics disabled by default; an existing explicit preference is retained. Built-in backups include the catalog and managed copies. Externally referenced originals need their own backup.
@@ -89,11 +89,20 @@ npm test -- --runInBand
 
 *Generated demo artwork, with collection suggestions based on saved tags before local AI setup. The selected picture shows its match and collection membership action.*
 
-Open **Home**, choose **Library-wide** or a collection, then **For you** or **Recently saved**. Only ratings in the selected scope guide recommendations. Favorites count three times as much as likes. Suggested pictures outside a collection need **Add to this collection** before rating in that scope. Hide a suggestion for this scope or restore hidden suggestions at any time.
+Open **Home**, choose **Library-wide** or a collection, then **For you**, **Recently saved** or **Discover online**. Online discovery fetches new pictures from your selected websites using real source tags from likes and favorites in that scope. It uses your existing source settings and login, shows its searched topic, and saves a picture only when you use a Library action. Only ratings in the selected scope guide recommendations. Favorites count three times as much as likes. Like and Favorite are mutually exclusive within each scope; selecting either replaces the other. Suggested pictures outside a collection need **Add to this collection** before rating in that scope. Hide a suggestion for this scope or restore hidden suggestions at any time.
 
 **Download local model** fetches the pinned 89 MB CLIP image model and builds a CPU image index. Images stay on this PC; no Python, GPU or AI server is required. Windows packages include ONNX Runtime 1.30.0; other desktop platforms can use tag matching until a compatible native runtime is supplied. Index coverage and skipped previews are visible. Existing likes, favorites, tags and files survive indexing failures and cancellation. The model/index are rebuildable profile data, separate from `library.sqlite`.
 
-Visual embeddings understand appearance; they do not recover original tags, authors or source URLs. Recommendations explain their strongest contributing liked/favorited picture and actual shared tags. Close matches rotate deterministically each day. Use `Grabber-cli.exe --index-library` to update an already configured local index with a JSON result. See [milestone evidence and limits](docs/recommendations-milestone.md).
+Visual embeddings understand appearance; they do not recover original tags, authors or source URLs. Recommendations explain their strongest contributing liked/favorited picture and actual shared tags. Close matches rotate each day and with Refresh. Saved recommendations balance distinct interests; online discovery rotates source topics and pages. Compact, Comfortable and Large density settings are shared with Library and search. Image details are in tooltips and the viewer; rating controls appear after selection. Library offers 50, 100 or 200 pictures per page. Use `Grabber-cli.exe --index-library` to update an already configured local index with a JSON result. See [browsing milestone evidence and limits](docs/browsing-milestone.md) and [local AI evidence](docs/recommendations-milestone.md).
+
+## Changes in 7.17.0
+
+- Add opt-in online Home discovery from existing selected sources, with scoped weighted tag topics, refresh rotation, bounded requests, cancellation, clear failures and explicit saving.
+- Diversify local saved recommendations across interests while keeping collection preferences independent.
+- Make Like and Favorite exclusive, including source merges and legacy catalog restoration; preserve a backup before correcting old overlapping ratings.
+- Add image-only grids, shared density controls and Library page sizes; show actions after selecting a picture. Render cached/missing previews consistently, preserve aspect ratios, bound decoding and retry real thumbnail alternatives.
+- Merge only exact checksums or identical full URLs without checksums; preserve edits, variants, uncertain matches and stable viewer bindings.
+- Fix source-limit paging, estimated-total cutoffs, cursor isolation, batch progress, failed-source handling and truthful visible counts.
 
 ## Changes in 7.16.0
 
