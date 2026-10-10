@@ -20,6 +20,10 @@ on:
 permissions:
   contents: read
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
 env:
   QT_VERSION: 6.11.3
   QT_MODULES: qtmultimedia qtimageformats qtnetworkauth qtshadertools
@@ -27,6 +31,8 @@ env:
   IS_RELEASE: ${{ startsWith(github.ref, 'refs/tags/v') }}
   IS_NIGHTLY: ${{ !startsWith(github.ref, 'refs/tags/v') }}
   CMAKE_BUILD_PARALLEL_LEVEL: 2
+  # Forks only ship the Windows package and keep its artifacts briefly to stay within Actions usage limits.
+  ARTIFACT_RETENTION_DAYS: ${{ github.repository == 'Bionus/imgbrd-grabber' && 90 || 14 }}
   OPENSSL_VERSION: 3.5.9
   OPENSSL_SHA256: 5fe338c81d62515df7292f16542a0eef2a29db3efc023cd5a8c08ec3c97027ae
   QSCINTILLA_VERSION: 2.14.1
@@ -185,6 +191,7 @@ jobs:
 
   linux:
     name: Linux
+    if: github.repository == 'Bionus/imgbrd-grabber'
     runs-on: ubuntu-22.04
     needs: version
 
@@ -313,6 +320,7 @@ jobs:
 
   macos:
     name: macOS
+    if: github.repository == 'Bionus/imgbrd-grabber'
     runs-on: macos-14
     needs: version
 
@@ -586,6 +594,7 @@ jobs:
           name: Grabber_x64.exe
           path: Grabber_x64.exe
           if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
       - name: Generate package
         shell: cmd
@@ -608,6 +617,7 @@ jobs:
           name: Grabber_x64.zip
           path: Grabber_x64.zip
           if-no-files-found: error
+          retention-days: ${{ env.ARTIFACT_RETENTION_DAYS }}
 
       - name: Upload package startup diagnostics
         if: ${{ failure() }}
@@ -632,6 +642,7 @@ jobs:
 
   android:
     name: Android
+    if: github.repository == 'Bionus/imgbrd-grabber'
     runs-on: ubuntu-22.04
     needs: version
 
