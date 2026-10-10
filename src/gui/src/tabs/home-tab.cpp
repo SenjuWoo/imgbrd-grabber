@@ -266,6 +266,10 @@ HomeTab::HomeTab(Profile *profile, MainWindow *parent, DownloadQueue *downloadQu
 	});
 
 	m_feed->setScope(settings->value("Home/collection", 0).toLongLong());
+	if (!settings->contains("Discover/visual")) {
+		// Whoever already set up the local model gets smart matching without asking again.
+		settings->setValue("Discover/visual", settings->value("recommendations/localEnabled", false).toBool());
+	}
 	m_feed->setVisualEnabled(settings->value("Discover/visual", false).toBool());
 	updateScopes();
 	updateHeader();
