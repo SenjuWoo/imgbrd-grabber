@@ -1,3 +1,5 @@
+#include <QFile>
+#include <QMap>
 #include "loader/token.h"
 #include "models/filtering/blacklist.h"
 #include "catch.h"
@@ -119,4 +121,39 @@ TEST_CASE("Blacklist")
 		REQUIRE(blacklist.match(matchingSite) == QStringList("website:danbooru.donmai.us test_tag"));
 		REQUIRE(blacklist.match(otherSite) == QStringList());
 	}
+}
+
+TEST_CASE("Shipped blacklist hides male-only posts but keeps women with a man in the picture", "[blacklist]")
+{
+	QFile file("../dist/common/defaults/blacklist.txt");
+	REQUIRE(file.open(QFile::ReadOnly | QFile::Text));
+	Blacklist blacklist;
+	for (const QString &line : QString::fromUtf8(file.readAll()).split('\n', Qt::SkipEmptyParts)) {
+		blacklist.add(line.trimmed().split(' ', Qt::SkipEmptyParts));
+	}
+	const auto hidden = [&blacklist](const QStringList &tags) {
+		QMap<QString, Token> tokens;
+		tokens.insert("allos", Token(tags));
+		return !blacklist.match(tokens).isEmpty();
+	};
+
+	// Solo or male-only posts, on Danbooru, Rule34 and e621 vocabularies.
+	REQUIRE(hidden({"1boy", "solo", "penis", "erection"}));
+	REQUIRE(hidden({"solo", "penis", "abs"}));
+	REQUIRE(hidden({"male", "anthro", "solo", "penis"}));
+	REQUIRE(hidden({"2boys", "kiss"}));
+	REQUIRE(hidden({"1boy", "shirtless", "muscular_male"}));
+	REQUIRE(hidden({"1girl", "1boy", "yaoi"}));
+	REQUIRE(hidden({"otoko_no_ko", "skirt"}));
+	REQUIRE(hidden({"1girls", "futa_on_female"}));
+	REQUIRE(hidden({"1girl", "scat"}));
+	REQUIRE(hidden({"1girl", "messy_diaper"}));
+
+	// A woman stays visible even with a man or his penis in the background.
+	REQUIRE_FALSE(hidden({"1girl", "solo_focus", "penis", "faceless_male"}));
+	REQUIRE_FALSE(hidden({"1girls", "1boy", "penis", "sex", "vaginal_penetration"}));
+	REQUIRE_FALSE(hidden({"female", "male", "penis", "male/female"}));
+	REQUIRE_FALSE(hidden({"multiple_boys", "multiple_girls", "gangbang"}));
+	REQUIRE_FALSE(hidden({"breasts", "penis", "paizuri", "pov"}));
+	REQUIRE_FALSE(hidden({"1girl", "solo", "thighhighs"}));
 }

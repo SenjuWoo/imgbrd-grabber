@@ -187,8 +187,33 @@ TEST_CASE("Remote previews use real alternate URLs and reject oversized or undec
 		REQUIRE(!button->toolTip().contains("could not load"));
 	} else {
 		REQUIRE(image->previewImage().isNull());
-		REQUIRE((button->toolTip().contains("limit") || button->toolTip().contains("dimensions")));
+		REQUIRE((button->toolTip().contains("limit") || button->toolTip().contains("dimensions") || button->toolTip().contains("decoded")));
 	}
+}
+
+TEST_CASE("Remote previews retry a momentary server error once", "[foundation][image-preview]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	profile->getSettings()->setValue("thumbnailSmartSize", false);
+	const QString path = directory.filePath("reply.png");
+	QPixmap pixels(64, 32);
+	pixels.fill(Qt::blue);
+	REQUIRE(pixels.save(path, "PNG"));
+	CustomNetworkAccessManager::NextFiles.enqueue("500");
+	CustomNetworkAccessManager::NextFiles.enqueue(path);
+
+	auto image = QSharedPointer<Image>::create(site, QMap<QString, QString> {{"id", "103"}, {"preview_url", "https://test.invalid/preview.png"}}, profile.data());
+	QWidget container;
+	ImagePreview preview(image, &container, profile.data(), nullptr, nullptr);
+	QSignalSpy finished(&preview, &ImagePreview::finished);
+	preview.load();
+	REQUIRE(QTest::qWaitFor([&]() { return finished.count() == 1; }, 5000));
+	REQUIRE(CustomNetworkAccessManager::NextFiles.isEmpty());
+	REQUIRE(image->previewImage().toImage().pixelColor(10, 10) == QColor(Qt::blue));
 }
 
 TEST_CASE("Viewer navigation applies tag actions to the displayed picture source", "[foundation][viewer]")

@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QRandomGenerator>
 #include <algorithm>
+#include <functional>
 #include <cmath>
 
 namespace
@@ -107,6 +108,28 @@ namespace
 		return keys;
 	}
 
+	// Sources sampled this much are trusted for tag frequencies; samples beyond the cap fade so tastes in posts can drift.
+	constexpr double MinSourcePosts = 60;
+	constexpr double MaxSourcePosts = 4000;
+	constexpr int MaxSourceTags = 3000;
+
+	// Expected share of shown pictures that get rated, and how many showings that guess is worth.
+	constexpr double FeedbackBaseline = 0.04;
+	constexpr double FeedbackPrior = 25;
+
+	// Searches come from the strongest tags only; hundreds of faint ones otherwise outweigh the few real themes.
+	constexpr int QueryPool = 30;
+
+	double feedbackBoost(const QHash<QString, DiscoveryFeedback> &feedback, const QString &name)
+	{
+		const auto it = feedback.constFind(name);
+		if (it == feedback.constEnd()) {
+			return 1.0;
+		}
+		const double rate = (it->rated + FeedbackBaseline * FeedbackPrior) / (std::max(0.0, it->shown) + FeedbackPrior);
+		return std::clamp(rate / FeedbackBaseline, 0.2, 4.0);
+	}
+
 	QString weightedPick(const QHash<QString, double> &weights, QRandomGenerator &rng)
 	{
 		double total = 0;
@@ -126,6 +149,128 @@ namespace
 		}
 		return keys.last();
 	}
+}
+
+void TagBackground::add(const QString &website, const QStringList &tags)
+{
+	if (website.isEmpty()) {
+		return;
+	}
+	auto &counts = m_counts[website];
+	QSet<QString> unique;
+	for (const QString &tag : tags) {
+		const QString name = TasteProfile::normalize(tag);
+		if (!name.isEmpty() && !unique.contains(name)) {
+			unique.insert(name);
+			counts[name] += 1;
+		}
+	}
+	double &posts = m_posts[website];
+	posts += 1;
+	if (posts > MaxSourcePosts) {
+		posts /= 2;
+		for (auto it = counts.begin(); it != counts.end();) {
+			it.value() /= 2;
+			it = it.value() < 0.5 ? counts.erase(it) : std::next(it);
+		}
+	}
+	if (counts.size() > MaxSourceTags * 3 / 2) {
+		QList<double> values = counts.values();
+		std::nth_element(values.begin(), values.begin() + MaxSourceTags, values.end(), std::greater<double>());
+		const double threshold = values[MaxSourceTags];
+		for (auto it = counts.begin(); it != counts.end();) {
+			it = it.value() <= threshold ? counts.erase(it) : std::next(it);
+		}
+	}
+}
+
+double TagBackground::frequency(const QString &tag, const QHash<QString, double> &ratedOn) const
+{
+	if (ratedOn.isEmpty()) {
+		double result = -1;
+		for (auto it = m_posts.constBegin(); it != m_posts.constEnd(); ++it) {
+			if (it.value() >= MinSourcePosts) {
+				result = std::max(result, m_counts.value(it.key()).value(tag) / it.value());
+			}
+		}
+		return result;
+	}
+	double sum = 0, covered = 0, total = 0;
+	for (auto it = ratedOn.constBegin(); it != ratedOn.constEnd(); ++it) {
+		total += it.value();
+		const double posts = m_posts.value(it.key());
+		if (posts >= MinSourcePosts) {
+			sum += it.value() * m_counts.value(it.key()).value(tag) / posts;
+			covered += it.value();
+		}
+	}
+	return covered > 0 && covered * 2 >= total ? sum / covered : -1;
+}
+
+QHash<QString, double> TagBackground::common(double minimumShare) const
+{
+	QHash<QString, double> result;
+	for (auto site = m_posts.constBegin(); site != m_posts.constEnd(); ++site) {
+		if (site.value() < MinSourcePosts) {
+			continue;
+		}
+		const auto &counts = m_counts[site.key()];
+		for (auto it = counts.constBegin(); it != counts.constEnd(); ++it) {
+			const double share = it.value() / site.value();
+			if (share >= minimumShare && share > result.value(it.key())) {
+				result.insert(it.key(), share);
+			}
+		}
+	}
+	return result;
+}
+
+double TagBackground::posts(const QString &website) const
+{
+	if (!website.isEmpty()) {
+		return m_posts.value(website);
+	}
+	double best = 0;
+	for (const double posts : m_posts) {
+		best = std::max(best, posts);
+	}
+	return best;
+}
+
+QJsonObject TagBackground::toJson() const
+{
+	QJsonObject sites;
+	for (auto site = m_posts.constBegin(); site != m_posts.constEnd(); ++site) {
+		QJsonObject tags;
+		const auto &counts = m_counts[site.key()];
+		for (auto it = counts.constBegin(); it != counts.constEnd(); ++it) {
+			tags.insert(it.key(), it.value());
+		}
+		sites.insert(site.key(), QJsonObject {{"posts", site.value()}, {"tags", tags}});
+	}
+	return sites;
+}
+
+TagBackground TagBackground::fromJson(const QJsonObject &json)
+{
+	TagBackground result;
+	for (auto site = json.constBegin(); site != json.constEnd(); ++site) {
+		const auto object = site.value().toObject();
+		const double posts = object.value("posts").toDouble();
+		if (site.key().isEmpty() || posts <= 0 || posts > MaxSourcePosts) {
+			continue;
+		}
+		result.m_posts.insert(site.key(), posts);
+		auto &counts = result.m_counts[site.key()];
+		const auto tags = object.value("tags").toObject();
+		for (auto it = tags.constBegin(); it != tags.constEnd() && counts.size() < MaxSourceTags * 3 / 2; ++it) {
+			const double count = it.value().toDouble();
+			if (count > 0) {
+				counts.insert(it.key(), std::min(count, posts));
+			}
+		}
+	}
+	return result;
 }
 
 QString TasteProfile::normalize(const QString &tag)
@@ -153,7 +298,7 @@ bool TasteProfile::isMetaTag(const QString &name, const QString &type)
 		|| name.startsWith(QLatin1String("rating:"));
 }
 
-TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash<QString, double> &dislikedTags, const QDateTime &now)
+TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash<QString, double> &dislikedTags, const QDateTime &now, const TagBackground &background)
 {
 	TasteProfile profile;
 	struct Seed
@@ -176,6 +321,9 @@ TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash
 		const double weight = (entry.favorite ? 3.0 : 1.0) * recency(entry.savedAt, now);
 		profile.m_seedWeights.insert(entry.key, weight);
 		Seed seed {entry.key, entry.image.value("website").toString(), weight, ratedTags(entry)};
+		if (!seed.website.isEmpty()) {
+			profile.m_siteWeights[seed.website] += weight;
+		}
 		if (seed.tags.isEmpty()) {
 			continue;
 		}
@@ -197,24 +345,53 @@ TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash
 	}
 
 	const double documents = seeds.size();
+	const double sampled = background.posts();
+	const bool contrast = sampled >= MinSourcePosts;
 	auto inverse = [&](const QString &name) { return std::log((documents + 1.0) / (documentFrequency.value(name) + 0.5)); };
 	double strongest = 0;
 	for (const QString &name : sortedKeys(termWeight)) {
 		const QString type = types.value(name);
-		// Ubiquitous liked tags still matter a little; one-off general tags are mostly noise.
-		const bool singleton = documentFrequency.value(name) < 2 && !crossSiteType(type) && termWeight.value(name) < 3.0;
-		double weight = termWeight.value(name) / totalWeight * (0.3 + inverse(name)) * typeBoost(type);
-		if (singleton) {
-			weight *= 0.35;
-		}
-		if (isGeneric(name)) {
-			weight *= 0.5;
+		double weight = 0;
+		if (contrast) {
+			// General tags depend on each site's vocabulary ("1girls" vs "1girl"): compare them only where they were rated.
+			const double frequency = background.frequency(name, crossSiteType(type) ? QHash<QString, double>() : profile.m_sites.value(name));
+			if (frequency < 0) {
+				profile.m_tags.insert(name, {name, type, 0, documentFrequency.value(name)}); // Unknown until those sites are sampled.
+				continue;
+			}
+			// Lift: a theme in 20% of ratings but 1% of posts says far more than breasts in 60% of both.
+			const double base = std::max(frequency, 0.5 / sampled);
+			const double lift = std::clamp(std::log(termWeight.value(name) / totalWeight / base), -2.0, 6.0);
+			const double confidence = 1.0 - std::exp(-documentFrequency.value(name) / 3.0);
+			weight = confidence * lift * (lift > 0 ? typeBoost(type) : 1.0);
+		} else {
+			// Ubiquitous liked tags still matter a little; one-off general tags are mostly noise.
+			const bool singleton = documentFrequency.value(name) < 2 && !crossSiteType(type) && termWeight.value(name) < 3.0;
+			weight = termWeight.value(name) / totalWeight * (0.3 + inverse(name)) * typeBoost(type);
+			if (singleton) {
+				weight *= 0.35;
+			}
+			if (isGeneric(name)) {
+				weight *= 0.5;
+			}
 		}
 		profile.m_tags.insert(name, {name, type, weight, documentFrequency.value(name)});
 		strongest = std::max(strongest, weight);
 	}
+	if (contrast) {
+		// Common tags that never show up in ratings are mild signs of disinterest.
+		const auto common = background.common(0.02);
+		for (auto it = common.constBegin(); it != common.constEnd(); ++it) {
+			if (!termWeight.contains(it.key()) && !isMetaTag(it.key())) {
+				const double expected = it.value() * documents;
+				const double lift = std::clamp(std::log(0.5 / documents / it.value()), -2.0, 0.0);
+				profile.m_tags.insert(it.key(), {it.key(), {}, (1.0 - std::exp(-expected / 3.0)) * lift, 0});
+			}
+		}
+	}
+	strongest = strongest > 0 ? strongest : 1.0;
 	for (auto it = profile.m_tags.begin(); it != profile.m_tags.end(); ++it) {
-		it->weight /= strongest;
+		it->weight = std::max(-1.0, it->weight / strongest);
 	}
 
 	// Pair tags that appear together so searches stay coherent with real tastes.
@@ -261,6 +438,7 @@ bool TasteProfile::isEmpty() const { return m_norm <= 0; }
 int TasteProfile::likes() const { return m_likes; }
 int TasteProfile::favorites() const { return m_favorites; }
 const QHash<QString, double> &TasteProfile::seedWeights() const { return m_seedWeights; }
+const QHash<QString, double> &TasteProfile::siteWeights() const { return m_siteWeights; }
 
 double TasteProfile::weight(const QString &tag) const
 {
@@ -299,7 +477,7 @@ double TasteProfile::score(const QStringList &tags) const
 	return unique.isEmpty() ? 0 : sum / (std::sqrt(double(unique.size())) * m_norm);
 }
 
-QList<DiscoveryQuery> TasteProfile::queries(const QStringList &sources, int count, quint32 seed) const
+QList<DiscoveryQuery> TasteProfile::queries(const QStringList &sources, int count, quint32 seed, const QHash<QString, DiscoveryFeedback> &feedback) const
 {
 	QList<DiscoveryQuery> result;
 	QStringList available = sources;
@@ -320,7 +498,7 @@ QList<DiscoveryQuery> TasteProfile::queries(const QStringList &sources, int coun
 	}
 
 	const QSet<QString> selected(available.begin(), available.end());
-	QList<QPair<double, QString>> pool;
+	QList<QPair<double, QString>> eligible;
 	for (const QString &name : sortedKeys(m_tags)) {
 		const auto &tag = m_tags[name];
 		if (tag.weight <= 0.02 || isGeneric(name) || !queryable(name)) {
@@ -333,12 +511,16 @@ QList<DiscoveryQuery> TasteProfile::queries(const QStringList &sources, int coun
 		if (!onSelected && !crossSiteType(tag.type)) {
 			continue;
 		}
-		const double priority = std::pow(tag.weight, 0.8) * typeBoost(tag.type);
-		// Weighted sampling without replacement (Efraimidis-Spirakis).
-		const double key = std::pow(std::max(1e-12, rng.generateDouble()), 1.0 / priority);
-		pool.append({key, name});
+		eligible.append({tag.weight * tag.weight * typeBoost(tag.type) * feedbackBoost(feedback, name), name});
 	}
-	std::sort(pool.begin(), pool.end(), [](const auto &left, const auto &right) { return left.first != right.first ? left.first > right.first : left.second < right.second; });
+	const auto byPriority = [](const auto &left, const auto &right) { return left.first != right.first ? left.first > right.first : left.second < right.second; };
+	std::sort(eligible.begin(), eligible.end(), byPriority);
+	QList<QPair<double, QString>> pool;
+	for (const auto &entry : eligible.mid(0, QueryPool)) {
+		// Weighted sampling without replacement (Efraimidis-Spirakis).
+		pool.append({std::pow(std::max(1e-12, rng.generateDouble()), 1.0 / entry.first), entry.second});
+	}
+	std::sort(pool.begin(), pool.end(), byPriority);
 
 	for (const auto &entry : pool.mid(0, count)) {
 		const QString &primary = entry.second;
@@ -362,7 +544,7 @@ QList<DiscoveryQuery> TasteProfile::queries(const QStringList &sources, int coun
 				// Partners must exist on the chosen source so both tags share one vocabulary.
 				if (partner.weight > 0.05 && !isGeneric(partner.name) && queryable(partner.name) && m_sites.value(partner.name).contains(website)
 					&& !(tag.type == QLatin1String("artist") && partner.type == QLatin1String("artist"))) {
-					partners.insert(partner.name, it.value() * partner.weight);
+					partners.insert(partner.name, it.value() * partner.weight * feedbackBoost(feedback, partner.name));
 				}
 			}
 			const QString partner = weightedPick(partners, rng);

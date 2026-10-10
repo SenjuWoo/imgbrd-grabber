@@ -47,6 +47,7 @@ class ThumbnailLoader : public QObject
 		bool m_aborted = false;
 		QSet<QString> m_redirectsSeen;
 		int m_redirectHops = 0;
+		bool m_retried = false;
 		QUrl m_url;
 		QList<QUrl> m_fallbackUrls;
 		QString m_error;

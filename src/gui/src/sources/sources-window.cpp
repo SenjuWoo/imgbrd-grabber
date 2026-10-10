@@ -364,6 +364,7 @@ QMap<QString, QStringList> SourcesWindow::loadPresets(QSettings *settings) const
 
 void SourcesWindow::savePresets(QSettings *settings) const
 {
+	settings->remove("SourcePresets"); // A shorter array would otherwise leave deleted presets behind.
 	settings->beginWriteArray("SourcePresets");
 	int i = 0;
 	for (auto it = m_presets.constBegin(); it != m_presets.constEnd(); ++it) {

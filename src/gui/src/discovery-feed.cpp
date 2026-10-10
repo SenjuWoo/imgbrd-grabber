@@ -18,6 +18,7 @@
 #include "models/profile.h"
 #include "models/site.h"
 #include "models/visual-encoder.h"
+#include "logger.h"
 #include "thumbnail-loader.h"
 #include "utils/file-utils.h"
 
@@ -29,6 +30,11 @@ namespace
 	constexpr int ConcurrentPreviews = 8;
 	constexpr int MaxSeen = 4000;
 	constexpr int MaxHidden = 5000;
+	constexpr int MaxFeedback = 3000;
+	// Newest posts sampled per batch to learn how common tags are on each source; only the few that fit the taste are shown.
+	constexpr int SampleLimit = 100;
+	constexpr int SampleShown = 6;
+	constexpr double WellSampled = 200;
 
 	void zNormalize(QVector<double> &values)
 	{
@@ -62,7 +68,7 @@ DiscoveryFeed::DiscoveryFeed(Profile *profile, LibraryRecommendations *recommend
 	m_seed = QRandomGenerator::global()->generate();
 	m_timeout->setSingleShot(true);
 	connect(m_timeout, &QTimer::timeout, this, &DiscoveryFeed::finishBatch);
-	connect(profile->library(), &LibraryStore::imageChanged, this, [this]() { m_tasteDirty = true; });
+	connect(profile->library(), &LibraryStore::imageChanged, this, &DiscoveryFeed::ratingChanged);
 	connect(recommendations, &LibraryRecommendations::changed, this, [this]() { m_tasteDirty = true; });
 	loadState();
 }
@@ -70,6 +76,22 @@ DiscoveryFeed::DiscoveryFeed(Profile *profile, LibraryRecommendations *recommend
 DiscoveryFeed::~DiscoveryFeed()
 {
 	cancel();
+	saveState();
+}
+
+void DiscoveryFeed::ratingChanged()
+{
+	m_tasteDirty = true;
+	// Credit the search that found a picture once it is liked or favorited; Library keys can differ through source links.
+	for (auto it = m_shownQueries.constBegin(); it != m_shownQueries.constEnd(); ++it) {
+		const auto image = m_shown.value(it.key());
+		if (image && !m_credited.contains(it.key()) && m_profile->library()->isRated(*image)) {
+			m_credited.insert(it.key());
+			for (const QString &tag : it.value()) {
+				m_feedback[tag].rated += 1;
+			}
+		}
+	}
 }
 
 void DiscoveryFeed::loadState()
@@ -95,6 +117,15 @@ void DiscoveryFeed::loadState()
 			m_dislikedTags.insert(it.key(), it.value().toDouble());
 		}
 	}
+	m_background = TagBackground::fromJson(root.value("background").toObject());
+	const auto feedback = root.value("feedback").toObject();
+	for (auto it = feedback.constBegin(); it != feedback.constEnd() && m_feedback.size() < MaxFeedback; ++it) {
+		const auto values = it.value().toArray();
+		const double shown = values.at(0).toDouble(), rated = values.at(1).toDouble();
+		if (shown >= 0 && rated >= 0) {
+			m_feedback.insert(it.key(), {shown, rated});
+		}
+	}
 }
 
 void DiscoveryFeed::saveState() const
@@ -103,11 +134,24 @@ void DiscoveryFeed::saveState() const
 	for (auto it = m_dislikedTags.constBegin(); it != m_dislikedTags.constEnd(); ++it) {
 		disliked.insert(it.key(), it.value());
 	}
+	// Keep the most-shown searches; the rest carry too little evidence to matter.
+	QList<QPair<double, QString>> shown;
+	for (auto it = m_feedback.constBegin(); it != m_feedback.constEnd(); ++it) {
+		shown.append({it->shown + it->rated, it.key()});
+	}
+	std::sort(shown.begin(), shown.end(), [](const auto &left, const auto &right) { return left.first > right.first; });
+	QJsonObject feedback;
+	for (const auto &entry : shown.mid(0, MaxFeedback)) {
+		const auto &value = m_feedback[entry.second];
+		feedback.insert(entry.second, QJsonArray {value.shown, value.rated});
+	}
 	const QJsonObject root {
-		{"version", 1},
+		{"version", 2},
 		{"seen", QJsonArray::fromStringList(m_seen)},
 		{"hidden", QJsonArray::fromStringList(m_hidden)},
 		{"disliked", disliked},
+		{"background", m_background.toJson()},
+		{"feedback", feedback},
 	};
 	const QString path = statePath(m_profile->getPath());
 	if (ensureFileParent(path)) {
@@ -159,7 +203,7 @@ const TasteProfile &DiscoveryFeed::taste()
 void DiscoveryFeed::rebuildTaste()
 {
 	m_tasteDirty = false;
-	m_taste = TasteProfile::build(m_profile->library()->entries(m_scope), m_dislikedTags);
+	m_taste = TasteProfile::build(m_profile->library()->entries(m_scope), m_dislikedTags, QDateTime::currentDateTimeUtc(), m_background);
 	m_visualSeeds.clear();
 	if (m_encoder != nullptr) {
 		const auto &vectors = m_recommendations->vectors();
@@ -190,6 +234,10 @@ void DiscoveryFeed::dismiss(const QString &key)
 		for (const QString &tag : image->tagsString()) {
 			m_dislikedTags[TasteProfile::normalize(tag)] += 1;
 		}
+	}
+	// Hiding is stronger than scrolling past.
+	for (const QString &tag : m_shownQueries.value(key)) {
+		m_feedback[tag].shown += 2;
 	}
 	m_tasteDirty = true;
 	saveState();
@@ -243,9 +291,13 @@ void DiscoveryFeed::restart()
 	m_seed = QRandomGenerator::global()->generate();
 	m_batch = 0;
 	m_emptyBatches = 0;
-	m_nextPage.clear();
+	// Newest-post samples keep paging so a refresh does not count the same posts twice.
+	for (auto it = m_nextPage.begin(); it != m_nextPage.end();) {
+		it = it.key().endsWith('|') ? std::next(it) : m_nextPage.erase(it);
+	}
 	m_exhausted.clear();
 	m_shown.clear();
+	m_shownQueries.clear();
 	m_shownFingerprints.clear();
 	m_shownMd5.clear();
 	m_tasteDirty = true;
@@ -272,16 +324,37 @@ void DiscoveryFeed::fetchMore()
 	}
 
 	const quint32 batchSeed = m_seed + quint32(m_batch) * 7919u;
-	++m_batch;
 	QRandomGenerator rng(batchSeed);
 	const int wanted = m_taste.isEmpty() ? std::min<int>(BatchQueries, int(sources.size())) : BatchQueries;
+	// Sample newest posts until every rated source is well known, then now and then to follow trends.
+	QStringList sampleSources;
+	bool unsampled = false;
+	for (const QString &source : sources) {
+		// Only sources with ratings matter for how distinctive a rated tag is.
+		if (!m_unsampleable.contains(source) && m_taste.siteWeights().value(source) > 0) {
+			sampleSources.append(source);
+			unsampled = unsampled || m_background.posts(source) < WellSampled;
+		}
+	}
+	const int samples = m_taste.isEmpty() || sampleSources.isEmpty() ? 0 : (unsampled ? 2 : (m_batch % 3 == 2 ? 1 : 0));
+	++m_batch;
 	m_failedSources.clear();
 	m_candidates.clear();
 	m_groups.clear();
 	m_previewQueue.clear();
 	m_batchEmitted = 0;
-	for (const auto &query : m_taste.queries(sources, wanted + 3, batchSeed)) {
-		if (m_pages.size() >= wanted) {
+	QList<DiscoveryQuery> queries;
+	// Sources with the most ratings and the fewest samples first.
+	std::sort(sampleSources.begin(), sampleSources.end(), [this](const QString &left, const QString &right) {
+		const auto &weights = m_taste.siteWeights();
+		return (m_background.posts(left) + 1) / (weights.value(left) + 0.5) < (m_background.posts(right) + 1) / (weights.value(right) + 0.5);
+	});
+	for (int i = 0; i < samples; ++i) {
+		queries.append({sampleSources[i % sampleSources.size()], {}, tr("New on %1").arg(sampleSources[i % sampleSources.size()])});
+	}
+	queries.append(m_taste.queries(sources, wanted + 3, batchSeed, m_feedback));
+	for (const auto &query : queries) {
+		if (m_pages.size() >= wanted + samples) {
 			break;
 		}
 		const QString signature = query.website + '|' + query.tags.join(' ');
@@ -293,7 +366,9 @@ void DiscoveryFeed::fetchMore()
 		const int page = m_nextPage.value(signature, query.tags.size() == 1 ? 1 + int(rng.bounded(3u)) : 1);
 		m_nextPage.insert(signature, page + 1);
 		m_queryReasons.insert(signature, query.reason);
-		auto *request = new Page(m_profile, site, sites.values(), query.tags, page, PageLimit, {}, false, this);
+		const bool sample = query.tags.isEmpty() && !m_taste.isEmpty();
+		log(QStringLiteral("Discover: %1 on %2 (page %3)").arg(query.tags.isEmpty() ? QStringLiteral("newest posts") : query.tags.join(' '), query.website).arg(page), Logger::Info);
+		auto *request = new Page(m_profile, site, sites.values(), query.tags, page, sample ? SampleLimit : PageLimit, {}, false, this);
 		m_pages.insert(request, signature);
 		connect(request, &Page::finishedLoading, this, [this](Page *result) { pageFinished(result, true); });
 		connect(request, &Page::failedLoading, this, [this](Page *result) { pageFinished(result, false); });
@@ -318,6 +393,8 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 		return;
 	}
 	const QString signature = m_pages.take(page);
+	const QString website = signature.section('|', 0, 0);
+	const QStringList queryTags = signature.section('|', 1).split(' ', Qt::SkipEmptyParts);
 	disconnect(page, nullptr, this, nullptr);
 	QList<Candidate> found;
 	if (!success) {
@@ -325,10 +402,22 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 		if (!m_failedSources.contains(name)) {
 			m_failedSources.append(name);
 		}
+		if (queryTags.isEmpty()) {
+			m_unsampleable.insert(website); // Do not spend every batch on a source that refuses anonymous listings.
+		}
 	} else {
 		const auto &images = page->images();
 		if (images.isEmpty() || !page->hasNext()) {
 			m_exhausted.insert(signature);
+		}
+		if (queryTags.isEmpty()) {
+			// Newest posts are an unbiased sample of the source, so count every one of them.
+			for (const auto &source : images) {
+				if (source && source->isValid()) {
+					m_background.add(website, source->tagsString());
+					m_backgroundChanged = true;
+				}
+			}
 		}
 		auto *store = m_profile->library();
 		QSet<QString> batchMd5;
@@ -358,6 +447,7 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 			}
 			Candidate candidate;
 			candidate.item = {key, image, m_queryReasons.value(signature), 0, false};
+			candidate.query = queryTags;
 			candidate.tagScore = m_taste.score(image->tagsString());
 			found.append(candidate);
 		}
@@ -366,8 +456,13 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 
 	// Each source streams in on its own; only its most relevant share gets a preview.
 	std::stable_sort(found.begin(), found.end(), [](const Candidate &left, const Candidate &right) { return left.tagScore > right.tagScore; });
-	if (!m_taste.isEmpty() && found.size() > 12) {
+	if (!m_taste.isEmpty() && queryTags.isEmpty()) {
+		found.erase(std::remove_if(found.begin(), found.end(), [](const Candidate &candidate) { return candidate.tagScore <= 0; }), found.end());
+		found = found.mid(0, SampleShown);
+	} else if (!m_taste.isEmpty() && found.size() > 12) {
 		found = found.mid(0, std::max<qsizetype>(12, qsizetype(found.size() * 0.7)));
+	} else if (queryTags.isEmpty()) {
+		found = found.mid(0, PageLimit);
 	}
 	if (!found.isEmpty()) {
 		const int group = m_nextGroup++;
@@ -527,6 +622,10 @@ void DiscoveryFeed::emitGroup(int group, bool force)
 		}
 		items.append(candidate.item);
 		m_shown.insert(candidate.item.key, candidate.item.image);
+		m_shownQueries.insert(candidate.item.key, candidate.query);
+		for (const QString &tag : candidate.query) {
+			m_feedback[tag].shown += 1;
+		}
 		m_shownFingerprints.append(candidate.fingerprint);
 		const QString md5 = candidate.item.image->md5().toLower();
 		if (!md5.isEmpty()) {
@@ -542,7 +641,6 @@ void DiscoveryFeed::emitGroup(int group, bool force)
 	}
 	if (!items.isEmpty()) {
 		m_batchEmitted += int(items.size());
-		saveState();
 		emit itemsReady(items);
 	}
 }
@@ -578,6 +676,11 @@ void DiscoveryFeed::finishBatch()
 		emitGroup(group, true);
 	}
 	m_candidates.clear();
+	if (m_backgroundChanged) {
+		m_backgroundChanged = false;
+		m_tasteDirty = true;
+	}
+	saveState();
 
 	QString status = m_batchEmitted == 0 ? tr("No new pictures in this batch.") : QString();
 	if (!m_failedSources.isEmpty()) {

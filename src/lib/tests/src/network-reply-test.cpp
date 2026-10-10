@@ -1,11 +1,15 @@
 #include <QEventLoop>
 #include <QNetworkRequest>
+#include <QScopeGuard>
+#include <QSignalSpy>
+#include <QTcpServer>
+#include <QTcpSocket>
 #include <QTimer>
 #include <QUrl>
 #include "catch.h"
 #include "custom-network-access-manager.h"
+#include "functions.h"
 #include "network/network-reply.h"
-
 
 static void drainEventLoop(int ms = 50)
 {
@@ -84,4 +88,28 @@ TEST_CASE("NetworkReply", "[network-reply]")
 		REQUIRE(finishedCount == 0);
 		REQUIRE(reply.networkReply() == nullptr);
 	}
+}
+
+TEST_CASE("A stalled host ends with an error instead of holding its request forever", "[network-reply]")
+{
+	QTcpServer server;
+	REQUIRE(server.listen(QHostAddress::LocalHost));
+	QList<QTcpSocket*> silent; // Accepted, never answered.
+	QObject::connect(&server, &QTcpServer::newConnection, [&]() {
+		while (server.hasPendingConnections()) {
+			silent.append(server.nextPendingConnection());
+		}
+	});
+	const bool testMode = isTestModeEnabled();
+	setTestModeEnabled(false);
+	auto restore = qScopeGuard([testMode]() { setTestModeEnabled(testMode); });
+
+	CustomNetworkAccessManager manager;
+	REQUIRE(manager.transferTimeout() > 0);
+	manager.setTransferTimeout(300);
+	NetworkReply reply(QNetworkRequest(QUrl(QStringLiteral("http://127.0.0.1:%1/stall").arg(server.serverPort()))), &manager);
+	QSignalSpy finished(&reply, &NetworkReply::finished);
+	reply.start(0);
+	REQUIRE(finished.wait(5000));
+	REQUIRE(reply.error() == NetworkReply::NetworkError::TimeoutError);
 }

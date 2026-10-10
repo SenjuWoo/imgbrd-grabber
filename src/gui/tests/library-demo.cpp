@@ -19,6 +19,7 @@
 #include <QTest>
 #include <QTreeWidget>
 #include "custom-network-access-manager.h"
+#include "discovery-feed.h"
 #include "models/image.h"
 #include "models/library-importer.h"
 #include "models/library-store.h"
@@ -127,6 +128,11 @@ TEST_CASE("Discover demo capture", "[.][home][demo]")
 	site->setSetting("sources/source_4", "", "Rss");
 	site->loadConfig();
 	profile->getSettings()->setValue("sites", QStringList{site->url()});
+	QFile state(DiscoveryFeed::statePath(profile->getPath()));
+	REQUIRE(state.open(QIODevice::WriteOnly));
+	const QJsonObject background {{site->url(), QJsonObject {{"posts", 400}, {"tags", QJsonObject {{"landscape", 8}}}}}};
+	state.write(QJsonDocument(QJsonObject {{"version", 2}, {"background", background}}).toJson());
+	state.close();
 	for (int id = 1; id <= 4; ++id) {
 		Image image(site, {{"id", QString::number(id)}, {"file_url", QString("https://test.invalid/%1.png").arg(id)}, {"tags", "landscape mountains"}}, profile.data());
 		image.setTags({Tag("landscape", "general")});

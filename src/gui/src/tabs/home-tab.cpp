@@ -543,7 +543,7 @@ void HomeTab::openPicture(const QString &key)
 	}
 	const qint64 scope = m_feed->scope();
 	auto *viewer = new ViewerWindow(images, image, image->parentSite(), m_profile, m_mainWindow, nullptr, scope > 0 && m_store->contains(libraryKey(key), scope) ? scope : 0);
-	viewer->go();
+	viewer->show();
 }
 
 void HomeTab::showMenu(const QStringList &keys, const QPoint &position)

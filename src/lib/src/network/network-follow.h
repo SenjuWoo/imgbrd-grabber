@@ -1,6 +1,7 @@
 #ifndef NETWORK_FOLLOW_H
 #define NETWORK_FOLLOW_H
 
+#include <QNetworkReply>
 #include <QSet>
 #include <QString>
 #include <QUrl>
@@ -29,6 +30,9 @@ class NetworkFollow
 		static bool isAuthenticationUrl(const QUrl &url);
 		static Action takeRedirect(const QUrl &from, const QUrl &to, QSet<QString> *seen, int *hops, QString *reason);
 		static Action takeRetry(int *retries, QString *reason);
+
+		/** Dropped connections, timeouts and server errors, which usually work on a later try. */
+		static bool isTransient(QNetworkReply::NetworkError error, int statusCode);
 };
 
 #endif // NETWORK_FOLLOW_H

@@ -16,6 +16,8 @@ QQueue<QString> CustomNetworkAccessManager::NextFiles;
 CustomNetworkAccessManager::CustomNetworkAccessManager(QObject *parent)
 	: QNetworkAccessManager(parent)
 {
+	// A host that stops sending would otherwise hold its request, and the per-host slot behind it, forever.
+	setTransferTimeout(30000);
 	connect(this, &QNetworkAccessManager::sslErrors, this, &CustomNetworkAccessManager::sslErrorHandler);
 }
 

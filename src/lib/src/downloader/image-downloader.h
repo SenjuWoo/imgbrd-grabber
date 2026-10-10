@@ -50,6 +50,7 @@ class ImageDownloader : public QObject
 		void downloadProgressImage(qint64 v1, qint64 v2);
 		void writeError();
 		void networkError(NetworkReply::NetworkError error, const QString &msg);
+		void detailsAfterNotFound(Image::LoadTagsResult result);
 		void success();
 
 	private:
@@ -78,6 +79,8 @@ class ImageDownloader : public QObject
 		QSet<QString> m_redirectsSeen;
 		int m_redirectHops = 0;
 		int m_rateLimitRetries = 0;
+		int m_transientRetries = 0;
+		bool m_triedDetails = false;
 };
 
 #endif // IMAGE_DOWNLOADER_H

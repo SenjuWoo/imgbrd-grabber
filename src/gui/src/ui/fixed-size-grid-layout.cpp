@@ -144,11 +144,17 @@ int FixedSizeGridLayout::doLayout(QRect rect, bool testOnly) const
 
 		const int nbElements = qMax(1, (w + spaceX) / (fixedWidth + spaceX));
 		const int totalSpace = w - (fixedWidth * nbElements);
-		spaceX = qMax(spaceX, totalSpace / qMax(1, nbElements - 1));
+		// Spare width widens gaps only a little and centers the rows; spreading all of it set pictures far apart.
+		spaceX = qMax(0, spaceX);
+		spaceX = qBound(spaceX, totalSpace / qMax(1, nbElements - 1), spaceX * 2);
+		const int indent = qMax(0, (totalSpace - spaceX * (nbElements - 1)) / 2);
+		if (lineHeight == 0 && x == effectiveRect.x()) {
+			x += indent;
+		}
 
 		int nextX = x + item->sizeHint().width() + spaceX;
 		if (nextX - spaceX - 1 > effectiveRect.right() && lineHeight > 0) {
-			x = effectiveRect.x();
+			x = effectiveRect.x() + indent;
 			y = y + lineHeight + spaceY;
 			nextX = x + item->sizeHint().width() + spaceX;
 			lineHeight = 0;

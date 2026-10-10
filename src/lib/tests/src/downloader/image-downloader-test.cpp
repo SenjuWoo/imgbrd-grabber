@@ -142,6 +142,33 @@ TEST_CASE("ImageDownloader")
 		settings->remove("LogFiles/0/content");
 	}
 
+	SECTION("Shipped tag captions file sits next to the picture")
+	{
+		auto img = createImage(profile, site);
+		ImageDownloader downloader(profile, img, "out.jpg", "tests/resources/tmp", 1, false, false, nullptr, true, false);
+
+		const QSettings defaults("../dist/common/defaults/settings.ini", QSettings::IniFormat);
+		QSettings *settings = profile->getSettings();
+		for (const QString &key : { QStringLiteral("locationType"), QStringLiteral("suffixWithoutExtension"), QStringLiteral("content") }) {
+			settings->setValue("LogFiles/0/" + key, defaults.value("LogFiles/0/" + key));
+		}
+
+		QList<ImageSaveResult> expected;
+		expected.append({ QDir::toNativeSeparators("tests/resources/tmp/out.jpg"), Image::Size::Full, Image::SaveResult::Saved });
+		assertDownload(profile, img, &downloader, expected, true);
+		settings->remove("LogFiles");
+
+		QFile caption("tests/resources/tmp/out.txt");
+		REQUIRE(caption.open(QFile::ReadOnly | QFile::Text));
+		const QString text = QString::fromUtf8(caption.readAll());
+		caption.close();
+		caption.remove();
+		REQUIRE(text.contains("to heart 2, "));
+		REQUIRE(!text.startsWith(", "));
+		REQUIRE(!text.endsWith(", "));
+		REQUIRE(!text.contains(", , "));
+	}
+
 	SECTION("SuccessLoadSize")
 	{
 		auto img = createImage(profile, site);
@@ -175,6 +202,7 @@ TEST_CASE("ImageDownloader")
 		expected.append({ QDir::toNativeSeparators("tests/resources/tmp/out.jpg"), Image::Size::Full, Image::SaveResult::NotFound });
 
 		CustomNetworkAccessManager::NextFiles.append("404");
+		CustomNetworkAccessManager::NextFiles.append("404"); // The post page is missing too.
 
 		assertDownload(profile, img, &downloader, expected, false);
 	}
@@ -187,9 +215,40 @@ TEST_CASE("ImageDownloader")
 		QList<ImageSaveResult> expected;
 		expected.append({ QDir::toNativeSeparators("tests/resources/tmp/out.jpg"), Image::Size::Full, Image::SaveResult::NetworkError });
 
-		CustomNetworkAccessManager::NextFiles.append("500");
+		// Two retries, then a real failure.
+		for (int i = 0; i < 3; ++i) {
+			CustomNetworkAccessManager::NextFiles.append("500");
+		}
 
 		assertDownload(profile, img, &downloader, expected, false);
+	}
+
+	SECTION("Retry a momentary server error")
+	{
+		auto img = createImage(profile, site);
+		ImageDownloader downloader(profile, img, "out.jpg", "tests/resources/tmp", 1, false, false, nullptr, false, false);
+
+		QList<ImageSaveResult> expected;
+		expected.append({ QDir::toNativeSeparators("tests/resources/tmp/out.jpg"), Image::Size::Full, Image::SaveResult::Saved });
+
+		CustomNetworkAccessManager::NextFiles.append("500");
+
+		assertDownload(profile, img, &downloader, expected, true);
+	}
+
+	SECTION("A guessed file URL is corrected from the post page")
+	{
+		auto img = createImage(profile, site);
+		const QUrl guessed = img->url();
+		ImageDownloader downloader(profile, img, "out.jpg", "tests/resources/tmp", 1, false, false, nullptr, false, false);
+
+		QList<ImageSaveResult> expected;
+		expected.append({ QDir::toNativeSeparators("tests/resources/tmp/out.jpg"), Image::Size::Full, Image::SaveResult::Saved });
+
+		CustomNetworkAccessManager::NextFiles.append("404");
+
+		assertDownload(profile, img, &downloader, expected, true);
+		REQUIRE(img->url() != guessed);
 	}
 
 	SECTION("OriginalMd5")
@@ -223,6 +282,7 @@ TEST_CASE("ImageDownloader")
 		expected.append({ QDir::toNativeSeparators("tests/resources/tmp/1bc29b36f623ba82aaf6724fd3b16718.png"), Image::Size::Full, Image::SaveResult::Saved });
 
 		CustomNetworkAccessManager::NextFiles.append("404");
+		CustomNetworkAccessManager::NextFiles.append("404"); // No post page to read the actual file from.
 
 		assertDownload(profile, img, &downloader, expected, true);
 	}
@@ -236,6 +296,7 @@ TEST_CASE("ImageDownloader")
 		expected.append({ QDir::toNativeSeparators("tests/resources/tmp/1bc29b36f623ba82aaf6724fd3b16718.jpg"), Image::Size::Sample, Image::SaveResult::Saved });
 
 		CustomNetworkAccessManager::NextFiles.append("404");
+		CustomNetworkAccessManager::NextFiles.append("404"); // No post page to read the actual file from.
 
 		assertDownload(profile, img, &downloader, expected, true, false, true);
 	}

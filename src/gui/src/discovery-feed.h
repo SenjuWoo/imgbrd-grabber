@@ -53,6 +53,8 @@ class DiscoveryFeed : public QObject
 		bool isBusy() const;
 		bool lastBatchProductive() const { return m_batchEmitted > 0; }
 		const TasteProfile &taste();
+		const TagBackground &background() const { return m_background; }
+		const QHash<QString, DiscoveryFeedback> &feedback() const { return m_feedback; }
 		QSharedPointer<Image> image(const QString &key) const;
 		void dismiss(const QString &key);
 		void resetDismissed();
@@ -68,6 +70,7 @@ class DiscoveryFeed : public QObject
 		struct Candidate
 		{
 			DiscoveryItem item;
+			QStringList query;
 			double tagScore = 0;
 			double visualScore = -1;
 			ImageFingerprint fingerprint;
@@ -85,6 +88,7 @@ class DiscoveryFeed : public QObject
 		void previewFinished(ThumbnailLoader *loader, const QString &key);
 		void encoded(const QString &key, const QVector<float> &vector);
 		void candidateDone(const QString &key);
+		void ratingChanged();
 		void finishBatch();
 		void setBusy(bool busy);
 		double visualScore(const QVector<float> &vector) const;
@@ -123,6 +127,12 @@ class DiscoveryFeed : public QObject
 		QStringList m_hidden;
 		QSet<QString> m_hiddenSet;
 		QHash<QString, double> m_dislikedTags;
+		TagBackground m_background;
+		bool m_backgroundChanged = false;
+		QHash<QString, DiscoveryFeedback> m_feedback;
+		QHash<QString, QStringList> m_shownQueries;
+		QSet<QString> m_credited;
+		QSet<QString> m_unsampleable;
 		QList<QPair<QVector<float>, double>> m_visualSeeds;
 };
 

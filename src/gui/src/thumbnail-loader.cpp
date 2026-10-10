@@ -2,6 +2,7 @@
 #include <QBuffer>
 #include <QImageReader>
 #include <QNetworkRequest>
+#include <QTimer>
 #include "models/image.h"
 #include "models/site.h"
 #include "network/network-follow.h"
@@ -121,6 +122,8 @@ void ThumbnailLoader::replyFinished()
 		return;
 	}
 	if (m_reply->error() == NetworkReply::NetworkError::OperationCanceledError) {
+		// Cancelled elsewhere, not by abort() here: try a fallback or report it, never stay pending.
+		fail(tr("Thumbnail timed out."));
 		return;
 	}
 
@@ -137,6 +140,15 @@ void ThumbnailLoader::replyFinished()
 		return;
 	}
 	if (m_reply->error() != NetworkReply::NetworkError::NoError) {
+		// One quiet retry for momentary failures, which otherwise left an error tile until reloaded by hand.
+		if (!m_retried && NetworkFollow::isTransient(m_reply->error(), m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())) {
+			m_retried = true;
+			disconnect(m_reply, nullptr, this, nullptr);
+			m_reply->deleteLater();
+			m_reply = nullptr;
+			QTimer::singleShot(1000, this, &ThumbnailLoader::load);
+			return;
+		}
 		fail(tr("Thumbnail could not load: %1").arg(m_reply->errorString()));
 		return;
 	}
@@ -153,14 +165,17 @@ void ThumbnailLoader::replyFinished()
 	buffer.open(QIODevice::ReadOnly);
 	QImageReader reader(&buffer);
 	reader.setAutoTransform(true);
+	const auto excessive = [](const QSize &size) {
+		return size.width() > MaxPreviewDimension || size.height() > MaxPreviewDimension || static_cast<qint64>(size.width()) * size.height() > MaxPreviewPixels;
+	};
+	// Some formats only know their size once decoded; Qt's allocation limit still bounds those.
 	const QSize size = reader.size();
-	if (size.isEmpty() || size.width() > MaxPreviewDimension || size.height() > MaxPreviewDimension
-		|| static_cast<qint64>(size.width()) * size.height() > MaxPreviewPixels) {
+	if (size.isValid() && excessive(size)) {
 		fail(tr("Thumbnail has invalid or excessive image dimensions."));
 		return;
 	}
 	const QImage pixels = reader.read();
-	if (pixels.isNull()) {
+	if (pixels.isNull() || excessive(pixels.size())) {
 		fail(tr("Thumbnail could not be decoded: %1").arg(reader.errorString()));
 		return;
 	}

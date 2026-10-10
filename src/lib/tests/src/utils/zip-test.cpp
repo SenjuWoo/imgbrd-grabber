@@ -39,9 +39,10 @@ namespace
 	void rawTestZip(const QString &path, const QStringList &names)
 	{
 		QList<QByteArray> placeholders;
+		QByteArray bytes;
 		{
 			mz_zip_archive archive {};
-			REQUIRE(mz_zip_writer_init_file(&archive, path.toUtf8().constData(), 0));
+			REQUIRE(mz_zip_writer_init_heap(&archive, 0, 0));
 			auto close = qScopeGuard([&]() { mz_zip_writer_end(&archive); });
 			const QByteArray payload("incoming payload");
 			for (int i = 0; i < names.size(); ++i) {
@@ -50,16 +51,19 @@ namespace
 				placeholders.append(placeholder);
 				REQUIRE(mz_zip_writer_add_mem(&archive, placeholder.constData(), payload.constData(), size_t(payload.size()), 0));
 			}
-			REQUIRE(mz_zip_writer_finalize_archive(&archive));
+			void *buffer = nullptr;
+			size_t size = 0;
+			REQUIRE(mz_zip_writer_finalize_heap_archive(&archive, &buffer, &size));
+			bytes = QByteArray(static_cast<const char*>(buffer), qsizetype(size));
+			mz_free(buffer);
 		}
 		// Miniz refuses absolute names when writing; mutate equal-length ZIP headers
 		// to exercise archives supplied by other writers without bypassing the reader.
-		QFile file(path); REQUIRE(file.open(QIODevice::ReadWrite));
-		QByteArray bytes = file.readAll();
 		for (int i = 0; i < names.size(); ++i) {
 			REQUIRE(bytes.count(placeholders[i]) == 2); bytes.replace(placeholders[i], names[i].toUtf8());
 		}
-		REQUIRE(file.seek(0)); REQUIRE(file.write(bytes) == bytes.size());
+		QFile file(path); REQUIRE(file.open(QIODevice::WriteOnly));
+		REQUIRE(file.write(bytes) == bytes.size());
 	}
 
 }

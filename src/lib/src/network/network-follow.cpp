@@ -63,6 +63,13 @@ NetworkFollow::Action NetworkFollow::takeRedirect(const QUrl &from, const QUrl &
 	return Action::Follow;
 }
 
+bool NetworkFollow::isTransient(QNetworkReply::NetworkError error, int statusCode)
+{
+	return statusCode >= 500 || statusCode == 429 || error == QNetworkReply::TimeoutError || error == QNetworkReply::RemoteHostClosedError
+		|| error == QNetworkReply::TemporaryNetworkFailureError || error == QNetworkReply::NetworkSessionFailedError
+		|| error == QNetworkReply::UnknownNetworkError || error == QNetworkReply::ProxyTimeoutError;
+}
+
 NetworkFollow::Action NetworkFollow::takeRetry(int *retries, QString *reason)
 {
 	if (retries == nullptr) {

@@ -28,6 +28,7 @@
 #include "tabs/tag-tab.h"
 #include "tags/tag.h"
 #include "ui/image-grid.h"
+#include "viewer/viewer-window.h"
 
 namespace
 {
@@ -84,6 +85,15 @@ namespace
 	{
 		return {{"id", id}, {"md5", md5}, {"file_url", QStringLiteral("https://test.invalid/%1.png").arg(id)}, {"tag_string", tags}, {"image_width", 800}, {"image_height", 1000}};
 	}
+
+	// A well-sampled source, so Discover searches right away instead of sampling newest posts first.
+	void seedTagBackground(Profile *profile, const QString &website)
+	{
+		const QJsonObject background {{website, QJsonObject {{"posts", 400}, {"tags", QJsonObject {{"forest", 4}}}}}};
+		QFile file(DiscoveryFeed::statePath(profile->getPath()));
+		REQUIRE(file.open(QIODevice::WriteOnly));
+		REQUIRE(file.write(QJsonDocument(QJsonObject {{"version", 2}, {"background", background}}).toJson()) > 0);
+	}
 }
 
 TEST_CASE("Discover learns from ratings and hides rated, blacklisted and dismissed pictures", "[library][home][discovery]")
@@ -93,6 +103,7 @@ TEST_CASE("Discover learns from ratings and hides rated, blacklisted and dismiss
 	REQUIRE(directory.isValid());
 	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
 	Site *site = jsonDanbooru(profile.data());
+	seedTagBackground(profile.data(), site->url());
 	const QString rated = saveRated(profile.data(), 801, "22222222222222222222222222222222", "forest", true);
 	profile->addBlacklistedTag("spiders");
 	const QString posts = writePosts(directory, "posts.json", {
@@ -128,6 +139,9 @@ TEST_CASE("Discover learns from ratings and hides rated, blacklisted and dismiss
 	QTest::keyClick(grid, Qt::Key_L);
 	const QString libraryKey = profile->library()->keyForImage(*home.feed()->image(first));
 	REQUIRE(profile->library()->entry(libraryKey).liked);
+	// The search that found it gets credit once, for later batches.
+	REQUIRE(home.feed()->feedback().value("forest").shown == 2);
+	REQUIRE(home.feed()->feedback().value("forest").rated == 1);
 	REQUIRE(model->item(0).liked);
 	REQUIRE(profile->library()->entry(libraryKey).image.value("website").toString() == site->url());
 	QTest::keyClick(grid, Qt::Key_L);
@@ -149,6 +163,63 @@ TEST_CASE("Discover learns from ratings and hides rated, blacklisted and dismiss
 	REQUIRE(saved.value("hidden").toArray().contains(second));
 	REQUIRE(saved.value("seen").toArray().size() == 2);
 	REQUIRE(profile->library()->entry(rated).favorite);
+	REQUIRE(home.feed()->feedback().value("forest").rated == 1);
+	REQUIRE(home.feed()->feedback().value("forest").shown == 4); // Hiding counts more than scrolling past.
+	REQUIRE(saved.value("feedback").toObject().value("forest").toArray().at(0).toDouble() == 4);
+
+	// Double-clicking a picture opens it in a visible viewer.
+	const QRect tile(grid->visualRect(model->index(0)).topLeft(), grid->tileSize());
+	QTest::mouseDClick(grid->viewport(), Qt::LeftButton, Qt::NoModifier, tile.center() - QPoint(0, tile.height() / 4));
+	QWidget *viewer = nullptr;
+	REQUIRE(QTest::qWaitFor([&viewer]() {
+		for (auto *widget : QApplication::topLevelWidgets()) {
+			if (qobject_cast<ViewerWindow*>(widget) != nullptr && widget->isVisible()) {
+				viewer = widget;
+			}
+		}
+		return viewer != nullptr;
+	}, 3000));
+	viewer->close();
+}
+
+TEST_CASE("Discover samples newest posts to learn how common tags are on each source", "[library][home][discovery]")
+{
+	auto clearReplies = qScopeGuard([]() { CustomNetworkAccessManager::NextFiles.clear(); });
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = jsonDanbooru(profile.data());
+	// All three searches go out at once, so the mocked replies are taken in order.
+	site->setSetting("download/throttle_page", 0, 1);
+	site->loadConfig();
+	saveRated(profile.data(), 801, "22222222222222222222222222222222", "forest", true);
+	profile->addBlacklistedTag("spiders");
+	const QString posts = writePosts(directory, "posts.json", {
+		post(901, "11111111111111111111111111111111", "forest river"),
+		post(801, "22222222222222222222222222222222", "forest"),
+		post(903, "33333333333333333333333333333333", "forest spiders"),
+		post(904, "44444444444444444444444444444444", "forest lake"),
+	});
+	// Two newest-post samples and the "forest" search, in any order, then two previews.
+	for (int i = 0; i < 3; ++i) {
+		CustomNetworkAccessManager::NextFiles.enqueue(posts);
+	}
+	CustomNetworkAccessManager::NextFiles.enqueue(writePreview(directory, "a.png", Qt::red));
+	CustomNetworkAccessManager::NextFiles.enqueue(writePreview(directory, "b.png", Qt::blue));
+
+	HomeTab home(profile.data(), nullptr);
+	home.resize(1100, 800);
+	home.show();
+	auto *model = home.grid()->gridModel();
+	REQUIRE(QTest::qWaitFor([&home]() { return !home.feed()->isBusy() && home.grid()->gridModel()->rowCount() == 2; }, 8000));
+	REQUIRE(model->rowCount() == 2); // Samples still never show rated, blacklisted or repeated pictures.
+	// Every valid sampled post counts, rated and blacklisted ones too: they are part of what the source has.
+	REQUIRE(home.feed()->background().posts(site->url()) == 8);
+	QFile state(DiscoveryFeed::statePath(profile->getPath()));
+	REQUIRE(state.open(QIODevice::ReadOnly));
+	const auto saved = QJsonDocument::fromJson(state.readAll()).object();
+	REQUIRE(TagBackground::fromJson(saved.value("background").toObject()).frequency("forest") < 0); // Not yet well sampled.
+	REQUIRE(saved.value("background").toObject().value(site->url()).toObject().value("posts").toDouble() == 8);
 }
 
 TEST_CASE("Discover reports failed sources and starts fresh without ratings", "[library][home][discovery]")

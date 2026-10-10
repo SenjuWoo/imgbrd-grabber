@@ -19,7 +19,7 @@ An all-in-one image searcher, downloader and personal picture Library. Search do
 - **Search: Hide liked.** One checkbox hides pictures you already liked or favorited, including the same file from another site.
 - **Merge results removes look-alike duplicates.** Besides identical checksums, merged results now recognise the same picture re-uploaded elsewhere (resized or recompressed). Strict thresholds keep edits, crops and recolors apart.
 - **A modern shell.** A navigation rail (Discover, Search, Library, Following, Downloads, Monitors), search-only docks, the new **Woo Night** theme, rounded tiles that fill the window and toast confirmations. Keyboard: **L** like, **F** favorite, **D** download, **X** not interested, **Enter** open.
-- **Ready-made defaults for new installs.** A curated set of sources and source presets, a blacklist, original-file downloads named by checksum, merged results and hidden blacklisted posts. Existing profiles keep all their settings.
+- **Ready-made defaults for new installs.** A curated set of sources and a source preset, a strong blacklist, 62 pictures per page, original-file downloads named by checksum with a comma-separated tag `.txt` beside each (ready for LoRA captions), merged results and hidden blacklisted posts. Existing profiles keep all their settings.
 
 ## Discover
 
@@ -112,6 +112,10 @@ npm test -- --runInBand
 - Add the navigation rail, search-only docks, Woo Night theme, toasts and keyboard actions. Discover opens first unless Grabber was started for a specific search.
 - Ship first-run defaults (sources, presets, blacklist, naming) for new profiles only; install every bundled theme.
 - Fix the scroll range ending early on large grids by laying tiles out in a single pass.
+- Make Discover learn what sets a taste apart: it samples newest posts on rated sources to see how common each tag is there, weighs rated tags by how much more often they appear in ratings (themes, artists and characters over breasts and ass), searches the strongest tags, and favors searches whose pictures get liked while dropping ignored or hidden ones.
+- Ship a stronger default blacklist: male-only, gay, trap, futanari, scat and diaper content, while pictures of women with a man or penis in the background stay visible. New profiles show 62 pictures per page and write a `.txt` of comma-separated tags next to each download (ready for LoRA captions).
+- Fix Discover double-click not opening the viewer; retry momentary download and thumbnail failures; read the real file address from the post page when a guessed one is missing (rule34.xxx HTML listings); time out stalled hosts after 30 s of silence so searches finish; tighter, centered search result grid.
+- Remove unused miniz file I/O and use `localtime_r`; keep never-built vendored generators and test frameworks out of code scanning.
 
 ## Changes in 7.17.1
 

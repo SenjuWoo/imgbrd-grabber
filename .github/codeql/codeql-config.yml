@@ -3,3 +3,7 @@ paths-ignore:
   - src/sites/*/resources
   - src/tests/resources
   - src/*/tests/resources
+  # Never built into Grabber: lexbor's table generators and tests, and the Catch2 test framework.
+  - src/lib/vendor/lexbor/utils
+  - src/lib/vendor/lexbor/test
+  - src/tests/vendor

@@ -4,6 +4,7 @@
 #include <QImageReader>
 #include <QSettings>
 #include <QSize>
+#include <QTimer>
 #include <QUuid>
 #include <utility>
 #include "extension-rotator.h"
@@ -332,6 +333,14 @@ void ImageDownloader::writeError()
 
 void ImageDownloader::networkError(NetworkReply::NetworkError error, const QString &msg)
 {
+	// Listings without file URLs (such as HTML sources) make the URL a guess; the post page has the real one.
+	if (error == NetworkReply::NetworkError::ContentNotFoundError && !m_triedDetails && !m_tryingSample && !m_image->pageUrl().isEmpty()) {
+		m_triedDetails = true;
+		log(QStringLiteral("Image not found at `%1`. Reading its post page for the actual file...").arg(m_url.toString()), Logger::Info);
+		connect(m_image.data(), &Image::finishedLoadingTags, this, &ImageDownloader::detailsAfterNotFound);
+		m_image->loadDetails();
+		return;
+	}
 	if (error == NetworkReply::NetworkError::ContentNotFoundError) {
 		QSettings *settings = m_profile->getSettings();
 		ExtensionRotator *extensionRotator = m_image->extensionRotator();
@@ -378,9 +387,30 @@ void ImageDownloader::networkError(NetworkReply::NetworkError error, const QStri
 			return;
 		}
 
+		// Dropped connections, timeouts and server errors are usually momentary: retry a little later instead of failing.
+		if (NetworkFollow::isTransient(error, statusCode) && NetworkFollow::takeRetry(&m_transientRetries, nullptr) == NetworkFollow::Action::Follow) {
+			log(QStringLiteral("Network error for the image `%1`: %2 (%3). New try.").arg(m_image->url().toString(), msg).arg(error), Logger::Warning);
+			QTimer::singleShot(500 * m_transientRetries, this, [this]() { loadImage(); });
+			return;
+		}
+
 		log(QStringLiteral("Network error for the image: `%1`: %2 (%3)").arg(m_image->url().toString()).arg(error).arg(msg), Logger::Error);
 		emit saved(m_image, makeResult(m_paths, Image::SaveResult::NetworkError));
 	}
+}
+
+void ImageDownloader::detailsAfterNotFound(Image::LoadTagsResult result)
+{
+	disconnect(m_image.data(), &Image::finishedLoadingTags, this, &ImageDownloader::detailsAfterNotFound);
+	const QUrl url = m_image->url(currentSize());
+	if (result == Image::LoadTagsResult::Ok && !url.isEmpty() && url != m_url) {
+		log(QStringLiteral("Found the actual file on the post page: `%1`").arg(url.toString()), Logger::Info);
+		m_url = url;
+		loadImage();
+		return;
+	}
+	// Same address on the post page: fall back to guessing other extensions or the sample.
+	networkError(NetworkReply::NetworkError::ContentNotFoundError, QString());
 }
 
 void ImageDownloader::success()

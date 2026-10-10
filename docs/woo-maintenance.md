@@ -2,7 +2,7 @@
 
 Keep one portable app beside this checkout. The app profile stays outside Git:
 settings.ini, site settings/cookies, blacklists, history, favorites, tabs, queued
-downloads, the MD5 database, library.sqlite, discover.json (Discover's seen/hidden history),
+downloads, the MD5 database, library.sqlite, discover.json (Discover's seen/hidden history, sampled tag frequencies and search feedback),
 models/ and recommendations/ are personal data. Never copy them into source or CI.
 `src/dist/common/defaults/` holds the shipped first-run defaults (sources, presets, blacklist);
 they apply only when a profile's settings.ini is missing or empty.
