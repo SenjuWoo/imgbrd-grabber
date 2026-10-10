@@ -2,48 +2,86 @@
 #include <QComboBox>
 #include <QDateTime>
 #include <QDesktopServices>
-#include <QFile>
 #include <QDir>
 #include <QDragEnterEvent>
 #include <QDropEvent>
+#include <QFile>
 #include <QFileDialog>
 #include <QFileInfo>
+#include <QFrame>
 #include <QFutureWatcher>
-#include <QMimeData>
-#include <QPlainTextEdit>
-#include <QProgressDialog>
-#include <QSettings>
-#include <QtConcurrent>
-#include "models/library-importer.h"
-#include "viewer/library-image-dialog.h"
-#include "viewer/library-source-dialog.h"
 #include <QHBoxLayout>
-#include <QInputDialog>
 #include <QImageReader>
+#include <QInputDialog>
 #include <QJsonDocument>
 #include <QLabel>
 #include <QLineEdit>
-#include <QListWidget>
 #include <QMenu>
 #include <QMessageBox>
+#include <QMimeData>
+#include <QPlainTextEdit>
+#include <QProgressDialog>
 #include <QPushButton>
+#include <QRandomGenerator>
+#include <QScrollBar>
+#include <QSettings>
 #include <QSignalBlocker>
-#include <QSplitter>
 #include <QStackedWidget>
 #include <QTimer>
-#include <QToolButton>
 #include <QTreeWidget>
 #include <QVBoxLayout>
-#include "image-context-menu.h"
+#include <QtConcurrent>
+#include <functional>
+#include <numeric>
+#include "downloader/download-queue.h"
+#include "downloader/image-downloader.h"
 #include "image-library-actions.h"
 #include "main-window.h"
 #include "models/image.h"
+#include "models/library-importer.h"
 #include "models/profile.h"
+#include "picture-actions.h"
+#include "ui/toast.h"
+#include "utils/image-fingerprint.h"
+#include "viewer/library-image-dialog.h"
+#include "viewer/library-source-dialog.h"
 #include "viewer/viewer-window.h"
 
 
-LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
-	: QWidget(parent), m_profile(profile), m_mainWindow(parent), m_store(profile->library())
+namespace
+{
+	QString muted(const QPalette &palette)
+	{
+		const QColor a = palette.color(QPalette::WindowText), b = palette.color(QPalette::Window);
+		return QColor((a.red() * 3 + b.red() * 2) / 5, (a.green() * 3 + b.green() * 2) / 5, (a.blue() * 3 + b.blue() * 2) / 5).name();
+	}
+
+	QString entryTitle(const LibraryEntry &entry)
+	{
+		QString name = entry.image.value("name").toString();
+		if (name.isEmpty()) {
+			name = entry.image.value("data").toObject().value("title").toString();
+		}
+		if (name.isEmpty()) {
+			name = LibraryTab::tr("Picture #%1").arg(entry.image.value("id").toString());
+		}
+		return name;
+	}
+
+	QString uniquePath(const QString &folder, const QString &name)
+	{
+		const QFileInfo info(name);
+		QString candidate = QDir(folder).filePath(name);
+		for (int i = 2; QFile::exists(candidate); ++i) {
+			candidate = QDir(folder).filePath(QStringLiteral("%1 (%2).%3").arg(info.completeBaseName()).arg(i).arg(info.suffix()));
+		}
+		return candidate;
+	}
+}
+
+
+LibraryTab::LibraryTab(Profile *profile, MainWindow *parent, DownloadQueue *downloadQueue)
+	: QWidget(parent), m_profile(profile), m_mainWindow(parent), m_downloadQueue(downloadQueue), m_store(profile->library())
 {
 	setObjectName("libraryTab");
 	setAcceptDrops(true);
@@ -51,26 +89,26 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	setWindowTitle(tr("Library"));
 	setMaximumWidth(16777214); // Existing convention for permanent tabs.
 	auto *layout = new QHBoxLayout(this);
-	layout->setContentsMargins(16, 16, 16, 16);
-	auto *splitter = new QSplitter(this);
-	layout->addWidget(splitter);
-	auto *sidebar = new QWidget(splitter);
+	layout->setContentsMargins(0, 0, 0, 0);
+	layout->setSpacing(0);
+
+	// Sidebar: smart views and collections.
+	auto *sidebar = new QWidget(this);
+	sidebar->setObjectName("librarySidebarPanel");
+	sidebar->setFixedWidth(230);
 	auto *sideLayout = new QVBoxLayout(sidebar);
-	sideLayout->setContentsMargins(0, 0, 12, 0);
-	auto *heading = new QLabel(tr("Your library"), sidebar);
-	QFont headingFont = heading->font();
-	headingFont.setPointSize(16);
-	headingFont.setBold(true);
-	heading->setFont(headingFont);
+	sideLayout->setContentsMargins(16, 18, 10, 14);
+	auto *heading = new QLabel(tr("Library"), sidebar);
+	heading->setObjectName("pageTitle");
 	sideLayout->addWidget(heading);
 	m_sidebar = new QTreeWidget(sidebar);
 	m_sidebar->setObjectName("librarySidebar");
 	m_sidebar->setHeaderHidden(true);
 	m_sidebar->setRootIsDecorated(false);
-	m_sidebar->setIndentation(12);
-	m_sidebar->setIconSize(QSize(36, 36));
-	m_sidebar->setMinimumWidth(180);
+	m_sidebar->setIndentation(10);
+	m_sidebar->setIconSize(QSize(32, 32));
 	m_sidebar->setContextMenuPolicy(Qt::CustomContextMenu);
+	m_sidebar->setFrameShape(QFrame::NoFrame);
 	sideLayout->addWidget(m_sidebar, 1);
 	auto *create = new QPushButton(tr("+ New collection"), sidebar);
 	create->setObjectName("libraryNewCollection");
@@ -79,35 +117,41 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	m_manage = new QPushButton(tr("Manage collection…"), sidebar);
 	m_manage->setObjectName("libraryManageCollection");
 	sideLayout->addWidget(m_manage);
-	auto *content = new QWidget(splitter);
+	layout->addWidget(sidebar);
+
+	auto *content = new QWidget(this);
 	auto *contentLayout = new QVBoxLayout(content);
-	contentLayout->setContentsMargins(8, 0, 0, 0);
+	contentLayout->setContentsMargins(20, 18, 20, 10);
+	contentLayout->setSpacing(10);
+	layout->addWidget(content, 1);
+
+	// Title row
+	auto *titleRow = new QHBoxLayout();
+	auto *titles = new QVBoxLayout();
+	titles->setSpacing(2);
 	m_title = new QLabel(content);
+	m_title->setObjectName("libraryTitle");
 	m_title->setTextFormat(Qt::PlainText);
-	m_title->setWordWrap(true);
-	QFont titleFont = m_title->font();
-	titleFont.setPointSize(20);
-	titleFont.setBold(true);
-	m_title->setFont(titleFont);
-	contentLayout->addWidget(m_title);
-	m_hint = new QLabel(content);
-	m_hint->setTextFormat(Qt::PlainText);
-	m_hint->setWordWrap(true);
-	contentLayout->addWidget(m_hint);
-	auto *filters = new QHBoxLayout();
-	m_search = new QLineEdit(content);
-	m_search->setObjectName("librarySearch");
-	m_search->setPlaceholderText(tr("Search titles, tags, sources and notes"));
-	m_search->setClearButtonEnabled(true);
-	m_filter = new QComboBox(content);
-	m_filter->setObjectName("libraryFilter");
-	m_filter->addItems({ tr("All pictures"), tr("Liked"), tr("Favorites") });
-	filters->addWidget(m_search, 1);
-	filters->addWidget(m_filter);
-	m_importButton = new QPushButton(tr("Import pictures…"), content);
+	m_count = new QLabel(content);
+	m_count->setObjectName("libraryCount");
+	titles->addWidget(m_title);
+	titles->addWidget(m_count);
+	titleRow->addLayout(titles, 1);
+	m_selectAll = new QPushButton(tr("Select all"), content);
+	m_selectAll->setObjectName("librarySelectAll");
+	m_selectAll->setToolTip(tr("Select every picture in this view (Ctrl+A)"));
+	m_downloadAll = new QPushButton(tr("⬇  Download all"), content);
+	m_downloadAll->setObjectName("libraryDownloadAll");
+	m_downloadAll->setToolTip(tr("Download the original of every picture in this view to your download folder"));
+	m_importButton = new QPushButton(tr("Import…"), content);
 	m_importButton->setObjectName("libraryImport");
 	m_importButton->setEnabled(m_store->isReady());
-	m_importButton->setToolTip(tr("Choose files or a folder, or drop pictures into Library."));
+	m_importButton->setToolTip(tr("Add pictures from your PC, or drop them anywhere on Library."));
+	for (auto *button : {m_selectAll, m_downloadAll, m_importButton}) {
+		titleRow->addWidget(button, 0, Qt::AlignVCenter);
+	}
+	contentLayout->addLayout(titleRow);
+
 	auto *importMenu = new QMenu(m_importButton);
 	importMenu->addAction(tr("Choose pictures…"), this, [this]() {
 		QStringList patterns;
@@ -128,8 +172,8 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	importMenu->addSeparator();
 	importMenu->addAction(tr("Recheck metadata for selected pictures"), this, [this]() {
 		QStringList paths;
-		for (auto *item : m_grid->selectedItems()) {
-			for (const auto &path : m_entries.value(item->data(Qt::UserRole).toString()).localPaths) {
+		for (const auto &key : m_grid->selectedKeys()) {
+			for (const auto &path : m_entries.value(key).localPaths) {
 				if (QFile::exists(path)) { paths.append(path); }
 			}
 		}
@@ -156,80 +200,101 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 		m_profile->getSettings()->setValue("Library/copyImports", copy);
 	});
 	m_importButton->setMenu(importMenu);
-	filters->addWidget(m_importButton);
+
+	// Filter row
+	auto *filters = new QHBoxLayout();
+	m_search = new QLineEdit(content);
+	m_search->setObjectName("librarySearch");
+	m_search->setPlaceholderText(tr("Search titles, tags, sources and notes"));
+	m_search->setClearButtonEnabled(true);
+	m_filter = new QComboBox(content);
+	m_filter->setObjectName("libraryFilter");
+	m_filter->addItems({ tr("All pictures"), tr("♥ Liked"), tr("★ Favorites") });
+	m_sort = new QComboBox(content);
+	m_sort->setObjectName("librarySort");
+	m_sort->addItems({ tr("Newest first"), tr("Oldest first"), tr("Shuffle") });
+	auto *density = new QComboBox(content);
+	density->setObjectName("libraryDensity");
+	density->setAccessibleName(tr("Picture size"));
+	density->addItems({ tr("Compact"), tr("Comfortable"), tr("Large") });
+	density->setCurrentIndex(qBound(0, profile->getSettings()->value("Gallery/density", 1).toInt(), 2));
+	filters->addWidget(m_search, 1);
+	filters->addWidget(m_filter);
+	filters->addWidget(m_sort);
+	filters->addWidget(density);
 	contentLayout->addLayout(filters);
-	m_count = new QLabel(content);
-	auto *pageRow = new QHBoxLayout();
-	pageRow->addWidget(m_count, 1);
-	m_density = new QComboBox(content);
-	m_density->setObjectName("libraryDensity");
-	m_density->setAccessibleName(tr("Image density"));
-	m_density->setToolTip(tr("Image density, shared with Home and search."));
-	m_density->addItems({tr("Compact"), tr("Comfortable"), tr("Large")});
-	m_density->setCurrentIndex(qBound(0, profile->getSettings()->value("Gallery/density", 1).toInt(), 2));
-	pageRow->addWidget(m_density);
-	m_pageSizeControl = new QComboBox(content);
-	m_pageSizeControl->setObjectName("libraryPageSize");
-	m_pageSizeControl->setAccessibleName(tr("Pictures per page"));
-	for (int size : {50, 100, 200}) { m_pageSizeControl->addItem(tr("%1 / page").arg(size), size); }
-	const int savedSize = profile->getSettings()->value("Library/pageSize", 100).toInt();
-	m_pageSizeControl->setCurrentIndex(qMax(0, m_pageSizeControl->findData(savedSize)));
-	m_pageSize = m_pageSizeControl->currentData().toInt();
-	pageRow->addWidget(m_pageSizeControl);
-	m_previousPage = new QPushButton(tr("Previous"), content);
-	m_previousPage->setObjectName("libraryPreviousPage");
-	m_nextPage = new QPushButton(tr("Next"), content);
-	m_nextPage->setObjectName("libraryNextPage");
-	m_pageLabel = new QLabel(content);
-	m_pageLabel->setObjectName("libraryPage");
-	pageRow->addWidget(m_previousPage);
-	pageRow->addWidget(m_pageLabel);
-	pageRow->addWidget(m_nextPage);
-	contentLayout->addLayout(pageRow);
-	connect(m_previousPage, &QPushButton::clicked, this, [this]() { if (m_page > 0) { --m_page; reload(); } });
-	connect(m_nextPage, &QPushButton::clicked, this, [this]() { if ((m_page + 1) * m_pageSize < m_viewKeys.size()) { ++m_page; reload(); } });
+
+	m_hint = new QLabel(content);
+	m_hint->setObjectName("libraryHint");
+	m_hint->setTextFormat(Qt::PlainText);
+	m_hint->setWordWrap(true);
+	contentLayout->addWidget(m_hint);
+
+	// Selection bar
+	m_selectionBar = new QFrame(content);
+	m_selectionBar->setObjectName("librarySelectionBar");
+	auto *barLayout = new QHBoxLayout(m_selectionBar);
+	barLayout->setContentsMargins(12, 6, 8, 6);
+	m_selectionCount = new QLabel(m_selectionBar);
+	m_selectionCount->setObjectName("librarySelectionCount");
+	barLayout->addWidget(m_selectionCount);
+	m_actions = new ImageLibraryActions(profile, {}, m_selectionBar);
+	barLayout->addWidget(m_actions);
+	auto *downloadSelected = new QPushButton(tr("⬇ Download"), m_selectionBar);
+	downloadSelected->setObjectName("libraryDownloadSelected");
+	auto *saveSelected = new QPushButton(tr("Save to folder…"), m_selectionBar);
+	saveSelected->setObjectName("librarySaveToFolder");
+	saveSelected->setToolTip(tr("Copy files already on disk, or download the rest, into a folder you choose"));
+	m_findSource = new QPushButton(tr("Find source…"), m_selectionBar);
+	m_findSource->setObjectName("libraryFindSource");
+	m_findSource->setToolTip(tr("Select one picture. Search an exact MD5 on a website, or compare source pictures already saved in Library."));
+	auto *more = new QPushButton(tr("More…"), m_selectionBar);
+	more->setObjectName("libraryMore");
+	auto *remove = new QPushButton(tr("Remove"), m_selectionBar);
+	remove->setObjectName("libraryRemove");
+	auto *clear = new QPushButton(tr("✕"), m_selectionBar);
+	clear->setObjectName("libraryClearSelection");
+	clear->setToolTip(tr("Clear selection (Esc)"));
+	for (auto *button : {downloadSelected, saveSelected, m_findSource, more, remove}) {
+		barLayout->addWidget(button);
+	}
+	barLayout->addStretch();
+	barLayout->addWidget(clear);
+	m_selectionBar->hide();
+	contentLayout->addWidget(m_selectionBar);
+
 	m_stack = new QStackedWidget(content);
-	m_grid = new QListWidget(m_stack);
+	m_grid = new ImageGridView(m_stack);
 	m_grid->setObjectName("libraryGrid");
-	m_grid->setViewMode(QListView::IconMode);
-	m_grid->setResizeMode(QListView::Adjust);
-	m_grid->setMovement(QListView::Static);
-	m_grid->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-	m_grid->setSpacing(4);
-	m_grid->setWordWrap(false);
-	m_grid->setUniformItemSizes(true);
-	m_grid->setSelectionMode(QAbstractItemView::ExtendedSelection);
-	m_grid->setContextMenuPolicy(Qt::CustomContextMenu);
-	m_grid->setFrameShape(QFrame::NoFrame);
-	m_grid->setTextElideMode(Qt::ElideRight);
+	m_grid->setActions({ImageGridView::Like, ImageGridView::Favorite, ImageGridView::Download});
+	m_grid->setDensity(density->currentIndex());
+	m_grid->setAccessibleName(tr("Library pictures"));
 	m_stack->addWidget(m_grid);
 	m_empty = new QLabel(m_stack);
+	m_empty->setObjectName("libraryEmpty");
 	m_empty->setAlignment(Qt::AlignCenter);
 	m_empty->setWordWrap(true);
 	m_empty->setMargin(32);
 	m_stack->addWidget(m_empty);
 	contentLayout->addWidget(m_stack, 1);
-	m_actions = new ImageLibraryActions(profile, {}, content);
-	auto *actionRow = new QHBoxLayout();
-	actionRow->addWidget(m_actions, 1);
-	m_findSource = new QPushButton(tr("Find / link source…"), content);
-	m_findSource->setObjectName("libraryFindSource");
-	m_findSource->setToolTip(tr("Select one picture. Search an exact MD5 on a website, or compare source pictures already saved in Library."));
-	actionRow->addWidget(m_findSource);
-	connect(m_findSource, &QPushButton::clicked, this, [this]() {
-		if (m_grid->selectedItems().size() == 1) { findSource(m_grid->selectedItems().first()->data(Qt::UserRole).toString()); }
-	});
-	m_more = new QPushButton(tr("More…"), content);
-	m_more->setObjectName("libraryMore");
-	actionRow->addWidget(m_more);
-	contentLayout->addLayout(actionRow);
-	splitter->setStretchFactor(0, 0);
-	splitter->setStretchFactor(1, 1);
-	splitter->setSizes({ 220, 1000 });
-	setStyleSheet("#librarySidebar { border: 0; background: transparent; } "
-		"#librarySidebar::item { padding: 9px 6px; border-radius: 6px; } "
-		"#libraryGrid::item { padding: 2px; border-radius: 6px; } "
-		"#librarySearch { padding: 8px; border-radius: 6px; }");
+
+	const QPalette colors = palette();
+	const QColor accent = colors.color(QPalette::Highlight);
+	setStyleSheet(QStringLiteral(
+		"#pageTitle { font-size: 18pt; font-weight: 700; }"
+		"#libraryTitle { font-size: 22pt; font-weight: 700; }"
+		"#libraryCount, #libraryHint, #libraryEmpty { color: %1; }"
+		"#libraryEmpty { font-size: 12pt; }"
+		"#librarySidebarPanel { border-right: 1px solid rgba(127, 127, 127, 40); }"
+		"#librarySidebar { border: 0; background: transparent; }"
+		"#librarySidebar::item { padding: 7px 6px; border-radius: 8px; }"
+		"#librarySearch { padding: 7px 10px; border-radius: 10px; }"
+		"#librarySelectAll, #libraryDownloadAll, #libraryImport { border-radius: 15px; padding: 6px 14px; }"
+		"#librarySelectionBar { border-radius: 12px; background: rgba(%2, %3, %4, 34); border: 1px solid rgba(%2, %3, %4, 90); }"
+		"#librarySelectionBar QPushButton { border-radius: 12px; padding: 4px 10px; }"
+		"#librarySelectionCount { font-weight: 600; padding-right: 6px; background: transparent; }"
+	).arg(muted(colors)).arg(accent.red()).arg(accent.green()).arg(accent.blue()));
+
 	connect(create, &QPushButton::clicked, this, &LibraryTab::newCollection);
 	connect(m_manage, &QPushButton::clicked, this, [this]() {
 		if (auto *item = m_sidebar->currentItem()) {
@@ -237,23 +302,24 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 			collectionMenu(m_sidebar->visualItemRect(item).center());
 		}
 	});
-	connect(m_more, &QPushButton::clicked, this, [this]() {
-		if (!m_grid->selectedItems().isEmpty()) {
-			auto *item = m_grid->selectedItems().first();
-			m_grid->scrollToItem(item);
-			imageMenu(m_grid->visualItemRect(item).center());
+	connect(m_selectAll, &QPushButton::clicked, this, [this]() { m_grid->selectAll(); m_grid->setFocus(); });
+	connect(m_downloadAll, &QPushButton::clicked, this, [this]() {
+		if (m_viewKeys.size() > 50 && QMessageBox::question(this, tr("Download all"), tr("Download %1 pictures to your download folder?").arg(m_viewKeys.size())) != QMessageBox::Yes) {
+			return;
 		}
+		download(m_viewKeys);
 	});
-	connect(m_density, &QComboBox::currentIndexChanged, this, [this](int density) {
-		m_profile->getSettings()->setValue("Gallery/density", density);
-		scheduleReload();
+	connect(downloadSelected, &QPushButton::clicked, this, [this]() { download(m_grid->selectedKeys()); });
+	connect(saveSelected, &QPushButton::clicked, this, [this]() { saveToFolder(m_grid->selectedKeys()); });
+	connect(m_findSource, &QPushButton::clicked, this, [this]() {
+		if (m_grid->selectedKeys().size() == 1) { findSource(m_grid->selectedKeys().first()); }
 	});
-	connect(m_pageSizeControl, &QComboBox::currentIndexChanged, this, [this]() {
-		const int first = m_page * m_pageSize;
-		m_pageSize = m_pageSizeControl->currentData().toInt();
-		m_page = first / m_pageSize;
-		m_profile->getSettings()->setValue("Library/pageSize", m_pageSize);
-		scheduleReload();
+	connect(more, &QPushButton::clicked, this, [this, more]() { imageMenu(m_grid->selectedKeys(), more->mapToGlobal(QPoint(0, more->height()))); });
+	connect(remove, &QPushButton::clicked, this, [this]() { removeFromLibrary(m_grid->selectedKeys()); });
+	connect(clear, &QPushButton::clicked, m_grid, &QAbstractItemView::clearSelection);
+	connect(density, &QComboBox::currentIndexChanged, this, [this](int value) {
+		m_profile->getSettings()->setValue("Gallery/density", value);
+		m_grid->setDensity(value);
 	});
 	connect(m_store, &LibraryStore::imageChanged, this, &LibraryTab::scheduleReload);
 	connect(m_store, &LibraryStore::collectionsChanged, this, &LibraryTab::scheduleReload);
@@ -261,21 +327,28 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent)
 	m_searchTimer->setSingleShot(true);
 	m_searchTimer->setInterval(150);
 	connect(m_searchTimer, &QTimer::timeout, this, &LibraryTab::scheduleReload);
-	connect(m_search, &QLineEdit::textChanged, this, [this]() { m_page = 0; m_searchTimer->start(); });
-	connect(m_filter, &QComboBox::currentIndexChanged, this, [this]() { m_page = 0; scheduleReload(); });
+	connect(m_search, &QLineEdit::textChanged, this, [this]() { m_searchTimer->start(); });
+	connect(m_filter, &QComboBox::currentIndexChanged, this, &LibraryTab::scheduleReload);
+	connect(m_sort, &QComboBox::currentIndexChanged, this, [this]() {
+		m_sort->setProperty("seed", QRandomGenerator::global()->generate());
+		scheduleReload();
+	});
 	connect(m_sidebar, &QTreeWidget::currentItemChanged, this, [this](QTreeWidgetItem *item) {
 		if (item != nullptr && item->data(0, Qt::UserRole).isValid()) {
-			m_page = 0;
 			m_collection = item->data(0, Qt::UserRole).toLongLong();
 			m_smartFilter = item->data(0, Qt::UserRole + 1).toInt();
+			const QSignalBlocker blocker(m_filter);
 			m_filter->setCurrentIndex(0);
+			m_grid->clearSelection();
+			m_grid->scrollToTop();
 			scheduleReload();
 		}
 	});
 	connect(m_sidebar, &QTreeWidget::customContextMenuRequested, this, &LibraryTab::collectionMenu);
-	connect(m_grid, &QListWidget::itemSelectionChanged, this, &LibraryTab::updateSelection);
-	connect(m_grid, &QListWidget::itemActivated, this, [this](QListWidgetItem *item) { openImage(item->data(Qt::UserRole).toString()); });
-	connect(m_grid, &QListWidget::customContextMenuRequested, this, &LibraryTab::imageMenu);
+	connect(m_grid->selectionModel(), &QItemSelectionModel::selectionChanged, this, &LibraryTab::updateSelection);
+	connect(m_grid, &ImageGridView::openRequested, this, &LibraryTab::openImage);
+	connect(m_grid, &ImageGridView::actionTriggered, this, &LibraryTab::gridAction);
+	connect(m_grid, &ImageGridView::contextMenuRequested, this, &LibraryTab::imageMenu);
 	reload();
 }
 
@@ -283,17 +356,20 @@ void LibraryTab::showEvent(QShowEvent *event)
 {
 	QWidget::showEvent(event);
 	const int density = qBound(0, m_profile->getSettings()->value("Gallery/density", 1).toInt(), 2);
-	m_density->setCurrentIndex(density);
+	if (auto *control = findChild<QComboBox*>("libraryDensity")) {
+		control->setCurrentIndex(density);
+	}
 }
 
 void LibraryTab::showView(qint64 collection, int smartFilter)
 {
 	m_collection = collection;
-	m_smartFilter = collection > 0 ? 0 : qBound(0, smartFilter, 7);
-	m_page = 0;
+	m_smartFilter = collection > 0 ? 0 : qBound(0, smartFilter, int(Duplicates));
 	m_search->clear();
 	m_filter->setCurrentIndex(0);
+	m_grid->clearSelection();
 	reload();
+	m_grid->scrollToTop();
 }
 
 void LibraryTab::scheduleReload()
@@ -304,6 +380,43 @@ void LibraryTab::scheduleReload()
 	m_reloadPending = true;
 	// Queue refreshes so editing an action cannot delete its sender mid-click.
 	QTimer::singleShot(0, this, [this]() { m_reloadPending = false; reload(); });
+}
+
+QStringList LibraryTab::duplicateKeys(const QList<LibraryEntry> &entries) const
+{
+	// Same file hash, or the same picture by appearance (strict, so edits stay apart).
+	QList<ImageFingerprint> prints;
+	QStringList md5s;
+	for (const auto &entry : entries) {
+		prints.append(ImageFingerprint::fromImage(QImage::fromData(entry.thumbnail)));
+		md5s.append(entry.image.value("md5").toString().toLower());
+	}
+	QVector<int> group(entries.size());
+	std::iota(group.begin(), group.end(), 0);
+	std::function<int(int)> root = [&group, &root](int index) { return group[index] == index ? index : group[index] = root(group[index]); };
+	for (int i = 0; i < entries.size(); ++i) {
+		for (int j = i + 1; j < entries.size(); ++j) {
+			if ((!md5s[i].isEmpty() && md5s[i] == md5s[j]) || prints[i].sameImage(prints[j])) {
+				group[root(j)] = root(i);
+			}
+		}
+	}
+	QHash<int, QStringList> clusters;
+	QList<int> order;
+	for (int i = 0; i < entries.size(); ++i) {
+		const int cluster = root(i);
+		if (!clusters.contains(cluster)) {
+			order.append(cluster);
+		}
+		clusters[cluster].append(entries[i].key);
+	}
+	QStringList result;
+	for (const int cluster : order) {
+		if (clusters[cluster].size() > 1) {
+			result.append(clusters[cluster]);
+		}
+	}
+	return result;
 }
 
 void LibraryTab::reload()
@@ -324,14 +437,10 @@ void LibraryTab::reload()
 		m_collection = 0;
 		m_smartFilter = 0;
 	}
-	QStringList selected;
-	for (auto *item : m_grid->selectedItems()) {
-		selected.append(item->data(Qt::UserRole).toString());
-	}
+	const QStringList selected = m_grid->selectedKeys();
 	const QSignalBlocker sidebarBlock(m_sidebar);
-	const QSignalBlocker gridBlock(m_grid);
 	m_sidebar->clear();
-	const QStringList smartNames { tr("All pictures"), tr("Unsorted"), tr("Liked"), tr("Favorites"), tr("Recently saved"), tr("Needs tags"), tr("Needs source"), tr("Metadata errors") };
+	const QStringList smartNames { tr("All pictures"), tr("Unsorted"), tr("♥ Liked"), tr("★ Favorites"), tr("Recently saved"), tr("Needs tags"), tr("Needs source"), tr("Metadata errors"), tr("Possible duplicates") };
 	for (int index = 0; index < smartNames.size(); ++index) {
 		auto *item = new QTreeWidgetItem(m_sidebar, { smartNames[index] });
 		item->setData(0, Qt::UserRole, 0);
@@ -350,111 +459,129 @@ void LibraryTab::reload()
 		QPixmap cover;
 		cover.loadFromData(collection.cover);
 		if (!cover.isNull()) {
-			item->setIcon(0, QIcon(cover.scaled(36, 36, Qt::KeepAspectRatio, Qt::SmoothTransformation)));
+			item->setIcon(0, QIcon(cover.scaled(32, 32, Qt::KeepAspectRatioByExpanding, Qt::SmoothTransformation).copy(0, 0, 32, 32)));
 		}
 		if (collection.id == m_collection) {
 			m_sidebar->setCurrentItem(item);
 		}
 	}
 	m_title->setText(title);
-	m_hint->setText(m_collection > 0 ? tr("Likes, favorites and notes apply to this collection. A picture can belong to several collections.")
-		: tr("Library-wide likes and favorites. Organize pictures into collections for separate preferences."));
-	const int sizes[] = {128, 180, 256};
-	const int density = qBound(0, m_profile->getSettings()->value("Gallery/density", 1).toInt(), 2);
-	const QSignalBlocker densityBlock(m_density);
-	m_density->setCurrentIndex(density);
-	m_grid->setIconSize(QSize(sizes[density], sizes[density]));
-	m_grid->setGridSize(QSize(sizes[density] + 12, sizes[density] + 12));
-	m_grid->clear();
+	m_manage->setEnabled(m_store->isReady() && m_collection > 0);
+
+	const QString search = m_search->text().trimmed();
+	const int preference = m_filter->currentIndex();
+	auto entries = m_store->entries(m_collection);
+	QSet<QString> duplicates;
+	if (m_collection == 0 && m_smartFilter == Duplicates) {
+		const auto keys = duplicateKeys(entries);
+		duplicates = QSet<QString>(keys.begin(), keys.end());
+		QHash<QString, int> order;
+		for (int i = 0; i < keys.size(); ++i) {
+			order.insert(keys[i], i);
+		}
+		std::stable_sort(entries.begin(), entries.end(), [&order](const LibraryEntry &left, const LibraryEntry &right) { return order.value(left.key, INT_MAX) < order.value(right.key, INT_MAX); });
+	} else if (m_sort->currentIndex() == 1) {
+		std::reverse(entries.begin(), entries.end());
+	} else if (m_sort->currentIndex() == 2) {
+		QRandomGenerator rng(m_sort->property("seed").toUInt());
+		std::shuffle(entries.begin(), entries.end(), rng);
+	}
 	m_entries.clear();
 	m_viewKeys.clear();
-	const QString search = m_search->text().trimmed();
-	m_manage->setEnabled(m_store->isReady() && m_collection > 0);
-	const int preference = m_filter->currentIndex();
-	const auto entries = m_store->entries(m_collection);
-	// ponytail: read metadata in one pass, render one page; query pages if catalogs exceed tens of thousands of pictures.
+	QList<ImageGridItem> items;
+	// shortcut: one metadata pass per refresh; query pages if catalogs exceed tens of thousands of pictures.
 	for (const auto &entry : entries) {
-		if ((m_collection == 0 && m_smartFilter == 1 && entry.collectionCount > 0) || (m_collection == 0 && m_smartFilter == 2 && !entry.liked) || (m_collection == 0 && m_smartFilter == 3 && !entry.favorite) || (preference == 1 && !entry.liked) || (preference == 2 && !entry.favorite)) {
+		const bool smart = m_collection == 0;
+		if ((smart && m_smartFilter == Unsorted && entry.collectionCount > 0) || (smart && m_smartFilter == Liked && !entry.liked) || (smart && m_smartFilter == Favorites && !entry.favorite)
+			|| (preference == 1 && !entry.liked) || (preference == 2 && !entry.favorite)
+			|| (smart && m_smartFilter == RecentlySaved && QDateTime::fromString(entry.savedAt, Qt::ISODateWithMs) < QDateTime::currentDateTimeUtc().addDays(-7))
+			|| (smart && ((m_smartFilter == NeedsTags && !entry.tags().isEmpty()) || (m_smartFilter == NeedsSource && !entry.image.value("website").toString().isEmpty()) || (m_smartFilter == MetadataErrors && entry.metadataErrors().isEmpty())))
+			|| (smart && m_smartFilter == Duplicates && !duplicates.contains(entry.key))) {
 			continue;
 		}
-		if (m_collection == 0 && m_smartFilter == 4 && QDateTime::fromString(entry.savedAt, Qt::ISODateWithMs) < QDateTime::currentDateTimeUtc().addDays(-7)) {
-			continue;
-		}
-		if (m_collection == 0 && ((m_smartFilter == 5 && !entry.tags().isEmpty()) || (m_smartFilter == 6 && !entry.image.value("website").toString().isEmpty()) || (m_smartFilter == 7 && entry.metadataErrors().isEmpty()))) {
-			continue;
-		}
-		const QString searchable = QString::fromUtf8(QJsonDocument(entry.image).toJson(QJsonDocument::Compact)) + " " + entry.notes;
-		bool matches = true;
-		for (const auto &word : search.split(' ', Qt::SkipEmptyParts)) {
-			matches = matches && searchable.contains(word, Qt::CaseInsensitive);
-		}
-		if (!matches) {
-			continue;
+		if (!search.isEmpty()) {
+			const QString searchable = QString::fromUtf8(QJsonDocument(entry.image).toJson(QJsonDocument::Compact)) + " " + entry.notes;
+			bool matches = true;
+			for (const auto &word : search.split(' ', Qt::SkipEmptyParts)) {
+				matches = matches && searchable.contains(word, Qt::CaseInsensitive);
+			}
+			if (!matches) {
+				continue;
+			}
 		}
 		m_entries.insert(entry.key, entry);
 		m_viewKeys.append(entry.key);
-	}
-	m_page = qBound(0, m_page, qMax(0, int((m_viewKeys.size() - 1) / m_pageSize)));
-	m_previousPage->setEnabled(m_page > 0 && !m_importing);
-	m_nextPage->setEnabled((m_page + 1) * m_pageSize < m_viewKeys.size() && !m_importing);
-	m_pageLabel->setText(tr("Page %1 of %2").arg(m_page + 1).arg(qMax(1, int((m_viewKeys.size() + m_pageSize - 1) / m_pageSize))));
-	const bool paged = m_viewKeys.size() > m_pageSize;
-	m_previousPage->setVisible(paged);
-	m_nextPage->setVisible(paged);
-	m_pageLabel->setVisible(paged);
-	if (m_collection == 0 && m_smartFilter == 5) {
-		m_hint->setText(tr("No tags are available yet. The picture imported successfully; tags may never have been saved in the file. Likes and favorites still work. Select a picture and use Find / link source, or recheck metadata from Import pictures."));
-	} else if (m_collection == 0 && m_smartFilter == 6) {
-		m_hint->setText(tr("These pictures have no identified website post. Recovered file tags are kept separately from source identity. Find / link source offers exact MD5 lookup and similar cached source pictures."));
-	} else if (m_collection == 0 && m_smartFilter == 7) {
-		m_hint->setText(tr("The picture was imported, but one or more metadata readers reported an error. Open the picture's Overview for the reason, then recheck metadata after correcting it."));
-	}
-	for (const auto &key : m_viewKeys.mid(m_page * m_pageSize, m_pageSize)) {
-		const auto &entry = m_entries[key];
-		QString name = entry.image.value("name").toString();
-		if (name.isEmpty()) {
-			name = entry.image.value("data").toObject().value("title").toString();
-		}
-		if (name.isEmpty()) {
-			name = tr("Picture #%1").arg(entry.image.value("id").toString());
-		}
+		const QString name = entryTitle(entry);
 		QString source = entry.image.value("website").toString();
 		if (source.isEmpty()) {
 			source = tr("Local file · source unlinked");
 		}
-		const QString metadataState = entry.tags().isEmpty() ? tr("Needs tags") : tr("%1 tags").arg(entry.tags().size());
-		QString warning = entry.metadataErrors().isEmpty() ? QString() : tr(" · Metadata error");
-		if (entry.thumbnail.isEmpty() && !entry.image.value("local_import").toObject().value("preview_error").toString().isEmpty()) {
-			warning += tr(" · Preview unavailable");
+		QStringList details { name, source, entry.tags().isEmpty() ? tr("Needs tags") : tr("%n tag(s)", "", entry.tags().size()) };
+		if (!entry.metadataErrors().isEmpty()) {
+			details.append(tr("Metadata error: %1").arg(entry.metadataErrors().join("; ")));
 		}
-		auto *item = new QListWidgetItem(QString(), m_grid);
-		item->setData(Qt::UserRole, entry.key);
-		const QString details = name + "\n" + source + "\n" + metadataState + warning + "\n" + entry.tags().join(", ") + "\n" + entry.metadataErrors().join("\n") + "\n" + entry.notes;
-		item->setToolTip(details);
-		item->setData(Qt::AccessibleTextRole, name);
-		item->setData(Qt::AccessibleDescriptionRole, details);
-		QPixmap thumbnail;
-		thumbnail.loadFromData(entry.thumbnail);
-		if (thumbnail.isNull()) {
-			thumbnail.load(":/images/noimage.png");
+		if (!entry.notes.isEmpty()) {
+			details.append(tr("Note: %1").arg(entry.notes));
 		}
-		QIcon icon(thumbnail);
-		icon.addPixmap(thumbnail, QIcon::Selected);
-		item->setIcon(icon);
-		item->setTextAlignment(Qt::AlignHCenter);
-		item->setSelected(selected.contains(entry.key));
+		ImageGridItem item;
+		item.key = entry.key;
+		item.encoded = entry.thumbnail;
+		item.title = name;
+		item.tooltip = details.join('\n');
+		item.liked = entry.liked;
+		item.favorite = entry.favorite;
+		item.badge = entry.image.value("website").toString().isEmpty() ? tr("Local") : QString();
+		items.append(item);
 	}
+
+	auto *model = m_grid->gridModel();
+	if (model->keys() == m_viewKeys) {
+		// Same pictures in the same order: update in place so scrolling and selection stay put.
+		for (const auto &item : items) {
+			model->setRating(item.key, item.liked, item.favorite);
+		}
+	} else {
+		const int scroll = m_grid->verticalScrollBar()->value();
+		model->setItems(items);
+		for (const auto &key : selected) {
+			const int row = model->row(key);
+			if (row >= 0) {
+				m_grid->selectionModel()->select(model->index(row), QItemSelectionModel::Select);
+			}
+		}
+		m_grid->doItemsLayout();
+		m_grid->verticalScrollBar()->setValue(scroll);
+	}
+
+	QString hint;
+	if (m_collection > 0) {
+		hint = tr("Likes, favorites and notes here belong to this collection. A picture can be in several collections.");
+	} else if (m_smartFilter == NeedsTags) {
+		hint = tr("These pictures have no tags yet. Likes and favorites still work. Select one and use Find source, or recheck metadata from Import.");
+	} else if (m_smartFilter == NeedsSource) {
+		hint = tr("No website post is linked yet. Find source offers exact MD5 lookup and similar pictures already in Library.");
+	} else if (m_smartFilter == MetadataErrors) {
+		hint = tr("Imported, but a metadata reader reported an error. Open the picture for details, then recheck metadata.");
+	} else if (m_smartFilter == Duplicates) {
+		hint = tr("Same file or the same picture from different sources, shown next to each other. Edits and variants are kept apart.");
+	}
+	m_hint->setText(hint);
+	m_hint->setVisible(!hint.isEmpty());
+	m_selectAll->setEnabled(!m_viewKeys.isEmpty());
+	m_downloadAll->setEnabled(!m_viewKeys.isEmpty());
 
 	if (!m_store->isReady()) {
 		m_empty->setText(m_store->lastError());
 	} else if (!search.isEmpty() || preference > 0) {
 		m_empty->setText(tr("No pictures match these filters."));
 	} else if (m_collection > 0) {
-		m_empty->setText(tr("This collection is empty.\nUse + Collection on a picture in search, the viewer or Library to add it."));
+		m_empty->setText(tr("This collection is empty.\nAdd pictures from Discover, search results, the viewer or Library."));
+	} else if (m_smartFilter == Duplicates) {
+		m_empty->setText(tr("No duplicates found. Nice and tidy."));
 	} else {
-		m_empty->setText(tr("Keep the pictures you want to find again.\nUse ♥ Like, ★ Favorite or + Collection on any search result or in the viewer."));
+		m_empty->setText(tr("Keep the pictures you want to find again.\n♥ Like or ★ Favorite anything in Discover, search results or the viewer — or drop files here to import them."));
 	}
-	m_stack->setCurrentWidget(m_grid->count() > 0 ? static_cast<QWidget*>(m_grid) : static_cast<QWidget*>(m_empty));
+	m_stack->setCurrentWidget(m_viewKeys.isEmpty() ? static_cast<QWidget*>(m_empty) : static_cast<QWidget*>(m_grid));
 	updateSelection();
 }
 
@@ -483,23 +610,109 @@ QSharedPointer<Image> LibraryTab::restoreImage(const LibraryEntry &entry)
 
 void LibraryTab::updateSelection()
 {
-	QStringList keys;
-	QList<QSharedPointer<Image>> images;
-	for (auto *item : m_grid->selectedItems()) {
-		const QString key = item->data(Qt::UserRole).toString();
-		keys.append(key);
-		images.append(restoreImage(m_entries.value(key)));
-	}
-	m_actions->setSelection(images, keys, m_collection);
-	m_actions->setVisible(!keys.isEmpty());
-	m_more->setVisible(!keys.isEmpty());
-	m_findSource->setVisible(!keys.isEmpty());
-	m_more->setEnabled(!keys.isEmpty());
+	const QStringList keys = m_grid->selectedKeys();
+	// Library entries already exist; actions need only their keys.
+	m_actions->setSelection({}, keys, m_collection);
+	m_selectionBar->setVisible(!keys.isEmpty());
 	m_findSource->setEnabled(keys.size() == 1 && !m_importing);
-	const int total = m_viewKeys.size();
-	const QString count = total > m_pageSize ? tr("%1–%2 of %3 pictures").arg(m_page * m_pageSize + 1).arg(m_page * m_pageSize + m_grid->count()).arg(total)
-		: (total == 1 ? tr("1 picture") : tr("%1 pictures").arg(total));
-	m_count->setText(count + (keys.isEmpty() ? QString() : tr(" · %1 selected").arg(keys.size())));
+	m_selectionCount->setText(tr("%n selected", "", keys.size()));
+	const int total = int(m_viewKeys.size());
+	m_count->setText(total == 1 ? tr("1 picture") : tr("%1 pictures").arg(total));
+}
+
+void LibraryTab::gridAction(ImageGridView::Action action, const QStringList &keys)
+{
+	if (action == ImageGridView::Download) {
+		download(keys);
+		return;
+	}
+	if (action == ImageGridView::Like || action == ImageGridView::Favorite) {
+		const bool favorite = action == ImageGridView::Favorite;
+		bool on = false;
+		for (const auto &key : keys) {
+			bool ok = false;
+			on = PictureActions::toggleRating(m_store, key, m_collection, favorite, &ok);
+			if (!ok) {
+				Toast::show(this, m_store->lastError(), 3500);
+				return;
+			}
+		}
+		Toast::show(this, !on ? tr("Rating removed") : favorite ? tr("★ Favorited") : tr("♥ Liked"), 1600);
+	}
+}
+
+void LibraryTab::download(const QStringList &keys)
+{
+	QList<QSharedPointer<Image>> images;
+	int local = 0;
+	for (const auto &key : keys) {
+		const auto image = restoreImage(m_entries.contains(key) ? m_entries.value(key) : m_store->entry(key));
+		if (image) {
+			images.append(image);
+		} else {
+			++local;
+		}
+	}
+	if (images.isEmpty()) {
+		Toast::show(this, local > 0 ? tr("These pictures are local files. Use Save to folder to copy them.") : tr("Nothing to download."), 3200);
+		return;
+	}
+	PictureActions::download(m_profile, m_downloadQueue, images, this);
+}
+
+void LibraryTab::saveToFolder(const QStringList &keys)
+{
+	if (keys.isEmpty()) {
+		return;
+	}
+	QSettings *settings = m_profile->getSettings();
+	const QString folder = QFileDialog::getExistingDirectory(this, tr("Save %n picture(s) to…", "", keys.size()), settings->value("Library/lastExportDir").toString());
+	if (folder.isEmpty()) {
+		return;
+	}
+	settings->setValue("Library/lastExportDir", folder);
+	int copied = 0, queued = 0, failed = 0;
+	for (const auto &key : keys) {
+		const auto entry = m_entries.contains(key) ? m_entries.value(key) : m_store->entry(key);
+		const auto image = restoreImage(entry);
+		QString existing;
+		for (const QString &path : entry.localPaths) {
+			if (QFile::exists(path)) {
+				existing = path;
+				break;
+			}
+		}
+		if (existing.isEmpty() && image && !image->savePath().isEmpty() && QFile::exists(image->savePath())) {
+			existing = image->savePath();
+		}
+		if (!existing.isEmpty()) {
+			QFile::copy(existing, uniquePath(folder, QFileInfo(existing).fileName())) ? ++copied : ++failed;
+		} else if (image && m_downloadQueue != nullptr) {
+			auto *downloader = new ImageDownloader(m_profile, image, settings->value("Save/filename", "%md5%.%ext%").toString(), folder, 1, true, true, m_downloadQueue);
+			m_downloadQueue->add(DownloadQueue::Manual, downloader);
+			++queued;
+		} else {
+			++failed;
+		}
+	}
+	QStringList parts;
+	if (copied > 0) { parts.append(tr("%n copied", "", copied)); }
+	if (queued > 0) { parts.append(tr("%n downloading", "", queued)); }
+	if (failed > 0) { parts.append(tr("%n unavailable", "", failed)); }
+	Toast::show(this, parts.join(" · "), 3200);
+}
+
+void LibraryTab::removeFromLibrary(const QStringList &keys)
+{
+	if (keys.isEmpty() || QMessageBox::question(this, tr("Remove from Library"), (keys.size() == 1 ? tr("Remove this picture from Library and all collections? Downloaded files stay on disk.") : tr("Remove %1 pictures from Library and all collections? Downloaded files stay on disk.").arg(keys.size()))) != QMessageBox::Yes) {
+		return;
+	}
+	for (const auto &key : keys) {
+		if (!m_store->removeImage(key)) {
+			QMessageBox::warning(this, tr("Library"), m_store->lastError());
+			break;
+		}
+	}
 }
 
 void LibraryTab::newCollection()
@@ -574,7 +787,7 @@ void LibraryTab::openPicture(const QString &key, const QStringList &keys, qint64
 	}
 	QList<QSharedPointer<Image>> images;
 	for (const QString &otherKey : keys) {
-		auto other = otherKey == key ? image : restoreImage(m_store->entry(otherKey, collection));
+		auto other = otherKey == key ? image : restoreImage(m_entries.contains(otherKey) ? m_entries.value(otherKey) : m_store->entry(otherKey, collection));
 		if (other && !other->isGallery()) {
 			images.append(other);
 		}
@@ -583,21 +796,16 @@ void LibraryTab::openPicture(const QString &key, const QStringList &keys, qint64
 	viewer->show();
 }
 
-void LibraryTab::imageMenu(const QPoint &pos)
+void LibraryTab::imageMenu(const QStringList &selected, const QPoint &globalPosition)
 {
-	auto *item = m_grid->itemAt(pos);
-	if (item == nullptr) {
+	if (selected.isEmpty()) {
 		return;
 	}
-	if (!item->isSelected()) {
-		m_grid->clearSelection();
-		item->setSelected(true);
-	}
-	const QString key = item->data(Qt::UserRole).toString();
+	const QString key = selected.first();
 	const auto entry = m_entries.value(key);
 	QMenu menu(this);
 	m_actions->addToMenu(&menu);
-	if (m_grid->selectedItems().count() == 1) {
+	if (selected.size() == 1) {
 		menu.addAction(tr("View picture"), this, [this, key]() { openImage(key); });
 		const QUrl page(entry.image.value("page_url").toString());
 		if (page.isValid() && !page.host().isEmpty() && (page.scheme() == "http" || page.scheme() == "https")) {
@@ -620,10 +828,9 @@ void LibraryTab::imageMenu(const QPoint &pos)
 			});
 		}
 	}
-	QStringList selected;
-	for (auto *selectedItem : m_grid->selectedItems()) {
-		selected.append(selectedItem->data(Qt::UserRole).toString());
-	}
+	menu.addSeparator();
+	menu.addAction(tr("Download"), this, [this, selected]() { download(selected); });
+	menu.addAction(tr("Save to folder…"), this, [this, selected]() { saveToFolder(selected); });
 	menu.addSeparator();
 	if (m_collection > 0) {
 		menu.addAction(tr("Remove from this collection"), this, [this, selected]() {
@@ -635,18 +842,8 @@ void LibraryTab::imageMenu(const QPoint &pos)
 			}
 		});
 	}
-	menu.addAction(tr("Remove from Library…"), this, [this, selected]() {
-		if (QMessageBox::question(this, tr("Remove from Library"), (selected.size() == 1 ? tr("Remove this picture from Library and all collections? Downloaded files stay on disk.") : tr("Remove %1 pictures from Library and all collections? Downloaded files stay on disk.").arg(selected.size()))) != QMessageBox::Yes) {
-			return;
-		}
-		for (const auto &selectedKey : selected) {
-			if (!m_store->removeImage(selectedKey)) {
-				QMessageBox::warning(this, tr("Library"), m_store->lastError());
-				break;
-			}
-		}
-	});
-	menu.exec(m_grid->viewport()->mapToGlobal(pos));
+	menu.addAction(tr("Remove from Library…"), this, [this, selected]() { removeFromLibrary(selected); });
+	menu.exec(globalPosition);
 }
 
 LibraryTab::~LibraryTab()
@@ -718,8 +915,6 @@ void LibraryTab::importPaths(const QStringList &paths, bool copy, const QString 
 	m_cancel = std::make_shared<std::atomic_bool>(false);
 	m_importButton->setEnabled(false);
 	m_findSource->setEnabled(false);
-	m_previousPage->setEnabled(false);
-	m_nextPage->setEnabled(false);
 	m_progress = new QProgressDialog(tr("Finding pictures…"), tr("Cancel"), 0, 0, this);
 	m_progress->setWindowTitle(tr("Import pictures"));
 	m_progress->setWindowModality(Qt::NonModal);
@@ -792,6 +987,7 @@ void LibraryTab::finishImport()
 	}
 	summary += tr(". Local pictures in this scope: %1 need tags · %2 need source · %3 metadata errors. Use the Library sidebar to review them. Missing tags do not prevent likes or favorites.").arg(noTags).arg(noSource).arg(errors);
 	m_hint->setText(summary);
+	m_hint->show();
 	if (!m_importErrors.isEmpty()) {
 		auto *report = new QDialog(this);
 		report->setAttribute(Qt::WA_DeleteOnClose);

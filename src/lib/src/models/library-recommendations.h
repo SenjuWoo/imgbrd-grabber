@@ -37,6 +37,7 @@ class LibraryRecommendations : public QObject
 		bool busy() const;
 		bool modelAvailable() const;
 		int indexedCount() const;
+		const QHash<QString, QVector<float>> &vectors() const;
 		QString status() const;
 		LibraryRecommendationResult recommendations(qint64 scope = 0, const QDate &day = QDate::currentDate(), int limit = 24, quint64 rotation = 0);
 		void startIndexing();

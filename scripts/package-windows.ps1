@@ -1,7 +1,7 @@
-param([string]$QtRoot = $env:QT_ROOT_DIR, [string]$OpenSslRoot = $env:OPENSSL_ROOT_DIR, [switch]$SkipArchive)
+param([string]$QtRoot = $env:QT_ROOT_DIR, [string]$OpenSslRoot = $env:OPENSSL_ROOT_DIR, [switch]$SkipArchive, [string]$BuildDir)
 $ErrorActionPreference = 'Stop'
 $repo = Split-Path $PSScriptRoot -Parent
-$build = Join-Path $repo 'build'
+$build = if ($BuildDir) { [IO.Path]::GetFullPath($BuildDir) } else { Join-Path $repo 'build' }
 $stage = Join-Path $repo 'release.new'
 $release = Join-Path $repo 'release'
 function Get-CacheValue($name) {

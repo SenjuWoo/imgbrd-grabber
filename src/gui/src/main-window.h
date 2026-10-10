@@ -3,7 +3,9 @@
 
 #define CLOSED_TAB_HISTORY_MAX 20
 
+#include <QHash>
 #include <QMainWindow>
+#include <QPointer>
 #include <QStack>
 #include <QSystemTrayIcon>
 #include <QVariant>
@@ -29,6 +31,8 @@ class LogTab;
 class Favorite;
 class MonitoringCenter;
 class MonitorsTab;
+class NavRail;
+class QDockWidget;
 class QSettings;
 class SettingsDock;
 class Site;
@@ -102,6 +106,7 @@ class MainWindow : public QMainWindow
 		void setSource(const QString &site);
 		void initialLoginsFinished();
 		void tabContextMenuRequested(const QPoint &pos);
+		void showPage(const QString &id);
 
 		// Drag & drop
 		void dragEnterEvent(QDragEnterEvent *event) override;
@@ -112,6 +117,8 @@ class MainWindow : public QMainWindow
 
 	protected:
 		void initialLoginsDone();
+		void syncChrome();
+		void setDocksShown(bool shown);
 
 	private:
 		Profile *m_profile;
@@ -139,6 +146,11 @@ class MainWindow : public QMainWindow
 		DownloadQueue *m_downloadQueue;
 		SettingsDock *m_settingsDock;
 		ThemeLoader *m_themeLoader;
+		NavRail *m_nav = nullptr;
+		QHash<QDockWidget*, bool> m_dockVisibility;
+		bool m_docksShown = true;
+		bool m_explicitStart = false;
+		QPointer<SearchTab> m_lastSearchTab;
 
 		// System tray
 		QSystemTrayIcon *m_trayIcon;

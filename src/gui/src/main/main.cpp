@@ -25,6 +25,7 @@
 
 
 #include <QApplication>
+#include <QTimer>
 #include <QDir>
 #include <QEventLoop>
 #include <QMap>
@@ -191,6 +192,19 @@ int main(int argc, char *argv[])
 	QPointer<MainWindow> mainWindow = new MainWindow(&profile);
 	mainWindow->init(positionalArgs, params);
 	mainWindow->show();
+
+	// Developer aid for visual checks: GRABBER_CAPTURE="file.png;page;seconds[;file2.png;page2;seconds2...]"
+	const QStringList capture = qEnvironmentVariable("GRABBER_CAPTURE").split(';', Qt::SkipEmptyParts);
+	int captureDelay = 0;
+	for (int i = 0; i + 2 < capture.size(); i += 3) {
+		const QString page = capture[i + 1];
+		captureDelay += capture[i + 2].toInt() * 1000;
+		QTimer::singleShot(qMax(0, captureDelay - 1500), mainWindow, [mainWindow, page]() { mainWindow->showPage(page); });
+		QTimer::singleShot(captureDelay, mainWindow, [mainWindow, path = capture[i]]() { mainWindow->grab().save(path); });
+	}
+	if (captureDelay > 0) {
+		QTimer::singleShot(captureDelay + 500, mainWindow, &QWidget::close);
+	}
 
 	const int result = app.exec();
 	// An exit request can leave the window alive. Finalize workers before Profile goes away.

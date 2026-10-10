@@ -1,575 +1,604 @@
 #include "tabs/home-tab.h"
+#include <QApplication>
+#include <QClipboard>
 #include <QComboBox>
-#include <QDate>
-#include <QFont>
-#include <QGroupBox>
-#include <QHideEvent>
-#include <QRegularExpression>
+#include <QDateTime>
+#include <QDesktopServices>
+#include <QFrame>
 #include <QHBoxLayout>
-#include <QJsonObject>
 #include <QLabel>
-#include <QListWidget>
-#include <QMessageBox>
+#include <QMenu>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
 #include <QSignalBlocker>
+#include <QStackedWidget>
 #include <QTimer>
+#include <QToolButton>
 #include <QVBoxLayout>
-#include "image-library-actions.h"
+#include "discovery-feed.h"
 #include "main-window.h"
-#include "models/profile.h"
 #include "models/image.h"
-#include "models/page.h"
+#include "models/library-recommendations.h"
+#include "models/library-store.h"
+#include "models/profile.h"
 #include "models/site.h"
-#include "tags/tag.h"
-#include "tabs/image-preview.h"
+#include "picture-actions.h"
+#include "ui/toast.h"
 #include "viewer/viewer-window.h"
 
 namespace
 {
-	QString pictureName(const LibraryEntry &entry)
+	QString blend(const QColor &a, const QColor &b, double amount)
 	{
-		return entry.image.value("name").toString(entry.image.value("data").toObject().value("title").toString());
+		const QColor mixed(int(a.red() * (1 - amount) + b.red() * amount), int(a.green() * (1 - amount) + b.green() * amount), int(a.blue() * (1 - amount) + b.blue() * amount));
+		return mixed.name();
+	}
+
+	QString pictureTitle(const QSharedPointer<Image> &image)
+	{
+		if (!image->name().isEmpty()) {
+			return image->name();
+		}
+		const QString site = image->parentSite() != nullptr ? image->parentSite()->name() : QString();
+		return HomeTab::tr("Picture %1 · %2").arg(image->id()).arg(site);
 	}
 }
 
-HomeTab::HomeTab(Profile *profile, MainWindow *parent)
-	: QWidget(parent), m_mainWindow(parent), m_profile(profile), m_store(profile->library()), m_recommendations(new LibraryRecommendations(profile, this))
+HomeTab::HomeTab(Profile *profile, MainWindow *parent, DownloadQueue *downloadQueue)
+	: QWidget(parent), m_profile(profile), m_mainWindow(parent), m_downloadQueue(downloadQueue), m_store(profile->library()),
+	  m_recommendations(new LibraryRecommendations(profile, this)), m_feed(new DiscoveryFeed(profile, m_recommendations, this))
 {
 	setObjectName("homeTab");
-	setWindowTitle(tr("Home"));
-	setMaximumWidth(16777214);
-	m_collection = profile->getSettings()->value("Home/collection", 0).toLongLong();
+	setWindowTitle(tr("Discover"));
+	setMaximumWidth(16777214); // Existing convention for permanent tabs.
+	QSettings *settings = profile->getSettings();
+
 	auto *layout = new QVBoxLayout(this);
-	layout->setContentsMargins(24, 20, 24, 16);
-	layout->setSpacing(12);
+	layout->setContentsMargins(24, 18, 24, 10);
+	layout->setSpacing(10);
+
 	auto *header = new QHBoxLayout;
+	auto *titles = new QVBoxLayout;
+	titles->setSpacing(2);
 	auto *title = new QLabel(tr("Discover"), this);
-	QFont titleFont = title->font();
-	titleFont.setPointSize(22);
-	titleFont.setBold(true);
-	title->setFont(titleFont);
-	header->addWidget(title, 1);
-	auto *browse = new QPushButton(tr("Open Library"), this);
-	browse->setObjectName("homeOpenLibrary");
-	header->addWidget(browse);
-	layout->addLayout(header);
-	auto *subtitle = new QLabel(tr("Explore saved pictures privately, or discover new pictures from your selected image sources."), this);
-	subtitle->setWordWrap(true);
-	layout->addWidget(subtitle);
-	auto *controls = new QHBoxLayout;
-	controls->addWidget(new QLabel(tr("Preferences"), this));
+	title->setObjectName("pageTitle");
+	m_subtitle = new QLabel(this);
+	m_subtitle->setObjectName("pageSubtitle");
+	m_subtitle->setTextFormat(Qt::PlainText);
+	m_subtitle->setWordWrap(true);
+	titles->addWidget(title);
+	titles->addWidget(m_subtitle);
+	header->addLayout(titles, 1);
 	m_scope = new QComboBox(this);
 	m_scope->setObjectName("homeScope");
-	m_scope->setAccessibleName(tr("Recommendation preference scope"));
-	m_scope->setMinimumWidth(180);
-	controls->addWidget(m_scope, 1);
-	m_mode = new QComboBox(this);
-	m_mode->setObjectName("homeMode");
-	m_mode->addItems({tr("For you"), tr("Recently saved"), tr("Discover online")});
-	m_mode->setAccessibleName(tr("Home picture view"));
-	m_mode->setCurrentIndex(qBound(0, profile->getSettings()->value("Home/view", 0).toInt(), 2));
-	controls->addWidget(m_mode);
-	m_restore = new QPushButton(tr("Restore hidden suggestions"), this);
-	m_restore->setObjectName("homeRestoreHidden");
-	controls->addWidget(m_restore);
-	layout->addLayout(controls);
-	auto *display = new QHBoxLayout;
-	display->addWidget(new QLabel(tr("Density"), this));
-	m_density = new QComboBox(this);
-	m_density->setObjectName("homeDensity");
-	m_density->setAccessibleName(tr("Picture density"));
-	m_density->addItems({tr("Compact"), tr("Comfortable"), tr("Large")});
-	m_density->setCurrentIndex(qBound(0, profile->getSettings()->value("Gallery/density", 1).toInt(), 2));
-	display->addWidget(m_density);
-	display->addWidget(new QLabel(tr("Pictures"), this));
-	m_pictureCount = new QComboBox(this);
-	m_pictureCount->setObjectName("homePictureCount");
-	m_pictureCount->setAccessibleName(tr("Pictures shown on Home"));
-	for (const int count : {24, 48, 96}) { m_pictureCount->addItem(QString::number(count), count); }
-	const int countIndex = m_pictureCount->findData(profile->getSettings()->value("Home/pictureCount", 48).toInt());
-	m_pictureCount->setCurrentIndex(countIndex < 0 ? 1 : countIndex);
-	display->addWidget(m_pictureCount);
-	display->addStretch();
-	m_refresh = new QPushButton(tr("Refresh suggestions"), this);
-	m_refresh->setObjectName("homeRefreshSuggestions");
-	m_refresh->setToolTip(tr("Rotate close matches in this preference scope while keeping recommendations relevant."));
-	display->addWidget(m_refresh);
-	layout->addLayout(display);
-	m_hint = new QLabel(this);
-	m_hint->setObjectName("homeHint");
-	m_hint->setTextFormat(Qt::PlainText);
-	m_hint->setWordWrap(true);
-	layout->addWidget(m_hint);
-	auto *local = new QGroupBox(tr("Local visual recommendations"), this);
-	auto *localLayout = new QVBoxLayout(local);
-	auto *localRow = new QHBoxLayout;
-	m_coverage = new QLabel(local);
-	m_coverage->setObjectName("homeCoverage");
-	m_coverage->setTextFormat(Qt::PlainText);
-	m_coverage->setWordWrap(true);
-	localRow->addWidget(m_coverage, 1);
-	m_setup = new QPushButton(tr("Download local model"), local);
-	m_setup->setObjectName("homeSetupModel");
-	m_setup->setToolTip(tr("Download the visual model. Your pictures are processed on this PC and are not uploaded."));
-	m_update = new QPushButton(tr("Update image index"), local);
-	m_update->setObjectName("homeUpdateIndex");
-	m_cancel = new QPushButton(tr("Cancel"), local);
-	m_cancel->setObjectName("homeCancelIndex");
-	for (auto *button : {m_setup, m_update, m_cancel}) { localRow->addWidget(button); }
-	localLayout->addLayout(localRow);
-	m_status = new QLabel(local);
-	m_status->setObjectName("homeModelStatus");
-	m_status->setTextFormat(Qt::PlainText);
-	m_status->setWordWrap(true);
-	localLayout->addWidget(m_status);
-	m_progress = new QProgressBar(local);
-	m_progress->setObjectName("homeIndexProgress");
-	m_progress->setVisible(false);
-	localLayout->addWidget(m_progress);
-	layout->addWidget(local);
-	m_grid = new QListWidget(this);
-	m_grid->setObjectName("homeGrid");
-	m_grid->setViewMode(QListView::IconMode);
-	m_grid->setResizeMode(QListView::Adjust);
-	m_grid->setMovement(QListView::Static);
-	m_grid->setVerticalScrollMode(QAbstractItemView::ScrollPerPixel);
-	m_grid->setSpacing(6);
-	m_grid->setUniformItemSizes(true);
-	m_grid->setWordWrap(false);
-	m_grid->setSelectionMode(QAbstractItemView::SingleSelection);
-	m_grid->setTextElideMode(Qt::ElideRight);
-	m_grid->setFrameShape(QFrame::NoFrame);
-	layout->addWidget(m_grid, 1);
-	updateDensity();
-	m_empty = new QLabel(this);
-	m_empty->setObjectName("homeEmpty");
-	m_empty->setTextFormat(Qt::PlainText);
-	m_empty->setWordWrap(true);
-	m_empty->setAlignment(Qt::AlignCenter);
-	m_empty->setMargin(24);
-	layout->addWidget(m_empty, 1);
-	m_selectionHint = new QLabel(this);
-	m_selectionHint->setObjectName("homeSelectionHint");
-	m_selectionHint->setTextFormat(Qt::PlainText);
-	m_selectionHint->setWordWrap(true);
-	layout->addWidget(m_selectionHint);
-	auto *actions = new QHBoxLayout;
-	m_actions = new ImageLibraryActions(profile, {}, this);
-	actions->addWidget(m_actions, 1);
-	m_add = new QPushButton(tr("Add to this collection"), this);
-	m_add->setObjectName("homeAddToCollection");
-	m_view = new QPushButton(tr("View picture"), this);
-	m_view->setObjectName("homeViewPicture");
-	m_hide = new QPushButton(tr("Hide suggestion"), this);
-	m_hide->setObjectName("homeHideSuggestion");
-	for (auto *button : {m_add, m_view, m_hide}) { actions->addWidget(button); }
-	layout->addLayout(actions);
-	setStyleSheet("#homeGrid::item { padding: 4px; border-radius: 5px; } #homeGrid::item:selected { background: palette(highlight); color: palette(highlighted-text); } #homeScope, #homeMode { padding: 5px; }");
-	connect(browse, &QPushButton::clicked, this, [this]() { emit libraryRequested(m_collection, 0); });
-	connect(m_scope, &QComboBox::currentIndexChanged, this, [this]() {
-		m_collection = m_scope->currentData().toLongLong();
-		m_profile->getSettings()->setValue("Home/collection", m_collection);
-		scheduleReload();
-	});
-	connect(m_mode, &QComboBox::currentIndexChanged, this, [this]() {
-		cancelDiscovery();
-		m_discoverySession.clear();
-		m_profile->getSettings()->setValue("Home/view", m_mode->currentIndex());
-		scheduleReload();
-	});
-	connect(m_density, &QComboBox::currentIndexChanged, this, [this]() {
-		m_profile->getSettings()->setValue("Gallery/density", m_density->currentIndex());
-		updateDensity();
-	});
-	connect(m_pictureCount, &QComboBox::currentIndexChanged, this, [this]() {
-		m_profile->getSettings()->setValue("Home/pictureCount", m_pictureCount->currentData().toInt());
-		scheduleReload();
-	});
-	connect(m_refresh, &QPushButton::clicked, this, [this]() {
-		++m_rotations[m_collection];
-		m_grid->clearSelection();
-		scheduleReload();
-	});
-	connect(m_store, &LibraryStore::imageChanged, this, &HomeTab::scheduleReload);
-	connect(m_store, &LibraryStore::collectionsChanged, this, &HomeTab::scheduleReload);
-	connect(m_recommendations, &LibraryRecommendations::changed, this, &HomeTab::scheduleReload);
-	connect(m_recommendations, &LibraryRecommendations::progress, this, [this](int done, int total) {
-		m_progress->setRange(0, total);
-		m_progress->setValue(done);
-		updateModelStatus();
-	});
-	connect(m_setup, &QPushButton::clicked, m_recommendations, &LibraryRecommendations::downloadModel);
-	connect(m_update, &QPushButton::clicked, m_recommendations, &LibraryRecommendations::startIndexing);
-	connect(m_cancel, &QPushButton::clicked, m_recommendations, &LibraryRecommendations::cancel);
-	connect(m_restore, &QPushButton::clicked, this, [this]() { m_recommendations->restoreHidden(m_collection); });
-	connect(m_hide, &QPushButton::clicked, this, [this]() {
-		if (!selectedKey().isEmpty()) { m_recommendations->hide(selectedKey(), m_collection); }
-	});
-	connect(m_add, &QPushButton::clicked, this, [this]() {
-		QString key = selectedKey();
-		const auto image = discoveredImage(key);
-		if (image) {
-			key = m_store->saveImage(*image);
-			if (key.isEmpty()) { QMessageBox::warning(this, tr("Library"), m_store->lastError()); return; }
-		}
-		if (!key.isEmpty() && m_collection > 0 && !m_store->addToCollection(key, m_collection)) {
-			QMessageBox::warning(this, tr("Library"), m_store->lastError());
-		}
-	});
-	connect(m_grid, &QListWidget::itemSelectionChanged, this, &HomeTab::updateSelection);
-	connect(m_grid, &QListWidget::itemActivated, this, [this]() { openSelected(); });
-	connect(m_view, &QPushButton::clicked, this, &HomeTab::openSelected);
-
-	m_discoveryTimeout = new QTimer(this);
-	m_discoveryTimeout->setSingleShot(true);
-	connect(m_discoveryTimeout, &QTimer::timeout, this, [this]() {
-		m_discoveryErrors.append(tr("Some sources or previews timed out. Refresh to try again; successful results are kept."));
-		cancelDiscovery();
-		scheduleReload();
-	});
-	reload();
-}
-
-HomeTab::~HomeTab() { cancelDiscovery(); }
-
-void HomeTab::hideEvent(QHideEvent *event)
-{
-	QWidget::hideEvent(event);
-	if (!m_discoveryPages.isEmpty() || !m_previewLoaders.isEmpty()) {
-		cancelDiscovery();
-		m_discoverySession.clear();
+	m_scope->setAccessibleName(tr("Taste to discover with"));
+	m_scope->setToolTip(tr("Use every like and favorite, or only one collection's taste."));
+	m_scope->setMinimumWidth(170);
+	m_refresh = new QPushButton(tr("↻  Refresh"), this);
+	m_refresh->setObjectName("homeRefresh");
+	m_refresh->setToolTip(tr("Start a fresh feed with new topics (F5)"));
+	m_refresh->setShortcut(QKeySequence(Qt::Key_F5));
+	m_more = new QToolButton(this);
+	m_more->setObjectName("homeMore");
+	m_more->setText(QStringLiteral("⋯"));
+	m_more->setToolTip(tr("Discover options"));
+	m_more->setAccessibleName(tr("Discover options"));
+	m_more->setPopupMode(QToolButton::InstantPopup);
+	for (QWidget *widget : {static_cast<QWidget*>(m_scope), static_cast<QWidget*>(m_refresh), static_cast<QWidget*>(m_more)}) {
+		header->addWidget(widget, 0, Qt::AlignVCenter);
 	}
+	layout->addLayout(header);
+
+	m_aiBanner = new QFrame(this);
+	m_aiBanner->setObjectName("homeAiBanner");
+	auto *bannerLayout = new QHBoxLayout(m_aiBanner);
+	bannerLayout->setContentsMargins(14, 10, 10, 10);
+	auto *sparkle = new QLabel(QStringLiteral("✨"), m_aiBanner);
+	sparkle->setObjectName("homeAiIcon");
+	m_aiText = new QLabel(m_aiBanner);
+	m_aiText->setObjectName("homeAiText");
+	m_aiText->setWordWrap(true);
+	m_aiText->setTextFormat(Qt::RichText);
+	m_aiProgress = new QProgressBar(m_aiBanner);
+	m_aiProgress->setObjectName("homeAiProgress");
+	m_aiProgress->setTextVisible(false);
+	m_aiProgress->setFixedWidth(140);
+	m_aiProgress->setFixedHeight(6);
+	m_aiEnable = new QPushButton(tr("Turn on"), m_aiBanner);
+	m_aiEnable->setObjectName("homeAiEnable");
+	auto *dismiss = new QPushButton(tr("Not now"), m_aiBanner);
+	dismiss->setObjectName("homeAiDismiss");
+	dismiss->setFlat(true);
+	bannerLayout->addWidget(sparkle);
+	bannerLayout->addWidget(m_aiText, 1);
+	bannerLayout->addWidget(m_aiProgress);
+	bannerLayout->addWidget(m_aiEnable);
+	bannerLayout->addWidget(dismiss);
+	layout->addWidget(m_aiBanner);
+
+	m_chips = new QWidget(this);
+	m_chips->setObjectName("homeChips");
+	m_chipsLayout = new QHBoxLayout(m_chips);
+	m_chipsLayout->setContentsMargins(0, 0, 0, 0);
+	m_chipsLayout->setSpacing(6);
+	layout->addWidget(m_chips);
+
+	m_busy = new QProgressBar(this);
+	m_busy->setObjectName("homeBusy");
+	m_busy->setRange(0, 0);
+	m_busy->setTextVisible(false);
+	m_busy->setFixedHeight(3);
+	m_busy->setVisible(false);
+	layout->addWidget(m_busy);
+
+	m_stack = new QStackedWidget(this);
+	m_grid = new ImageGridView(m_stack);
+	m_grid->setObjectName("homeGrid");
+	m_grid->setActions({ImageGridView::Like, ImageGridView::Favorite, ImageGridView::Download, ImageGridView::Hide});
+	m_grid->setDensity(settings->value("Gallery/density", 1).toInt());
+	m_grid->setAccessibleName(tr("Discovered pictures"));
+	m_empty = new QLabel(m_stack);
+	m_empty->setObjectName("homeEmpty");
+	m_empty->setAlignment(Qt::AlignCenter);
+	m_empty->setWordWrap(true);
+	m_empty->setTextFormat(Qt::PlainText);
+	m_empty->setMargin(40);
+	m_stack->addWidget(m_grid);
+	m_stack->addWidget(m_empty);
+	m_stack->setCurrentWidget(m_empty);
+	layout->addWidget(m_stack, 1);
+	m_status = new QLabel(this);
+	m_status->setObjectName("homeStatus");
+	m_status->setTextFormat(Qt::PlainText);
+	layout->addWidget(m_status);
+
+	const QPalette colors = palette();
+	const QString muted = blend(colors.color(QPalette::WindowText), colors.color(QPalette::Window), 0.4);
+	const QColor accent = colors.color(QPalette::Highlight);
+	setStyleSheet(QStringLiteral(
+		"#pageTitle { font-size: 22pt; font-weight: 700; }"
+		"#pageSubtitle, #homeStatus { color: %1; }"
+		"#homeEmpty { font-size: 12pt; color: %1; }"
+		"#homeRefresh, #homeMore, #homeChips QPushButton { border-radius: 15px; padding: 6px 14px; }"
+		"#homeChips QPushButton { padding: 4px 12px; }"
+		"#homeAiBanner { border-radius: 12px; background: rgba(%2, %3, %4, 30); border: 1px solid rgba(%2, %3, %4, 90); }"
+		"#homeAiIcon { font-size: 16pt; background: transparent; }"
+		"#homeAiText { background: transparent; }"
+		"#homeBusy { border: 0; background: transparent; }"
+		"#homeBusy::chunk { background: rgb(%2, %3, %4); }"
+	).arg(muted).arg(accent.red()).arg(accent.green()).arg(accent.blue()));
+
+	auto *menu = new QMenu(m_more);
+	connect(menu, &QMenu::aboutToShow, this, [this, menu]() {
+		menu->clear();
+		auto *density = menu->addMenu(tr("Picture size"));
+		const int current = m_profile->getSettings()->value("Gallery/density", 1).toInt();
+		const QStringList names {tr("Compact"), tr("Comfortable"), tr("Large")};
+		for (int i = 0; i < names.size(); ++i) {
+			auto *action = density->addAction(names[i], this, [this, i]() {
+				m_profile->getSettings()->setValue("Gallery/density", i);
+				m_grid->setDensity(i);
+			});
+			action->setCheckable(true);
+			action->setChecked(current == i);
+		}
+		auto *ai = menu->addAction(tr("Smart visual matching (local AI)"), this, [this](bool checked) {
+			if (checked) {
+				enableAi();
+			} else {
+				m_profile->getSettings()->setValue("Discover/visual", false);
+				m_feed->setVisualEnabled(false);
+				updateAi();
+				updateHeader();
+			}
+		});
+		ai->setCheckable(true);
+		ai->setChecked(m_profile->getSettings()->value("Discover/visual", false).toBool());
+		ai->setEnabled(!m_recommendations->busy());
+		if (m_recommendations->modelAvailable()) {
+			menu->addAction(tr("Update visual index (%n picture(s))", "", m_recommendations->indexedCount()), m_recommendations, &LibraryRecommendations::startIndexing)->setEnabled(!m_recommendations->busy());
+		}
+		menu->addSeparator();
+		menu->addAction(tr("Show hidden pictures again (%1)").arg(m_feed->dismissedCount()), this, [this]() {
+			m_feed->resetDismissed();
+			Toast::show(this, tr("Hidden pictures can appear again."));
+		})->setEnabled(m_feed->dismissedCount() > 0);
+		menu->addAction(tr("Open Library"), this, [this]() { emit libraryRequested(m_feed->scope(), 0); });
+	});
+	m_more->setMenu(menu);
+
+	connect(m_refresh, &QPushButton::clicked, this, &HomeTab::refresh);
+	connect(m_scope, &QComboBox::currentIndexChanged, this, [this]() {
+		const qint64 scope = m_scope->currentData().toLongLong();
+		m_profile->getSettings()->setValue("Home/collection", scope);
+		m_feed->setScope(scope);
+		if (m_started) {
+			refresh();
+		}
+	});
+	connect(m_aiEnable, &QPushButton::clicked, this, &HomeTab::enableAi);
+	connect(dismiss, &QPushButton::clicked, this, [this]() {
+		m_profile->getSettings()->setValue("Discover/aiBannerDismissed", true);
+		updateAi();
+	});
+	connect(m_grid, &ImageGridView::nearEnd, this, [this]() {
+		if (m_started && !m_feed->isBusy() && m_grid->gridModel()->rowCount() > 0) {
+			m_feed->fetchMore();
+		}
+	});
+	connect(m_grid, &ImageGridView::actionTriggered, this, &HomeTab::triggerAction);
+	connect(m_grid, &ImageGridView::openRequested, this, &HomeTab::openPicture);
+	connect(m_grid, &ImageGridView::contextMenuRequested, this, &HomeTab::showMenu);
+	connect(m_feed, &DiscoveryFeed::itemsReady, this, &HomeTab::addItems);
+	connect(m_feed, &DiscoveryFeed::busyChanged, this, [this](bool busy) {
+		m_busy->setVisible(busy);
+		if (!busy && m_feed->lastBatchProductive()) {
+			// Keep filling until the screen is full; later batches load as you scroll.
+			QTimer::singleShot(0, m_grid, &ImageGridView::checkNearEnd);
+		}
+		if (busy && m_grid->gridModel()->rowCount() == 0) {
+			m_empty->setText(tr("Finding pictures you'll like…"));
+			m_stack->setCurrentWidget(m_empty);
+		}
+	});
+	connect(m_feed, &DiscoveryFeed::statusChanged, this, [this](const QString &status) {
+		m_status->setText(status);
+		if (!m_feed->isBusy() && m_grid->gridModel()->rowCount() == 0) {
+			m_empty->setText(status.isEmpty() ? tr("Nothing new right now. Try Refresh or add more sources.") : status);
+			m_stack->setCurrentWidget(m_empty);
+		}
+	});
+	connect(m_store, &LibraryStore::imageChanged, this, &HomeTab::syncRating);
+	connect(m_store, &LibraryStore::collectionsChanged, this, &HomeTab::updateScopes);
+	connect(m_recommendations, &LibraryRecommendations::changed, this, &HomeTab::updateAi);
+	connect(m_recommendations, &LibraryRecommendations::progress, this, [this](int done, int total) {
+		m_aiProgress->setRange(0, std::max(1, total));
+		m_aiProgress->setValue(done);
+		updateAi();
+	});
+	connect(m_recommendations, &LibraryRecommendations::indexFinished, this, [this]() {
+		if (m_profile->getSettings()->value("Discover/visual", false).toBool()) {
+			m_feed->setVisualEnabled(true);
+			updateHeader();
+		}
+		updateAi();
+	});
+
+	m_feed->setScope(settings->value("Home/collection", 0).toLongLong());
+	m_feed->setVisualEnabled(settings->value("Discover/visual", false).toBool());
+	updateScopes();
+	updateHeader();
+	updateChips();
+	updateAi();
 }
+
+HomeTab::~HomeTab()
+{
+	m_feed->cancel();
+}
+
+ImageGridView *HomeTab::grid() const { return m_grid; }
+DiscoveryFeed *HomeTab::feed() const { return m_feed; }
 
 void HomeTab::showEvent(QShowEvent *event)
 {
 	QWidget::showEvent(event);
-	scheduleReload();
+	m_grid->setDensity(m_profile->getSettings()->value("Gallery/density", 1).toInt());
+	if (!m_started) {
+		m_started = true;
+		refresh();
+	}
 }
 
-void HomeTab::scheduleReload()
+void HomeTab::refresh()
 {
-	if (m_reloadPending) { return; }
-	m_reloadPending = true;
-	QTimer::singleShot(0, this, [this]() { m_reloadPending = false; reload(); });
+	m_started = true;
+	m_grid->gridModel()->clear();
+	m_libraryKeys.clear();
+	m_status->clear();
+	m_feed->restart();
+	updateHeader();
+	updateChips();
+	m_empty->setText(tr("Finding pictures you'll like…"));
+	m_stack->setCurrentWidget(m_empty);
+	m_feed->fetchMore();
 }
 
-QString HomeTab::selectedKey() const
+void HomeTab::updateScopes()
 {
-	return m_grid->selectedItems().isEmpty() ? QString() : m_grid->selectedItems().first()->data(Qt::UserRole).toString();
-}
-
-void HomeTab::reload()
-{
-	const QString selected = selectedKey();
-	const QSignalBlocker scopeBlock(m_scope);
-	const QSignalBlocker gridBlock(m_grid);
+	const QSignalBlocker blocker(m_scope);
+	const qint64 current = m_feed->scope();
 	m_scope->clear();
-	m_scope->addItem(tr("Library-wide"), 0);
-	for (const auto &collection : m_store->collections()) { m_scope->addItem(collection.name, collection.id); }
-	int index = m_scope->findData(m_collection);
-	if (index < 0) {
-		m_collection = 0;
-		m_profile->getSettings()->setValue("Home/collection", 0);
-		index = 0;
+	m_scope->addItem(tr("Everything I love"), 0);
+	for (const auto &collection : m_store->collections()) {
+		m_scope->addItem(tr("Like %1").arg(collection.name), collection.id);
 	}
-	m_scope->setCurrentIndex(index);
-	const bool online = m_mode->currentIndex() == 2;
-	const bool recent = m_mode->currentIndex() == 1;
-	m_restore->setVisible(!recent);
-	m_refresh->setVisible(!recent);
-	const int limit = m_pictureCount->currentData().toInt();
-	const auto result = recent || online ? LibraryRecommendationResult() : m_recommendations->recommendations(m_collection, QDate::currentDate(), limit, m_rotations.value(m_collection));
-	m_refresh->setEnabled(!result.items.isEmpty());
-	const QSignalBlocker densityBlock(m_density);
-	m_density->setCurrentIndex(qBound(0, m_profile->getSettings()->value("Gallery/density", 1).toInt(), 2));
-	updateDensity();
-
-	if (online) {
-		const QString session = QString::number(m_collection) + ':' + QDate::currentDate().toString(Qt::ISODate) + ':'
-			+ QString::number(m_rotations.value(m_collection)) + ':' + QString::number(qMin(48, m_pictureCount->currentData().toInt())) + ':'
-			+ m_profile->getSettings()->value("sites").toStringList().join('|');
-		if (m_discoverySession != session) { startDiscovery(session); }
-		showDiscovery(selected);
-		updateModelStatus();
-		updateSelection();
-		return;
+	const int index = m_scope->findData(current);
+	m_scope->setCurrentIndex(index < 0 ? 0 : index);
+	if (index < 0 && current != 0) {
+		m_feed->setScope(0);
 	}
-	QList<LibraryRecommendation> items = result.items;
-	if (recent) {
-		for (const auto &entry : m_store->entries(m_collection).mid(0, limit)) { items.append({entry, 0, {}, {}, false}); }
-	}
-	m_hint->setText(recent ? tr("The latest pictures saved in this scope. Viewing or rating a picture does not change its saved date.")
-		: (m_collection > 0 ? tr("Guided only by likes and favorites in %1. Favorites count three times as much as likes. Different tastes are balanced; close matches rotate daily or when refreshed.").arg(m_scope->currentText())
-			: tr("Guided only by Library-wide likes and favorites. Collection preferences stay separate; favorites count three times as much as likes. Refresh to rotate close matches.")));
-	m_grid->clear();
-	for (const auto &recommendation : items) {
-		const auto &entry = recommendation.entry;
-		QString name = pictureName(entry);
-		if (name.isEmpty()) { name = tr("Picture"); }
-		QStringList states;
-		if (entry.tags().isEmpty()) { states.append(tr("Needs tags")); }
-		if (entry.image.value("website").toString().isEmpty()) { states.append(tr("Source unlinked")); }
-		if (!entry.metadataErrors().isEmpty()) { states.append(tr("Metadata error")); }
-		if (entry.thumbnail.isEmpty()) { states.append(tr("Preview unavailable")); }
-		QString why = tr("Recently saved");
-		if (!recent) {
-			const auto seed = m_store->entry(recommendation.basedOnKey, m_collection);
-			const QString basis = seed.favorite ? tr("favorite") : tr("liked picture");
-			why = (recommendation.visual ? tr("Similar appearance to your %1: %2") : tr("Shared tags with your %1: %2")).arg(basis, pictureName(seed));
-			if (!recommendation.sharedTags.isEmpty()) { why += "\n" + tr("Shared tags: %1").arg(recommendation.sharedTags.mid(0, 8).join(", ")); }
-		}
-		auto *item = new QListWidgetItem(m_grid);
-		const QString details = name + "\n" + why + (states.isEmpty() ? QString() : "\n" + states.join(" · "));
-		item->setData(Qt::UserRole, entry.key);
-		item->setData(Qt::UserRole + 1, details);
-		item->setData(Qt::AccessibleTextRole, name);
-		item->setData(Qt::AccessibleDescriptionRole, details);
-		item->setToolTip(details + "\n" + entry.tags().join(", "));
-		QPixmap preview;
-		preview.loadFromData(entry.thumbnail);
-		if (preview.isNull()) { preview.load(":/images/noimage.png"); }
-		QIcon icon(preview);
-		icon.addPixmap(preview, QIcon::Selected);
-		item->setIcon(icon);
-		item->setTextAlignment(Qt::AlignHCenter);
-		if (entry.key == selected) { m_grid->setCurrentItem(item); item->setSelected(true); }
-	}
-	m_grid->setVisible(!items.isEmpty());
-	m_empty->setVisible(items.isEmpty());
-	if (!m_store->isReady()) { m_empty->setText(m_store->lastError()); }
-	else if (recent) { m_empty->setText(tr("No pictures saved in this scope yet. Open Library to import pictures or organize a collection.")); }
-	else if (result.ratedSeeds == 0) { m_empty->setText(tr("Make this space yours.\nLike or favorite a few pictures in %1, then return here for related pictures from your Library.").arg(m_scope->currentText())); }
-	else if (result.tagSeeds == 0 && result.visualSeeds == 0) { m_empty->setText(tr("Your likes and favorites are saved, but those pictures have no tags or visual index yet.\nDownload the local model and update the image index, or recover tags in Library. Missing tags do not stop you rating pictures.")); }
-	else { m_empty->setText(tr("No unrated matches in your Library yet.\nChoose Discover online to find new pictures from your selected sources, save more pictures, or restore hidden suggestions.")); }
-	updateModelStatus();
-	updateSelection();
+	m_scope->setVisible(m_scope->count() > 1);
 }
 
-void HomeTab::updateModelStatus()
+void HomeTab::updateHeader()
 {
+	const auto &taste = m_feed->taste();
+	if (taste.isEmpty()) {
+		m_subtitle->setText(tr("Fresh pictures from your sources. Like ♥ or favorite ★ what you enjoy and Discover learns your taste."));
+		return;
+	}
+	QString text = tr("Tuned to %n favorite(s)", "", taste.favorites()) + tr(" and %n like(s)", "", taste.likes());
+	if (m_feed->visualActive()) {
+		text += tr(" · smart visual matching on");
+	}
+	m_subtitle->setText(text + tr(" · favorites count 3× more"));
+}
+
+void HomeTab::updateChips()
+{
+	while (auto *item = m_chipsLayout->takeAt(0)) {
+		delete item->widget();
+		delete item;
+	}
+	const auto &taste = m_feed->taste();
+	QList<TasteTag> tags = taste.topTags(4, {"artist"}) + taste.topTags(4, {"character"}) + taste.topTags(3, {"copyright"});
+	if (tags.size() < 6) {
+		for (const auto &tag : taste.topTags(12)) {
+			bool known = false;
+			for (const auto &existing : tags) {
+				known = known || existing.name == tag.name;
+			}
+			if (!known && tags.size() < 8) {
+				tags.append(tag);
+			}
+		}
+	}
+	if (tags.isEmpty()) {
+		m_chips->hide();
+		return;
+	}
+	auto *label = new QLabel(tr("Your top picks:"), m_chips);
+	label->setObjectName("pageSubtitle");
+	m_chipsLayout->addWidget(label);
+	for (const auto &tag : tags.mid(0, 10)) {
+		const QString prefix = tag.type == QLatin1String("artist") ? QStringLiteral("🎨 ") : tag.type == QLatin1String("character") ? QStringLiteral("👤 ") : QStringLiteral("# ");
+		auto *chip = new QPushButton(prefix + QString(tag.name).replace('_', ' '), m_chips);
+		chip->setCursor(Qt::PointingHandCursor);
+		chip->setToolTip(tr("Search %1 in a new tab").arg(tag.name));
+		connect(chip, &QPushButton::clicked, this, [this, name = tag.name]() {
+			emit searchRequested(name);
+			if (m_mainWindow != nullptr) {
+				m_mainWindow->loadTag(name, true, false);
+			}
+		});
+		m_chipsLayout->addWidget(chip);
+	}
+	m_chipsLayout->addStretch();
+	m_chips->show();
+}
+
+void HomeTab::updateAi()
+{
+	QSettings *settings = m_profile->getSettings();
+	const bool wanted = settings->value("Discover/visual", false).toBool();
 	const bool busy = m_recommendations->busy();
-	const bool model = m_recommendations->modelAvailable();
-	m_coverage->setText(tr("%1 pictures indexed · processing stays on this PC").arg(m_recommendations->indexedCount()));
-	m_setup->setText(model ? tr("Reinstall local model") : tr("Download local model"));
-	m_setup->setEnabled(!busy && m_store->isReady());
-	m_update->setEnabled(model && !busy && m_store->isReady());
-	m_cancel->setVisible(busy);
-	m_progress->setVisible(busy);
-	if (!busy) { m_progress->setValue(0); }
-	const QString status = m_recommendations->status();
-	m_status->setText(status.isEmpty() ? (model ? tr("Update the image index to include saved previews. Tags can also guide recommendations.")
-		: tr("Tags can guide recommendations now. The model download needs internet; picture analysis stays local.")) : status);
-}
-
-void HomeTab::updateSelection()
-{
-	const QString key = selectedKey();
-	const auto image = discoveredImage(key);
-	const bool selected = !key.isEmpty() && (m_store->contains(key) || image);
-	const bool member = selected && (m_collection == 0 || m_store->contains(key, m_collection));
-	m_actions->setSelection(image ? QList<QSharedPointer<Image>>{image} : QList<QSharedPointer<Image>>{}, selected ? QStringList{key} : QStringList(), m_collection);
-	m_actions->setEnabled(member);
-	m_actions->setVisible(selected);
-	m_add->setVisible(selected && m_collection > 0 && !member);
-	m_add->setEnabled(selected && m_collection > 0 && !member);
-	m_view->setEnabled(selected);
-	m_view->setVisible(selected);
-	m_view->setText(selected && !member ? tr("View · Library-wide") : tr("View picture"));
-	m_view->setToolTip(selected && !member ? tr("This picture is outside the chosen collection. Its viewer uses Library-wide preferences until you add it.") : QString());
-	m_hide->setVisible(selected && m_mode->currentIndex() != 1);
-	m_hide->setEnabled(selected);
-	QString hint = m_grid->selectedItems().isEmpty() ? tr("Select a picture to see why it was suggested, then like, favorite or organize it.") : m_grid->selectedItems().first()->data(Qt::UserRole + 1).toString();
-	if (selected && !member) { hint += "\n" + tr("Add this picture to %1 before rating it in that collection. Its existing Library-wide ratings are kept separate.").arg(m_scope->currentText()); }
-	m_selectionHint->setText(hint);
-}
-
-void HomeTab::updateDensity()
-{
-	const int size = m_density->currentIndex() == 0 ? 128 : m_density->currentIndex() == 2 ? 256 : 180;
-	m_grid->setIconSize(QSize(size, size));
-	m_grid->setGridSize(QSize(size + 12, size + 12));
-}
-
-void HomeTab::openSelected()
-{
-	const QString key = selectedKey();
-
-	if (const auto image = discoveredImage(key)) {
-		const qint64 scope = m_collection > 0 && m_store->contains(key, m_collection) ? m_collection : 0;
-		QList<QSharedPointer<Image>> images;
-		for (const auto &candidate : m_discoveryImages) {
-			if (scope == 0 || m_store->contains(m_store->keyForImage(*candidate), scope)) { images.append(candidate); }
-		}
-		auto *viewer = new ViewerWindow(images, image, image->parentSite(), m_profile, m_mainWindow, nullptr, scope);
-		viewer->go();
+	const bool hasTaste = !m_feed->taste().isEmpty();
+	m_aiProgress->setVisible(busy);
+	if (busy) {
+		m_aiText->setText(tr("<b>Setting up smart visual matching…</b> %1").arg(m_recommendations->status().toHtmlEscaped()));
+		m_aiEnable->hide();
+		m_aiBanner->show();
 		return;
 	}
-	if (key.isEmpty() || !m_store->contains(key)) { return; }
-	const qint64 scope = m_store->contains(key, m_collection) ? m_collection : 0;
-	QStringList keys;
-	for (int i = 0; i < m_grid->count(); ++i) {
-		const QString candidate = m_grid->item(i)->data(Qt::UserRole).toString();
-		if (m_store->contains(candidate, scope)) { keys.append(candidate); }
-	}
-	emit pictureRequested(key, keys, scope);
+	m_aiEnable->show();
+	const bool dismissed = settings->value("Discover/aiBannerDismissed", false).toBool();
+	m_aiText->setText(tr("<b>Smarter picks with local AI.</b> Finds pictures that look like your favorites, even when tags differ. "
+		"Runs entirely on this PC; nothing is uploaded. One-time 89 MB download."));
+	m_aiBanner->setVisible(!wanted && !dismissed && hasTaste);
 }
 
-void HomeTab::cancelDiscovery()
+void HomeTab::enableAi()
 {
-	++m_discoveryGeneration;
-	m_discoveryTimeout->stop();
-	const auto pages = m_discoveryPages.keys();
-	m_discoveryPages.clear();
-	for (auto *page : pages) {
-		disconnect(page, nullptr, this, nullptr);
-		page->abort();
-		page->abortTags();
-		page->deleteLater();
+	QSettings *settings = m_profile->getSettings();
+	settings->setValue("Discover/visual", true);
+	settings->setValue("recommendations/localEnabled", true);
+	if (!m_recommendations->modelAvailable()) {
+		m_recommendations->downloadModel();
+	} else if (m_recommendations->indexedCount() == 0) {
+		m_recommendations->startIndexing();
 	}
-	for (const auto &loader : m_previewLoaders) {
-		if (loader) { disconnect(loader, nullptr, this, nullptr); loader->abort(); loader->deleteLater(); }
-	}
-	for (const auto &container : m_previewContainers) { if (container) { container->deleteLater(); } }
-	m_previewLoaders.clear();
-	m_previewContainers.clear();
+	m_feed->setVisualEnabled(true);
+	Toast::show(this, m_recommendations->modelAvailable() ? tr("Smart visual matching is on.") : tr("Downloading the visual model… Discover keeps working meanwhile."));
+	updateAi();
+	updateHeader();
 }
 
-QSharedPointer<Image> HomeTab::discoveredImage(const QString &key) const
+void HomeTab::addItems(const QList<DiscoveryItem> &items)
 {
-	for (const auto &image : m_discoveryImages) { if (m_store->keyForImage(*image) == key) { return image; } }
-	return {};
+	QList<ImageGridItem> tiles;
+	const qint64 now = QDateTime::currentMSecsSinceEpoch();
+	for (const auto &item : items) {
+		ImageGridItem tile;
+		tile.key = item.key;
+		tile.pixmap = item.image->previewImage();
+		tile.shownAt = now;
+		tile.title = pictureTitle(item.image);
+		QStringList details {tile.title, item.reason};
+		if (item.visual) {
+			details.append(tr("Looks like pictures you love"));
+		}
+		const QSize size = item.image->size();
+		if (size.isValid() && !size.isEmpty()) {
+			details.append(QStringLiteral("%1 × %2").arg(size.width()).arg(size.height()));
+		}
+		tile.tooltip = details.join('\n');
+		tile.badge = item.image->isVideo() ? QStringLiteral("▶") : (!item.image->isAnimated().isEmpty() ? QStringLiteral("GIF") : QString());
+		tiles.append(tile);
+	}
+	m_grid->gridModel()->append(tiles);
+	m_grid->startFade();
+	if (m_grid->gridModel()->rowCount() > 0) {
+		m_stack->setCurrentWidget(m_grid);
+	}
+	updateHeader();
 }
 
-void HomeTab::startDiscovery(const QString &session)
+QString HomeTab::libraryKey(const QString &key)
 {
-	cancelDiscovery();
-	m_discoverySession = session;
-	m_discoveryImages.clear();
-	m_discoveryReasons.clear();
-	m_discoveryErrors.clear();
-	const auto sources = m_profile->getSettings()->value("sites").toStringList();
-	const int count = qMin(48, m_pictureCount->currentData().toInt());
-	const auto topics = LibraryRecommender::topics(m_store->entries(m_collection), sources, m_collection,
-		QDate::currentDate(), (count + 15) / 16, m_rotations.value(m_collection));
-	// Register the full batch before starting requests: cached failures can finish immediately.
-	for (const auto &topic : topics) {
-		auto *site = m_profile->getSites().value(topic.website);
-		if (site == nullptr) { continue; }
-		const int pageNumber = 1 + static_cast<int>(m_rotations.value(m_collection) % 4);
-		auto *page = new Page(m_profile, site, m_profile->getSites().values(), QStringList{topic.tag}, pageNumber, 16, {}, false, this);
-		m_discoveryPages.insert(page, topic);
-		connect(page, &Page::finishedLoading, this, [this](Page *result) { finishDiscovery(result, true); });
-		connect(page, &Page::failedLoading, this, [this](Page *result) { finishDiscovery(result, false); });
-		connect(page, &Page::httpsRedirect, this, [this](Page *result) { finishDiscovery(result, false); });
-	}
-	m_discoveryHadTopics = !m_discoveryPages.isEmpty();
-	if (m_discoveryHadTopics) { m_discoveryTimeout->start(40000); }
-	for (auto *page : m_discoveryPages.keys()) { page->load(); }
-}
-
-void HomeTab::finishDiscovery(Page *page, bool success)
-{
-	if (!m_discoveryPages.contains(page)) { return; }
-	const auto topic = m_discoveryPages.take(page);
-	if (!success) { m_discoveryErrors.append(tr("%1 could not load this topic. Refresh to retry.").arg(topic.website)); }
-	QSet<QString> knownKeys;
-	QSet<QString> knownHashes;
-	static const QRegularExpression md5Pattern("^[a-fA-F0-9]{32}$");
-	for (const auto &entry : m_store->entries()) {
-		knownKeys.insert(entry.key);
-		const QString hash = entry.image.value("md5").toString();
-		if (md5Pattern.match(hash).hasMatch()) { knownHashes.insert(hash.toLower()); }
-	}
-	for (const auto &image : m_discoveryImages) {
-		knownKeys.insert(m_store->keyForImage(*image));
-		if (md5Pattern.match(image->md5()).hasMatch()) { knownHashes.insert(image->md5().toLower()); }
-	}
-	const auto hidden = m_recommendations->hiddenKeys(m_collection);
-	if (success) {
-		for (const auto &sourceImage : page->images().mid(0, 16)) {
-			if (!sourceImage || !sourceImage->isValid()) { continue; }
-			if (m_profile->getSettings()->value("hideblacklisted", false).toBool()
-				&& !m_profile->getBlacklist().match(sourceImage->tokens(m_profile)).isEmpty()) { continue; }
-			QJsonObject data;
-			sourceImage->write(data);
-			// A viewer can outlive a refresh. Serialization deliberately drops Page ownership.
-			auto image = QSharedPointer<Image>::create(m_profile);
-			if (!image->read(data, m_profile->getSites())) { continue; }
-			const QString key = m_store->keyForImage(*image);
-			const QString hash = image->md5().toLower();
-			if (key.isEmpty() || knownKeys.contains(key) || hidden.contains(key)
-				|| (md5Pattern.match(hash).hasMatch() && knownHashes.contains(hash))) { continue; }
-			knownKeys.insert(key);
-			if (md5Pattern.match(hash).hasMatch()) { knownHashes.insert(hash); }
-			m_discoveryImages.append(image);
-			m_discoveryReasons.insert(key, tr("Searched %1 on %2, guided by your ratings in %3.\nThis is a tag search; the preview has not been analyzed by local AI.")
-				.arg(topic.tag, topic.website, m_scope->currentText()));
-			auto *container = new QWidget(this);
-			container->hide();
-			auto *loader = new ImagePreview(image, container, m_profile, nullptr, m_mainWindow, this);
-			m_previewLoaders.append(loader);
-			m_previewContainers.append(container);
-			const quint64 generation = m_discoveryGeneration;
-			connect(loader, &ImagePreview::finished, this, [this, loader, container, generation]() {
-				m_previewLoaders.removeAll(loader);
-				m_previewContainers.removeAll(container);
-				loader->deleteLater();
-				container->deleteLater();
-				if (generation != m_discoveryGeneration) { return; }
-				if (m_discoveryPages.isEmpty() && m_previewLoaders.isEmpty()) { m_discoveryTimeout->stop(); }
-				scheduleReload();
-			});
-			loader->load();
+	if (!m_libraryKeys.contains(key)) {
+		if (const auto image = m_feed->image(key)) {
+			m_libraryKeys.insert(key, m_store->keyForImage(*image));
 		}
 	}
-	disconnect(page, nullptr, this, nullptr);
-	page->deleteLater();
-	if (m_discoveryPages.isEmpty() && m_previewLoaders.isEmpty()) { m_discoveryTimeout->stop(); }
-	scheduleReload();
+	return m_libraryKeys.value(key);
 }
 
-void HomeTab::showDiscovery(const QString &selected)
+void HomeTab::rate(const QString &key, bool favorite)
 {
-	m_grid->clear();
-	const auto hidden = m_recommendations->hiddenKeys(m_collection);
-	const int limit = qMin(48, m_pictureCount->currentData().toInt());
-	for (const auto &image : m_discoveryImages) {
-		const QString key = m_store->keyForImage(*image);
-		const auto state = m_store->entry(key, m_collection);
-		if (hidden.contains(key) || state.liked || state.favorite || m_grid->count() >= limit) { continue; }
-		const QString name = image->name().isEmpty() ? tr("Picture #%1").arg(image->id()) : image->name();
-		QStringList tags;
-		for (const auto &tag : image->tags()) { tags.append(tag.text()); }
-		QString details = name + "\n" + m_discoveryReasons.value(key);
-		if (tags.isEmpty()) { details += "\n" + tr("Tags unavailable from this source. You can still like or favorite this picture."); }
-		if (image->previewImage().isNull()) { details += "\n" + tr("Preview unavailable or still loading. Open the picture or refresh to retry."); }
-		auto *item = new QListWidgetItem(m_grid);
-		item->setData(Qt::UserRole, key);
-		item->setData(Qt::UserRole + 1, details);
-		item->setData(Qt::AccessibleTextRole, name);
-		item->setData(Qt::AccessibleDescriptionRole, details);
-		item->setToolTip(details + "\n" + tags.join(", "));
-		QPixmap preview = image->previewImage();
-		if (preview.isNull()) { preview.load(":/images/noimage.png"); }
-		QIcon icon(preview);
-		icon.addPixmap(preview, QIcon::Selected);
-		item->setIcon(icon);
-		if (key == selected) { m_grid->setCurrentItem(item); item->setSelected(true); }
+	const auto image = m_feed->image(key);
+	if (!image) {
+		return;
 	}
-	const bool loading = !m_discoveryPages.isEmpty();
-	m_grid->setVisible(m_grid->count() > 0);
-	m_empty->setVisible(m_grid->count() == 0);
-	m_refresh->setEnabled(true);
-	m_hint->setText(tr("Online discovery searches your selected sources using real tags from ratings in %1. Favorites count three times as much as likes. Pictures stay unsaved until you use a Library action. Up to 48 candidates per refresh.")
-		.arg(m_scope->currentText()) + (loading ? "\n" + tr("Loading %n source search(es)…", "", m_discoveryPages.size()) : QString())
-		+ (m_discoveryErrors.isEmpty() ? QString() : "\n" + m_discoveryErrors.join("\n")));
-	if (loading) { m_empty->setText(tr("Finding new pictures from your selected sources…")); }
-	else if (m_profile->getSettings()->value("sites").toStringList().isEmpty()) {
-		m_empty->setText(tr("Select image sources in Search first, then refresh discovery. Your current likes and favorites are kept."));
-	} else if (!m_discoveryHadTopics && m_discoveryErrors.isEmpty()) {
-		m_empty->setText(tr("Like or favorite tagged pictures from your selected sources in %1, then refresh. Tagless ratings remain saved; online discovery needs source tags, while local visual recommendations can use their previews.").arg(m_scope->currentText()));
-	} else { m_empty->setText(tr("No new pictures from these topics. Refresh to try different topics or pages, select more sources, or restore hidden suggestions.")); }
+	const QString saved = m_store->saveImage(*image);
+	if (saved.isEmpty()) {
+		Toast::show(this, m_store->lastError(), 3500);
+		return;
+	}
+	m_libraryKeys.insert(key, saved);
+	const qint64 scope = m_feed->scope();
+	bool ok = false;
+	const bool on = PictureActions::toggleRating(m_store, saved, scope, favorite, &ok);
+	if (!ok) {
+		Toast::show(this, m_store->lastError(), 3500);
+		return;
+	}
+	if (!on && scope == 0) {
+		// Un-rating a picture that only entered the Library through Discover leaves no trace.
+		const auto entry = m_store->entry(saved);
+		if (!entry.liked && !entry.favorite && entry.collectionCount == 0 && entry.notes.isEmpty() && entry.localPaths.isEmpty()) {
+			m_store->removeImage(saved);
+		}
+	}
+	const auto entry = m_store->entry(saved, scope);
+	m_grid->gridModel()->setRating(key, entry.liked, entry.favorite);
+	Toast::show(this, !on ? tr("Rating removed") : favorite ? tr("★ Favorited — expect more like this") : tr("♥ Liked — Discover is learning your taste"));
+}
+
+void HomeTab::syncRating(const QString &changed)
+{
+	for (auto it = m_libraryKeys.constBegin(); it != m_libraryKeys.constEnd(); ++it) {
+		if (changed.isEmpty() || it.value() == changed) {
+			const auto entry = m_store->entry(it.value(), m_feed->scope());
+			m_grid->gridModel()->setRating(it.key(), entry.liked, entry.favorite);
+		}
+	}
+}
+
+void HomeTab::triggerAction(ImageGridView::Action action, const QStringList &keys)
+{
+	switch (action) {
+		case ImageGridView::Like:
+		case ImageGridView::Favorite:
+			for (const auto &key : keys) {
+				rate(key, action == ImageGridView::Favorite);
+			}
+			break;
+		case ImageGridView::Download: {
+			QList<QSharedPointer<Image>> images;
+			for (const auto &key : keys) {
+				if (const auto image = m_feed->image(key)) {
+					images.append(image);
+				}
+			}
+			PictureActions::download(m_profile, m_downloadQueue, images, this);
+			break;
+		}
+		case ImageGridView::Hide:
+			for (const auto &key : keys) {
+				m_feed->dismiss(key);
+				m_grid->gridModel()->remove(key);
+			}
+			Toast::show(this, tr("Hidden. You'll see fewer pictures like this."));
+			break;
+	}
+}
+
+void HomeTab::openPicture(const QString &key)
+{
+	const auto image = m_feed->image(key);
+	if (!image) {
+		return;
+	}
+	QList<QSharedPointer<Image>> images;
+	for (const auto &other : m_grid->gridModel()->keys()) {
+		if (const auto candidate = m_feed->image(other)) {
+			images.append(candidate);
+		}
+	}
+	const qint64 scope = m_feed->scope();
+	auto *viewer = new ViewerWindow(images, image, image->parentSite(), m_profile, m_mainWindow, nullptr, scope > 0 && m_store->contains(libraryKey(key), scope) ? scope : 0);
+	viewer->go();
+}
+
+void HomeTab::showMenu(const QStringList &keys, const QPoint &position)
+{
+	if (keys.isEmpty()) {
+		return;
+	}
+	QMenu menu(this);
+	const QString key = keys.first();
+	const auto image = m_feed->image(key);
+	if (keys.size() == 1) {
+		menu.addAction(tr("Open"), this, [this, key]() { openPicture(key); });
+	}
+	menu.addAction(tr("♥ Like"), this, [this, keys]() { triggerAction(ImageGridView::Like, keys); });
+	menu.addAction(tr("★ Favorite"), this, [this, keys]() { triggerAction(ImageGridView::Favorite, keys); });
+	auto *collections = menu.addMenu(tr("Add to collection"));
+	for (const auto &collection : m_store->collections()) {
+		collections->addAction(collection.name, this, [this, keys, id = collection.id, name = collection.name]() {
+			for (const auto &selected : keys) {
+				if (const auto picture = m_feed->image(selected)) {
+					const QString saved = m_store->saveImage(*picture);
+					if (saved.isEmpty() || !m_store->addToCollection(saved, id)) {
+						Toast::show(this, m_store->lastError(), 3500);
+						return;
+					}
+					m_libraryKeys.insert(selected, saved);
+				}
+			}
+			Toast::show(this, tr("Added to %1").arg(name));
+		});
+	}
+	collections->setEnabled(!collections->isEmpty());
+	menu.addAction(tr("Download"), this, [this, keys]() { triggerAction(ImageGridView::Download, keys); });
+	if (keys.size() == 1 && image) {
+		menu.addSeparator();
+		QStringList best;
+		const auto &taste = m_feed->taste();
+		QStringList tags = image->tagsString();
+		std::sort(tags.begin(), tags.end(), [&taste](const QString &left, const QString &right) { return taste.weight(left) > taste.weight(right); });
+		for (const auto &tag : tags) {
+			if (!TasteProfile::isMetaTag(TasteProfile::normalize(tag)) && !tag.contains(':') && best.size() < 2) {
+				best.append(tag);
+			}
+		}
+		if (!best.isEmpty()) {
+			menu.addAction(tr("More like this: %1").arg(best.join(' ')), this, [this, best]() {
+				emit searchRequested(best.join(' '));
+				if (m_mainWindow != nullptr) {
+					m_mainWindow->loadTag(best.join(' '), true, false);
+				}
+			});
+		}
+		const QUrl page = image->pageUrl();
+		if (page.isValid() && (page.scheme() == "http" || page.scheme() == "https")) {
+			menu.addAction(tr("Open source page"), this, [page]() { QDesktopServices::openUrl(page); });
+			menu.addAction(tr("Copy link"), this, [page]() { QApplication::clipboard()->setText(page.toString()); });
+		}
+	}
+	menu.addSeparator();
+	menu.addAction(tr("Not interested"), this, [this, keys]() { triggerAction(ImageGridView::Hide, keys); });
+	menu.exec(position);
 }

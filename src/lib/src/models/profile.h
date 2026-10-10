@@ -36,6 +36,7 @@ class Profile : public QObject
 
 		// Sync
 		void reload();
+		void applyDefaults();
 		void sync();
 		void syncFavorites() const;
 		void syncKeptForLater() const;

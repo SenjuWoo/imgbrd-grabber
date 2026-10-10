@@ -2,65 +2,85 @@
 
 # Grabber Woo Edit
 
-A desktop image downloader and personal picture Library for people who want to find, keep, and organize artwork across websites and their own folders.
+An all-in-one image searcher, downloader and personal picture Library. Search dozens of art sites at once, keep what you love, and get an endless **Discover** feed that learns from your likes and favorites.
 
 [Download](https://github.com/SenjuWoo/imgbrd-grabber/releases/latest) · [Report an issue](https://github.com/SenjuWoo/imgbrd-grabber/issues) · [Upstream Grabber](https://github.com/Bionus/imgbrd-grabber) · [Apache 2.0 license](LICENSE)
 
-![Native Library showing a local collection, picture likes, favorites, and collection covers](docs/assets/img/screenshots/woo-library.png)
+![Discover: an endless feed picked from your likes and favorites, with actions on the selected picture](docs/assets/img/screenshots/woo-home.png)
 
-*The real desktop Library with generated demo artwork imported from local files. The collection has its own likes, favorites, notes, and cover.*
+*Discover with generated demo artwork. Pictures stay clean until you select one; then ♥ Like, ★ Favorite, Download and Not interested appear on it.*
 
-## Keep pictures, not just searches
+## What's new in 7.18
 
-- **Like, Favorite, and Collection** actions work on search thumbnails, in the viewer, in context menus, and in Library. Favorites carry stronger preference weight than likes.
-- **Collections have independent preferences.** A picture can belong to several collections, each with its own likes, favorites, and notes. Library-wide preferences remain separate.
-- **Import existing downloads** by choosing files or folders, or dropping them into Library. Subfolders are included. Reference originals by default, or keep managed copies in the portable Library. SHA-256 identifies exact duplicates.
-- **View local pictures offline** with zoom, pan, notes, and the same picture actions. Organize several pictures at once; give collections names and covers.
-- **Recover available metadata** from embedded image text, adjacent JSON/XMP/tag files, Windows download-origin data, or optional ExifTool. Missing metadata stays unknown.
-- **Find or link a source** using recovered URLs, an exact MD5 query on a configured site, or visual comparisons against online images already cached in Library. Review candidates before linking them.
+- **Discover is the home page.** An endless, personal feed of *new* pictures from your selected sources. It searches with the real tags of what you like, favorites count three times as much as likes, recent ratings count a bit more, and every like, favorite or "Not interested" changes what comes next. Results stream in source by source and keep loading as you scroll.
+- **Smart visual matching (optional local AI).** One click downloads an 89 MB image model; Discover then also ranks pictures that *look* like your favorites, even when tags differ. Everything runs on your PC, nothing is uploaded.
+- **Your top picks.** Artists, characters and series you like most appear as chips at the top of Discover; one click opens a search.
+- **A faster, cleaner Library.** One endless grid instead of pages, Select all, and a selection bar with Like, Favorite, Collection, **Download**, **Save to folder…**, Find source and Remove. **Download all** grabs every original in the current view. A new **Possible duplicates** view groups the same picture saved from different sources.
+- **Search: Hide liked.** One checkbox hides pictures you already liked or favorited, including the same file from another site.
+- **Merge results removes look-alike duplicates.** Besides identical checksums, merged results now recognise the same picture re-uploaded elsewhere (resized or recompressed). Strict thresholds keep edits, crops and recolors apart.
+- **A modern shell.** A navigation rail (Discover, Search, Library, Following, Downloads, Monitors), search-only docks, the new **Woo Night** theme, rounded tiles that fill the window and toast confirmations. Keyboard: **L** like, **F** favorite, **D** download, **X** not interested, **Enter** open.
+- **Ready-made defaults for new installs.** A curated set of sources and source presets, a blacklist, original-file downloads named by checksum, merged results and hidden blacklisted posts. Existing profiles keep all their settings.
+
+## Discover
+
+Open **Discover** (it is also where Grabber starts). Like ♥ or favorite ★ anything you enjoy — in Discover, search results, the viewer or Library — and the feed adapts:
+
+- Queries come from your actual saved tags, weighted by how often and how strongly you rated them, and paired with tags that appear together in your favorites so searches stay specific. Overly common tags (like `1girl` or `highres`) are down-weighted.
+- Each source's results are filtered (blacklist, already rated, already shown, hidden), de-duplicated by checksum and by appearance, ranked, and streamed in. Only the best share reaches the screen.
+- **Not interested** (✕ or **X**) hides a picture for good and gently steers away from its tags. *⋯ → Show hidden pictures again* resets this.
+- Choose **Everything I love** or a single collection's taste. Collections keep their own likes and favorites.
+- With no ratings yet, Discover shows fresh posts from your sources until you rate a few.
+
+Turn on **Smart visual matching** from the banner or *⋯*. The model is verified by size and SHA-256, the image index updates in the background, and Discover blends tag and visual similarity. Status and coverage are shown in the menu.
+
+## Library
+
+![Library grid with a collection, ratings badges and the selection bar](docs/assets/img/screenshots/woo-library.png)
+
+*Generated demo artwork imported from local files into a collection with its own likes and favorites.*
+
+- **Like, Favorite and Collection** actions work in Discover, search thumbnails, the viewer, context menus and Library. Like and Favorite are exclusive per scope.
+- **Collections have independent preferences.** A picture can belong to several collections, each with its own likes, favorites and notes.
+- **Import existing downloads** by choosing files or folders, or dropping them on Library. Reference originals or keep managed copies; SHA-256 identifies exact duplicates.
+- **Download / Save to folder.** Download fetches originals into your usual folder; Save to folder copies files already on disk and downloads the rest into a folder you pick.
+- **Smart views:** Unsorted, Liked, Favorites, Recently saved, Needs tags, Needs source, Metadata errors and Possible duplicates.
+- **Find or link a source** using recovered URLs, an exact MD5 query, or visual comparison against pictures already in Library.
 
 ![Offline picture viewer with collection-scoped actions and notes](docs/assets/img/screenshots/woo-viewer.png)
 
-*An imported file opens without rediscovering its online post. The inspector shows available metadata and collection notes.*
-
-Existing tag bookmarks remain available as **Saved searches**, including monitors. Removing a Library entry or collection leaves original downloads on disk.
+Existing tag bookmarks remain available under **Following**, including monitors. Removing a Library entry or collection leaves original downloads on disk.
 
 ## Download and start
 
-The primary release is a **portable Windows x64 ZIP** for Windows 10 or 11. Qt, OpenSSL, image plugins, SQLite, source scripts, themes, and translations are bundled. Build tools and Node.js are unnecessary to run it.
+The primary release is a **portable Windows x64 ZIP** for Windows 10 or 11. Qt, OpenSSL, image plugins, SQLite, source scripts, themes, defaults and translations are bundled.
 
 1. Download the Windows ZIP from [Releases](https://github.com/SenjuWoo/imgbrd-grabber/releases/latest).
 2. Extract it into a writable folder and run `Grabber.exe`.
-3. Use **Library → Import pictures…** for local downloads, or configure a website in **Sources** to search online.
+3. Pick a download folder in the first-launch window (or keep the recommended sources), then like a few pictures and open **Discover**.
 
-For an existing portable install, close the app and back up its profile first. Preserve `settings.ini`, per-site settings/cookies, saved searches, history, blacklists, tabs, queues, `library.sqlite`, `library-media`, and other personal files. Replace the runtime with a clean package instead of mixing Qt DLL generations. See [maintenance](docs/woo-maintenance.md).
+For an existing portable install, close the app and back up its profile first. Preserve `settings.ini`, per-site settings/cookies, saved searches, history, blacklists, tabs, queues, `library.sqlite`, `library-media`, `discover.json`, `models/`, `recommendations/` and other personal files. Replace the runtime with a clean package instead of mixing Qt DLL generations. See [maintenance](docs/woo-maintenance.md).
 
-The display name is **Grabber Woo Edit**. The executable names and existing profile identifiers are retained so renaming the product does not move or reset your data. Historical Fable tags remain available in [Releases](https://github.com/SenjuWoo/imgbrd-grabber/releases).
+The display name is **Grabber Woo Edit**. Executable names and profile identifiers are retained so updates never move or reset your data.
 
 ## Imported pictures and missing metadata
 
-The gallery offers 50, 100 or 200 pictures per page, with **Previous page / Next page** and the current range. Search and filters cover the entire Library, including pictures on other pages.
+The Library grid shows every picture in one scrollable view; search and filters cover the entire Library.
 
-- **Needs tags** lists pictures without usable tags. A successful picture import does not imply that tags were present in the downloaded file.
+- **Needs tags** lists pictures without usable tags. A successful import does not imply that tags were present in the file.
 - **Needs source** lists pictures without an identified website post, including pictures whose file tags were recovered.
 - **Metadata errors** lists reader failures separately from absent metadata. Open a picture's Overview for the reason.
 
-Select one picture and click **Find / link source…** beside the rating buttons. Choose a source for exact MD5 lookup, or compare source pictures already cached in Library. Confirm a candidate to attach its post metadata. Similarity search does not search the whole Internet. **Import pictures… → Recheck metadata** retries local files without duplicating pictures or resetting ratings.
-
-Likes, favorites, notes, and collection membership work without tags and are preserved when a source is linked. Home uses likes and favorites to rediscover saved pictures. Tagless pictures can guide visual recommendations after local AI setup; missing metadata remains visible and is not invented. Basic embedded text and sidecars are checked automatically. Optional [ExifTool](https://exiftool.org/install.html) extends EXIF/IPTC/XMP coverage; the Overview reports when that reader was unavailable.
+Select one picture and click **Find source…** in the selection bar. Choose a source for exact MD5 lookup, or compare pictures already cached in Library, then confirm a candidate to attach its post metadata. **Import… → Recheck metadata** retries local files without duplicating pictures or resetting ratings. Likes, favorites, notes and collections work without tags and are kept when a source is linked. Optional [ExifTool](https://exiftool.org/install.html) extends EXIF/IPTC/XMP coverage.
 
 ## Online sources and current limits
 
-The upstream downloader features remain: multiple tabs and sources, tag autocomplete, blacklists, filters, filename tokens, authentication, downloads, and CLI commands. Sources include Danbooru, Gelbooru, Pixiv, Reddit, e621, Kemono, and others. Website availability and account requirements vary.
+The upstream downloader features remain: multiple tabs and sources, tag autocomplete, blacklists, filters, filename tokens, authentication, batch downloads, monitors and CLI commands. Sources include Danbooru, Gelbooru, Rule34, e621, Sankaku, Pixiv, Reddit, Kemono, Zerochan and more. Website availability and account requirements vary; some sites sit behind Cloudflare challenges or need API keys, and Discover reports sources that did not respond.
 
-- **Pixiv already exists** and requires authentication. API errors are reported explicitly.
-- **Reddit search uses keywords, authors, subreddits, and flair**, not booru tags. This fork removes irrelevant booru operators, follows Reddit cursors, and reports denied API access. Numbered page jumps are unavailable on that source.
-- **Home recommends saved pictures and offers opt-in Discover online**, using likes and favorites in the selected collection or Library-wide scope to search your configured sources. Pinterest, creator following, and optional cloud providers remain future work.
-- Visual matching currently compares against cached Library images. It does not perform Internet-wide reverse searches or upload your files to an AI provider.
+- **Pixiv** requires authentication. **Reddit** searches keywords, authors, subreddits and flair rather than booru tags.
+- Discover searches the sources you selected in a search tab. Tag vocabularies differ between sites, so general tags are only searched on sites where you rated them; artists, characters and series can be searched anywhere.
+- Visual matching compares previews against your own rated pictures. It does not perform Internet-wide reverse searches or upload files.
 
-The Library stores its catalog and bounded previews locally. Fresh profiles have usage analytics disabled by default; an existing explicit preference is retained. Built-in backups include the catalog and managed copies. Externally referenced originals need their own backup.
-
-The QWidget desktop UI contains the Library. Android uses a separate QML UI and does not yet contain this Library workflow. Cross-platform build checks do not establish live compatibility with every remote website. See [the backend audit](docs/woo-backend-audit.md) for evidence and limits.
+The Library stores its catalog and bounded previews locally. Fresh profiles have usage analytics disabled by default. Built-in backups include the catalog and managed copies; externally referenced originals need their own backup. Android uses a separate QML UI without these features.
 
 ## Build and verify
 
@@ -83,17 +103,15 @@ npm test -- --runInBand
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
 
-## Home and local recommendations
+## Changes in 7.18.0
 
-![Native Home showing collection recommendations, match explanations and explicit collection membership](docs/assets/img/screenshots/woo-home.png)
-
-*Generated demo artwork, with collection suggestions based on saved tags before local AI setup. The selected picture shows its match and collection membership action.*
-
-Open **Home**, choose **Library-wide** or a collection, then **For you**, **Recently saved** or **Discover online**. Online discovery fetches new pictures from your selected websites using real source tags from likes and favorites in that scope. It uses your existing source settings and login, shows its searched topic, and saves a picture only when you use a Library action. Only ratings in the selected scope guide recommendations. Favorites count three times as much as likes. Like and Favorite are mutually exclusive within each scope; selecting either replaces the other. Suggested pictures outside a collection need **Add to this collection** before rating in that scope. Hide a suggestion for this scope or restore hidden suggestions at any time.
-
-**Download local model** fetches the pinned 89 MB CLIP image model and builds a CPU image index. Images stay on this PC; no Python, GPU or AI server is required. Windows packages include ONNX Runtime 1.30.0; other desktop platforms can use tag matching until a compatible native runtime is supplied. Index coverage and skipped previews are visible. Existing likes, favorites, tags and files survive indexing failures and cancellation. The model/index are rebuildable profile data, separate from `library.sqlite`.
-
-Visual embeddings understand appearance; they do not recover original tags, authors or source URLs. Recommendations explain their strongest contributing liked/favorited picture and actual shared tags. Close matches rotate each day and with Refresh. Saved recommendations balance distinct interests; online discovery rotates source topics and pages. Compact, Comfortable and Large density settings are shared with Library and search. Image details are in tooltips and the viewer; rating controls appear after selection. Library offers 50, 100 or 200 pictures per page. Use `Grabber-cli.exe --index-library` to update an already configured local index with a JSON result. See [browsing milestone evidence and limits](docs/browsing-milestone.md) and [local AI evidence](docs/recommendations-milestone.md).
+- Make **Discover** the home page: an endless personal feed from selected sources, learned from tag weights of likes (1×) and favorites (3×) with recency, co-occurring tag pairs, per-site vocabularies, persistent "Not interested" feedback, seen-history, blacklist and rating filters, checksum and visual de-duplication, per-source streaming and bounded timeouts.
+- Use the local CLIP model where it helps: rank Discover candidates by visual similarity to rated pictures on a background thread. Add "Your top picks" chips and "More like this".
+- Rebuild Library on a shared picture grid: no pages, Select all, selection bar, Download, Download all, Save to folder, Possible duplicates, in-place rating updates that keep scroll and selection.
+- Search: add **Hide liked** and visual duplicate merging (including same-site reposts) to Merge results; hidden duplicates no longer leave gaps.
+- Add the navigation rail, search-only docks, Woo Night theme, toasts and keyboard actions. Discover opens first unless Grabber was started for a specific search.
+- Ship first-run defaults (sources, presets, blacklist, naming) for new profiles only; install every bundled theme.
+- Fix the scroll range ending early on large grids by laying tiles out in a single pass.
 
 ## Changes in 7.17.1
 

@@ -153,6 +153,7 @@ bool LibraryRecommendations::modelAvailable() const
 }
 
 int LibraryRecommendations::indexedCount() const { return m_vectors.size(); }
+const QHash<QString, QVector<float>> &LibraryRecommendations::vectors() const { return m_vectors; }
 QString LibraryRecommendations::status() const { return m_status; }
 
 void LibraryRecommendations::loadCache()

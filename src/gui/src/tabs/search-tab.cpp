@@ -1,4 +1,5 @@
 #include "tabs/search-tab.h"
+#include <QBoxLayout>
 #include <QCompleter>
 #include <QEventLoop>
 #include <QMenu>
@@ -20,6 +21,7 @@
 #include "main-window.h"
 #include "models/api/api.h"
 #include "models/favorite.h"
+#include "models/library-store.h"
 #include "models/filtering/post-filter.h"
 #include "models/page.h"
 #include "models/profile.h"
@@ -59,6 +61,24 @@ SearchTab::SearchTab(Profile *profile, DownloadQueue *downloadQueue, MainWindow 
 	setSelectedSources(m_settings);
 }
 
+namespace
+{
+	QBoxLayout *containingLayout(QLayout *layout, QWidget *widget)
+	{
+		if (layout->indexOf(widget) >= 0) {
+			return qobject_cast<QBoxLayout*>(layout);
+		}
+		for (int i = 0; i < layout->count(); ++i) {
+			if (QLayout *child = layout->itemAt(i)->layout()) {
+				if (QBoxLayout *found = containingLayout(child, widget)) {
+					return found;
+				}
+			}
+		}
+		return nullptr;
+	}
+}
+
 void SearchTab::init()
 {
 	if (ui_spinImagesPerPage != nullptr) {
@@ -92,6 +112,21 @@ void SearchTab::init()
 
 	if (infinite == "scroll") {
 		connect(ui_scrollAreaResults, &VerticalScrollArea::endOfScrollReached, this, &SearchTab::endlessLoad);
+	}
+
+	QBoxLayout *mergeRow = ui_checkMergeResults != nullptr && layout() != nullptr ? containingLayout(layout(), ui_checkMergeResults) : nullptr;
+	if (mergeRow != nullptr) {
+		m_hideRated = new QCheckBox(tr("Hide liked"), this);
+		m_hideRated->setObjectName("checkHideRated");
+		m_hideRated->setToolTip(tr("Hide pictures you already liked or favorited, including the same file from other sources"));
+		m_hideRated->setChecked(m_settings->value("hideLibraryRated", false).toBool());
+		mergeRow->insertWidget(mergeRow->indexOf(ui_checkMergeResults) + 1, m_hideRated);
+		connect(m_hideRated, &QCheckBox::toggled, this, [this](bool hide) {
+			m_settings->setValue("hideLibraryRated", hide);
+			if (!m_images.isEmpty() || !m_pages.isEmpty()) {
+				load();
+			}
+		});
 	}
 
 	if (infinite != "disabled" && ui_checkMergeResults != nullptr) {
@@ -340,6 +375,8 @@ void SearchTab::clear()
 
 	m_pages.clear();
 	m_images.clear();
+	m_mergedFingerprints.clear();
+	m_mergedDuplicates = 0;
 
 	m_selectedImagesPtrs.clear();
 	m_selectedImages.clear();
@@ -593,6 +630,27 @@ void SearchTab::finishedLoadingPreview()
 		return;
 	}
 
+	// Merged results: the same picture re-uploaded elsewhere often has another checksum; compare appearance.
+	if (ui_checkMergeResults != nullptr && ui_checkMergeResults->isChecked() && !img->previewImage().isNull()) {
+		const auto fingerprint = ImageFingerprint::fromImage(img->previewImage().toImage(), img->size());
+		bool duplicate = false;
+		for (const auto &known : qAsConst(m_mergedFingerprints)) {
+			// Strict thresholds keep edits apart, so reposts on one site merge too.
+			duplicate = duplicate || fingerprint.sameImage(known);
+		}
+		if (duplicate && preview->container() != nullptr) {
+			preview->container()->hide();
+			++m_mergedDuplicates;
+			if (m_siteLabels.contains(nullptr)) {
+				setMergedLabelText(m_siteLabels[nullptr], m_images);
+			}
+			return;
+		}
+		if (fingerprint.valid) {
+			m_mergedFingerprints.append(fingerprint);
+		}
+	}
+
 	// Download whitelist images on thumbnail view
 	Blacklist whitelistedTags;
 	for (const QString &tag : m_settings->value("whitelistedtags").toString().split(" ", Qt::SkipEmptyParts)) {
@@ -699,7 +757,8 @@ void SearchTab::setMergedLabelText(QLabel *txt, const QList<QSharedPointer<Image
 		else { sourceTotal += count; estimated = estimated || latest->imagesCount(false) < 0; }
 	}
 	const QString page = firstPage != lastPage ? QStringLiteral("%1–%2").arg(firstPage).arg(lastPage) : QString::number(lastPage);
-	QString label = links.join(", ") + " · " + tr("Page %1 · %2 unique images shown").arg(page).arg(images.size());
+	QString label = links.join(", ") + " · " + tr("Page %1 · %2 unique images shown").arg(page).arg(images.size() - m_mergedDuplicates);
+	if (m_mergedDuplicates > 0) { label += " · " + tr("%n duplicate(s) merged", "", m_mergedDuplicates); }
 	if (known) { label += " · " + tr("%1 source results before merging").arg((estimated ? "~" : QString()) + QString::number(sourceTotal)); }
 	else { label += " · " + tr("Total unknown"); }
 	if (!failures.isEmpty()) { label += "<br/>" + failures.join("<br/>"); }
@@ -1362,6 +1421,10 @@ bool SearchTab::validateImage(const QSharedPointer<Image> &img, QString &error)
 	QStringList detected = m_profile->getBlacklist().match(img->tokens(m_profile));
 	if (!detected.isEmpty() && m_settings->value("hideblacklisted", false).toBool()) {
 		error = QStringLiteral("Image #%1 ignored. Reason: %2.").arg(img->id()).arg("\"" + detected.join(", ") + "\"");
+		return false;
+	}
+	if (m_settings->value("hideLibraryRated", false).toBool() && m_profile->library()->isRated(*img)) {
+		error = QStringLiteral("Image #%1 hidden: already liked or favorited.").arg(img->id());
 		return false;
 	}
 

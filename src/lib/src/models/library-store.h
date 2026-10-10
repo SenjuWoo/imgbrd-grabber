@@ -4,6 +4,7 @@
 #include <QByteArray>
 #include <QJsonObject>
 #include <QObject>
+#include <QSet>
 #include <QSqlDatabase>
 #include <QVariant>
 #include <QStringList>
@@ -64,6 +65,8 @@ class LibraryStore : public QObject
 		bool addToCollection(const QString &key, qint64 collection);
 		bool removeFromCollection(const QString &key, qint64 collection);
 		bool contains(const QString &key, qint64 collection = 0);
+		/** Whether this picture, or the same file from another source, is liked or favorited in any scope. */
+		bool isRated(const Image &image);
 
 	signals:
 		void imageChanged(const QString &key);
@@ -74,6 +77,10 @@ class LibraryStore : public QObject
 		bool setValue(const QString &key, const QString &column, const QVariant &value, qint64 collection);
 		QString storedPath(const QString &path) const;
 		QString resolvedPath(const QString &path) const;
+		void loadRatedIndex();
+		QSet<QString> m_ratedKeys;
+		QSet<QString> m_ratedMd5s;
+		bool m_ratedDirty = true;
 		QString m_directory;
 		QString m_connection;
 		QSqlDatabase m_database;

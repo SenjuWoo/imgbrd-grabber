@@ -23,7 +23,7 @@
 #endif
 
 #ifndef MyAppVersion
-# define MyAppVersion "7.17.1"
+# define MyAppVersion "7.18.0"
 #endif
 
 #define PlatformNamePrefix ""
@@ -291,8 +291,8 @@ Source: "{#SrcDir}\sites\Zerochan\icon.png";  DestDir: "{app}\sites\Zerochan"; F
 Source: "{#SrcDir}\sites\Zerochan\model.js";  DestDir: "{app}\sites\Zerochan"; Flags: ignoreversion
 Source: "{#SrcDir}\sites\Zerochan\sites.txt"; DestDir: "{app}\sites\Zerochan"; Flags: ignoreversion
 Source: "{#SrcDir}\sites\Zerochan\www.zerochan.net\defaults.ini"; DestDir: "{app}\sites\Zerochan\www.zerochan.net"; Flags: ignoreversion
-Source: "{#SrcDir}\dist\common\themes\Default\*"; DestDir: "{localappdata}\Bionus\Grabber\themes\Default"; Flags: recursesubdirs
-Source: "{#SrcDir}\dist\common\themes\QDarkStyleSheet\*"; DestDir: "{localappdata}\Bionus\Grabber\themes\QDarkStyleSheet"; Flags: recursesubdirs
+Source: "{#SrcDir}\dist\common\themes\*"; DestDir: "{localappdata}\Bionus\Grabber\themes"; Flags: recursesubdirs
+Source: "{#SrcDir}\dist\common\defaults\*"; DestDir: "{app}\defaults"; Flags: ignoreversion
 Source: "{#SrcDir}\dist\common\webservices\*.ico"; DestDir: "{localappdata}\Bionus\Grabber\webservices"
 
 [InstallDelete]

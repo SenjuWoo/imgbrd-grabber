@@ -123,6 +123,34 @@ TEST_CASE("Library identity separates sites and gallery attachments", "[library]
 	REQUIRE(LibraryStore::imageKey(*gallery) == LibraryStore::imageKey(changedCdn));
 }
 
+TEST_CASE("Library recognizes rated pictures by identity and by file across sources", "[library]")
+{
+	QTemporaryDir directory;
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	const QString md5 = "0123456789abcdef0123456789abcdef";
+	Image image(site, {{ "id", "7" }, { "md5", md5 }, { "file_url", "https://cdn.test/a.png" }}, profile.data());
+	Site other("other.test", profile->getSources().value("Danbooru (2.0)"), profile.data());
+	Image mirror(&other, {{ "id", "900" }, { "md5", md5.toUpper() }, { "file_url", "https://mirror.test/a.png" }}, profile.data());
+	Image unrelated(&other, {{ "id", "901" }, { "md5", "ffffffffffffffffffffffffffffffff" }, { "file_url", "https://mirror.test/b.png" }}, profile.data());
+	LibraryStore store(directory.filePath("rated.sqlite"));
+	REQUIRE(store.isReady());
+	REQUIRE_FALSE(store.isRated(image));
+	const QString key = store.saveImage(image);
+	REQUIRE_FALSE(store.isRated(image)); // Saved alone is not a rating.
+	REQUIRE(store.setLiked(key, true));
+	REQUIRE(store.isRated(image));
+	REQUIRE(store.isRated(mirror));
+	REQUIRE_FALSE(store.isRated(unrelated));
+	REQUIRE(store.setLiked(key, false));
+	REQUIRE_FALSE(store.isRated(mirror));
+	const qint64 collection = store.createCollection("Scoped");
+	REQUIRE(store.addToCollection(key, collection));
+	REQUIRE(store.setFavorite(key, true, collection));
+	REQUIRE(store.isRated(image));
+}
+
 TEST_CASE("Library preserves corrupt and unrecognized databases", "[library]")
 {
 	QTemporaryDir directory;

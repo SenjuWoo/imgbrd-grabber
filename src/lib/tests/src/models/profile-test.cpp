@@ -3,7 +3,10 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QScopeGuard>
 #include <QScopedPointer>
+#include <QSettings>
+#include <QTemporaryDir>
 #include "models/profile.h"
 #include "catch.h"
 #include "source-helpers.h"
@@ -119,4 +122,41 @@ TEST_CASE("Profile")
 			REQUIRE(!thumb.exists());
 		}
 	#endif
+}
+
+TEST_CASE("New profiles start from the shipped defaults without overriding existing settings", "[profile][defaults]")
+{
+	QDir().mkpath("tests/resources/defaults");
+	QFile::remove("tests/resources/defaults/settings.ini");
+	{
+		QSettings defaults("tests/resources/defaults/settings.ini", QSettings::IniFormat);
+		defaults.setValue("theme", "Woo Night");
+		defaults.setValue("Save/filename", "%md5%.%ext%");
+		defaults.setValue("sites", QStringList {"a.test", "b.test"});
+	}
+	QFile blacklist("tests/resources/defaults/blacklist.txt");
+	REQUIRE(blacklist.open(QFile::WriteOnly | QFile::Text));
+	blacklist.write("shipped_tag\n");
+	blacklist.close();
+	auto cleanup = qScopeGuard([]() { QDir("tests/resources/defaults").removeRecursively(); });
+
+	QTemporaryDir fresh;
+	{
+		QFile marker(fresh.filePath("settings.ini")); // Portable packages ship it empty.
+		REQUIRE(marker.open(QFile::WriteOnly));
+	}
+	const QScopedPointer<Profile> created(new Profile(fresh.path()));
+	REQUIRE(created->getSettings()->value("theme").toString() == "Woo Night");
+	REQUIRE(created->getSettings()->value("sites").toStringList() == QStringList {"a.test", "b.test"});
+	REQUIRE(created->getBlacklist().contains("shipped_tag"));
+
+	QTemporaryDir existing;
+	{
+		QSettings settings(existing.filePath("settings.ini"), QSettings::IniFormat);
+		settings.setValue("theme", "Tokyo Night");
+	}
+	const QScopedPointer<Profile> kept(new Profile(existing.path()));
+	REQUIRE(kept->getSettings()->value("theme").toString() == "Tokyo Night");
+	REQUIRE_FALSE(kept->getSettings()->contains("Save/filename"));
+	REQUIRE_FALSE(QFile::exists(existing.filePath("blacklist.txt")));
 }

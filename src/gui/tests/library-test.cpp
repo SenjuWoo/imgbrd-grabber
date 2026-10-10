@@ -1,13 +1,15 @@
 #include <QApplication>
 #include <QComboBox>
 #include <QFile>
+#include <QItemSelectionModel>
+#include <QPainter>
+#include <QRandomGenerator>
 #include <QScrollBar>
 #include <QWheelEvent>
 #include <QSet>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
-#include <QListWidget>
 #include <QPushButton>
 #include <QScopedPointer>
 #include <QTemporaryDir>
@@ -24,9 +26,18 @@
 #include "models/library-store.h"
 #include "models/profile.h"
 #include "tabs/library-tab.h"
+#include "ui/image-grid.h"
 #include "catch.h"
 #include "source-helpers.h"
 
+
+namespace
+{
+	void selectRow(ImageGridView *grid, int row, bool clear = true)
+	{
+		grid->selectionModel()->select(grid->gridModel()->index(row), clear ? QItemSelectionModel::ClearAndSelect : QItemSelectionModel::Select);
+	}
+}
 
 TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[library]")
 {
@@ -65,11 +76,12 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	const QString key = LibraryStore::imageKey(*image);
 	REQUIRE(profile->library()->entry(key).liked);
 	REQUIRE(viewerActions.findChild<QToolButton*>("libraryLike")->isChecked());
-	auto *grid = library.findChild<QListWidget*>("libraryGrid");
-	REQUIRE(grid->count() == 1);
-	REQUIRE(grid->item(0)->text().isEmpty());
+	auto *grid = library.findChild<ImageGridView*>("libraryGrid");
+	auto *model = grid->gridModel();
+	REQUIRE(QTest::qWaitFor([model]() { return model->rowCount() == 1; }, 3000));
+	REQUIRE(model->item(0).liked);
 	REQUIRE_FALSE(library.findChild<QToolButton*>("libraryLike")->isVisible());
-	REQUIRE(grid->item(0)->icon().pixmap(QSize(224, 160), QIcon::Selected).toImage().pixelColor(112, 70) == QColor("#406b59"));
+	REQUIRE(model->data(model->index(0), ImageGridModel::PixmapRole).value<QPixmap>().toImage().pixelColor(100, 60) == QColor("#406b59"));
 	QTest::mouseClick(star, Qt::LeftButton);
 	QApplication::processEvents();
 	REQUIRE(searchActions.findChild<QToolButton*>("libraryFavorite")->isChecked());
@@ -79,13 +91,15 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	REQUIRE(profile->library()->addToCollection(key, collection));
 	QApplication::processEvents();
 	auto *sidebar = library.findChild<QTreeWidget*>("librarySidebar");
-	auto *collectionItem = sidebar->topLevelItem(8)->child(0);
+	auto *collectionItem = sidebar->topLevelItem(9)->child(0);
 	REQUIRE(collectionItem->data(0, Qt::UserRole).toLongLong() == collection);
 	sidebar->setCurrentItem(collectionItem);
 	QApplication::processEvents();
-	REQUIRE(grid->count() == 1);
-	grid->item(0)->setSelected(true);
+	REQUIRE(model->rowCount() == 1);
+	selectRow(grid, 0);
+	QApplication::processEvents();
 	auto *libraryStar = library.findChild<QToolButton*>("libraryFavorite");
+	REQUIRE(libraryStar->isVisible());
 	REQUIRE(!libraryStar->isChecked()); // Global preference is not inherited by a collection.
 	QTest::mouseClick(libraryStar, Qt::LeftButton);
 	QApplication::processEvents();
@@ -102,18 +116,18 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	REQUIRE_FALSE(star->isChecked());
 	REQUIRE(profile->library()->entry(key, collection).favorite);
 	library.findChild<QLineEdit*>("librarySearch")->setText("missing tag");
-	REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 0; }, 3000));
+	REQUIRE(QTest::qWaitFor([model]() { return model->rowCount() == 0; }, 3000));
 	library.findChild<QLineEdit*>("librarySearch")->clear();
-	REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 1; }, 3000));
+	REQUIRE(QTest::qWaitFor([model]() { return model->rowCount() == 1; }, 3000));
 	const QString screenshot = qEnvironmentVariable("GRABBER_LIBRARY_SCREENSHOT");
 	if (!screenshot.isEmpty()) {
-		grid->item(0)->setSelected(true);
+		selectRow(grid, 0);
 		QApplication::processEvents();
 		REQUIRE(library.grab().save(screenshot));
 	}
 	REQUIRE(profile->library()->removeCollection(collection));
 	QApplication::processEvents();
-	REQUIRE(grid->count() == 1);
+	REQUIRE(QTest::qWaitFor([model]() { return model->rowCount() == 1; }, 3000));
 	REQUIRE(profile->library()->contains(key));
 	auto second = QSharedPointer<Image>::create(site, QMap<QString, QString> {
 		{ "id", "101" }, { "name", "Moonlit hills" }, { "file_url", "https://test.invalid/hills.png" }
@@ -121,9 +135,11 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	second->setPreviewImage(preview);
 	const QString secondKey = profile->library()->saveImage(*second);
 	REQUIRE(!secondKey.isEmpty());
+	REQUIRE(QTest::qWaitFor([model]() { return model->rowCount() == 2; }, 3000));
+	QTest::mouseClick(library.findChild<QPushButton*>("librarySelectAll"), Qt::LeftButton);
 	QApplication::processEvents();
-	REQUIRE(grid->count() == 2);
-	grid->selectAll();
+	REQUIRE(grid->selectedKeys().size() == 2);
+	REQUIRE(library.findChild<QLabel*>("librarySelectionCount")->text().contains("2"));
 	QTest::mouseClick(libraryStar, Qt::LeftButton);
 	QApplication::processEvents();
 	REQUIRE(profile->library()->entry(key).favorite);
@@ -132,6 +148,11 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	QApplication::processEvents();
 	REQUIRE(!profile->library()->entry(key).favorite);
 	REQUIRE(!profile->library()->entry(secondKey).favorite);
+	// Rating changes update tiles in place: the selection survives.
+	REQUIRE(grid->selectedKeys().size() == 2);
+	QTest::mouseClick(library.findChild<QPushButton*>("libraryClearSelection"), Qt::LeftButton);
+	REQUIRE(grid->selectedKeys().isEmpty());
+	REQUIRE_FALSE(library.findChild<QToolButton*>("libraryLike")->isVisible());
 	bool foundDialog = false;
 	QTimer::singleShot(0, [&foundDialog]() {
 		auto *dialog = qobject_cast<QInputDialog*>(QApplication::activeModalWidget());
@@ -146,11 +167,11 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	REQUIRE(foundDialog);
 	REQUIRE(profile->library()->collections().size() == 1);
 	REQUIRE(profile->library()->collections().first().name == "Sketch references");
-	REQUIRE(grid->count() == 0);
+	REQUIRE(QTest::qWaitFor([model]() { return model->rowCount() == 0; }, 3000));
 	REQUIRE(library.findChild<QPushButton*>("libraryManageCollection")->isEnabled());
 }
 
-TEST_CASE("Large Library galleries keep the final picture reachable", "[library][gallery]")
+TEST_CASE("Library grid reaches every picture without pages and finds duplicates", "[library][gallery]")
 {
 	QTemporaryDir directory;
 	REQUIRE(directory.isValid());
@@ -163,65 +184,68 @@ TEST_CASE("Large Library galleries keep the final picture reachable", "[library]
 		Site *site = profile->getSites().value("danbooru.donmai.us");
 		for (int index = 0; index < 650; ++index) {
 			Image image(site, {{"id", QString::number(index + 1)}, {"name", QString(120, 'a')}, {"file_url", "https://test.invalid/" + QString::number(index) + ".png"}}, profile.data());
-			QPixmap preview(index % 2 ? QSize(100, 160) : QSize(160, 100));
-			preview.fill(Qt::blue);
-			image.setPreviewImage(preview);
+			// Random blocks per picture so only the planted pair below looks alike.
+			QImage preview(index % 2 ? QSize(100, 160) : QSize(160, 100), QImage::Format_RGB32);
+			preview.fill(Qt::black);
+			QRandomGenerator rng(quint32(index) + 1);
+			QPainter painter(&preview);
+			for (int block = 0; block < 14; ++block) {
+				painter.fillRect(QRect(int(rng.bounded(preview.width())), int(rng.bounded(preview.height())), 10 + int(rng.bounded(60)), 10 + int(rng.bounded(60))), QColor::fromRgb(rng.generate()));
+			}
+			painter.end();
+			image.setPreviewImage(QPixmap::fromImage(preview));
 			REQUIRE(!profile->library()->saveImage(image).isEmpty());
 		}
+		Site *other = profile->getSites().value("danbooru.donmai.us");
+		Image copy(other, {{"id", "9001"}, {"file_url", "https://mirror.invalid/copy.png"}}, profile.data());
+		Image original(other, {{"id", "9000"}, {"file_url", "https://test.invalid/original.png"}}, profile.data());
+		QImage art(300, 420, QImage::Format_RGB32);
+		art.fill(QColor(30, 40, 90));
+		for (int i = 0; i < 12; ++i) {
+			QPainter painter(&art);
+			painter.fillRect(QRect(i * 23, i * 31, 60, 50), QColor::fromHsv(i * 29, 220, 230));
+		}
+		original.setPreviewImage(QPixmap::fromImage(art));
+		copy.setPreviewImage(QPixmap::fromImage(art.scaled(150, 210, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)));
+		REQUIRE(!profile->library()->saveImage(original).isEmpty());
+		REQUIRE(!profile->library()->saveImage(copy).isEmpty());
 	}
 	const int expected = profile->library()->entries().size();
 	REQUIRE(expected >= 478);
 	ThemeLoader theme(QFileInfo(QString::fromUtf8(__FILE__)).absolutePath() + "/../../dist/common/themes/", profile->getSettings());
 	REQUIRE(theme.setTheme("Tokyo Night"));
 	LibraryTab library(profile.data(), nullptr);
-	for (int pageSize : {50, 100, 200}) {
 	for (const QSize &size : {QSize(900, 660), QSize(1500, 820)}) {
 		library.showView();
-		auto *pageControl = library.findChild<QComboBox*>("libraryPageSize");
-		REQUIRE(pageControl != nullptr);
-		pageControl->setCurrentIndex(pageControl->findData(pageSize));
 		library.resize(size);
 		library.show();
 		QApplication::processEvents();
-		auto *grid = library.findChild<QListWidget*>("libraryGrid");
-		QSet<QString> seen;
-		auto *next = library.findChild<QPushButton*>("libraryNextPage");
-		auto *previous = library.findChild<QPushButton*>("libraryPreviousPage");
-		REQUIRE(next != nullptr);
-		REQUIRE(previous != nullptr);
-		do {
-			REQUIRE(grid->count() <= pageSize);
-			for (int index = 0; index < grid->count(); ++index) {
-				const auto key = grid->item(index)->data(Qt::UserRole).toString();
-				REQUIRE_FALSE(seen.contains(key));
-				seen.insert(key);
-			}
-			if (!next->isEnabled()) { break; }
-			QTest::mouseClick(next, Qt::LeftButton);
-			QApplication::processEvents();
-		} while (true);
-		REQUIRE(seen.size() == expected);
-		REQUIRE(previous->isEnabled());
-		grid->scrollToBottom();
-		QApplication::processEvents();
-		auto *last = grid->item(grid->count() - 1);
-		const QRect visible = grid->visualItemRect(last);
-		INFO("count=" << grid->count() << " viewport=" << grid->viewport()->width() << "x" << grid->viewport()->height() << " scroll=" << grid->verticalScrollBar()->value() << "/" << grid->verticalScrollBar()->maximum() << " last=" << visible.x() << "," << visible.y() << "," << visible.width() << "," << visible.height());
-		REQUIRE(grid->viewport()->rect().intersects(visible));
-		REQUIRE(grid->itemAt(visible.center()) == last);
-		grid->scrollToTop();
-		for (int step = 0; step < 500 && grid->verticalScrollBar()->value() < grid->verticalScrollBar()->maximum(); ++step) {
+		auto *grid = library.findChild<ImageGridView*>("libraryGrid");
+		REQUIRE(grid->gridModel()->rowCount() == expected);
+		const QStringList keys = grid->gridModel()->keys();
+		REQUIRE(QSet<QString>(keys.begin(), keys.end()).size() == expected);
+		// Tiles fill the row: the remaining width is less than one more column.
+		const int columns = grid->viewport()->width() / grid->gridSize().width();
+		REQUIRE(columns >= 2);
+		REQUIRE(grid->viewport()->width() - columns * grid->gridSize().width() < grid->gridSize().width());
+		const QModelIndex last = grid->gridModel()->index(expected - 1);
+		for (int step = 0; step < 2000 && grid->verticalScrollBar()->value() < grid->verticalScrollBar()->maximum(); ++step) {
 			const QPointF pos = grid->viewport()->rect().center();
 			QWheelEvent wheel(pos, grid->viewport()->mapToGlobal(pos.toPoint()), QPoint(), QPoint(0, -120), Qt::NoButton, Qt::NoModifier, Qt::NoScrollPhase, false);
 			QApplication::sendEvent(grid->viewport(), &wheel);
 		}
 		REQUIRE(grid->verticalScrollBar()->value() == grid->verticalScrollBar()->maximum());
-		REQUIRE(grid->viewport()->rect().intersects(grid->visualItemRect(last)));
+		REQUIRE(grid->viewport()->rect().intersects(grid->visualRect(last)));
+		REQUIRE(grid->indexAt(grid->visualRect(last).center()) == last);
 		library.findChild<QLineEdit*>("librarySearch")->setText("no_such_tag");
-		REQUIRE(QTest::qWaitFor([grid]() { return grid->count() == 0; }, 3000));
+		REQUIRE(QTest::qWaitFor([grid]() { return grid->gridModel()->rowCount() == 0; }, 3000));
 		library.findChild<QLineEdit*>("librarySearch")->clear();
-		REQUIRE(QTest::qWaitFor([grid, pageSize]() { return grid->count() == pageSize; }, 3000));
-		REQUIRE_FALSE(previous->isEnabled());
+		REQUIRE(QTest::qWaitFor([grid, expected]() { return grid->gridModel()->rowCount() == expected; }, 3000));
 	}
+	if (catalog.isEmpty()) {
+		library.showView(0, LibraryTab::Duplicates);
+		QApplication::processEvents();
+		auto *grid = library.findChild<ImageGridView*>("libraryGrid");
+		REQUIRE(grid->gridModel()->rowCount() == 2);
 	}
 }

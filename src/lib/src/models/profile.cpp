@@ -39,7 +39,12 @@ Profile::Profile(QSettings *settings, QList<Favorite> favorites, QStringList kep
 Profile::Profile(QString path)
 	: m_path(std::move(path)), m_urlDownloaderManager(nullptr)
 {
+	// Portable packages ship an empty settings.ini as their marker; empty also means brand new.
+	const bool freshProfile = QFileInfo(m_path + "/settings.ini").size() == 0;
 	m_settings = new QSettings(m_path + "/settings.ini", QSettings::IniFormat);
+	if (freshProfile) {
+		applyDefaults();
+	}
 
 	// Load auto-complete
 	QFile fileAutoComplete(savePath("words.txt", true, false));
@@ -109,6 +114,25 @@ Profile::Profile(QString path)
 		sourceRegistry->load();
 		m_sourceRegistries.append(sourceRegistry);
 		emit sourceRegistriesChanged();
+	}
+}
+
+void Profile::applyDefaults()
+{
+	// Shipped recommendations for new users only: sources, presets, blacklist and download naming.
+	const QString directory = savePath("defaults/", true, false);
+	if (QFile::exists(directory + "settings.ini")) {
+		const QSettings defaults(directory + "settings.ini", QSettings::IniFormat);
+		for (const QString &key : defaults.allKeys()) {
+			if (!m_settings->contains(key)) {
+				m_settings->setValue(key, defaults.value(key));
+			}
+		}
+		m_settings->sync();
+	}
+	if (!QFile::exists(m_path + "/blacklist.txt") && QFile::exists(directory + "blacklist.txt")) {
+		QFile::copy(directory + "blacklist.txt", m_path + "/blacklist.txt");
+		QFile(m_path + "/blacklist.txt").setPermissions(QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 	}
 }
 

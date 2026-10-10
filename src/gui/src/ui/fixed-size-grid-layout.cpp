@@ -136,6 +136,9 @@ int FixedSizeGridLayout::doLayout(QRect rect, bool testOnly) const
 
 	int lineHeight = 0;
 	for (QLayoutItem *item : m_items) {
+		if (item->isEmpty()) {
+			continue; // Hidden pictures, such as merged duplicates, leave no gap.
+		}
 		int spaceX = widgetSpacing(horizontalSpacing(), item->widget(), Qt::Horizontal);
 		int spaceY = widgetSpacing(verticalSpacing(), item->widget(), Qt::Vertical);
 

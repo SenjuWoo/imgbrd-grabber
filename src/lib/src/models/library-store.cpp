@@ -58,6 +58,8 @@ LibraryStore::LibraryStore(const QString &path, QObject *parent)
 		m_error = tr("Cannot create the Library directory.");
 		return;
 	}
+	connect(this, &LibraryStore::imageChanged, this, [this]() { m_ratedDirty = true; });
+	connect(this, &LibraryStore::collectionsChanged, this, [this]() { m_ratedDirty = true; });
 	m_database = QSqlDatabase::addDatabase("QSQLITE", m_connection);
 	m_database.setDatabaseName(path);
 	m_database.setConnectOptions("QSQLITE_BUSY_TIMEOUT=5000");
@@ -525,6 +527,57 @@ QString LibraryStore::storedPath(const QString &path) const
 QString LibraryStore::resolvedPath(const QString &path) const
 {
 	return QDir::isAbsolutePath(path) ? path : QDir(m_directory).absoluteFilePath(path);
+}
+
+void LibraryStore::loadRatedIndex()
+{
+	m_ratedKeys.clear();
+	m_ratedMd5s.clear();
+	m_ratedDirty = false;
+	if (!m_ready) {
+		return;
+	}
+	static const QRegularExpression md5("^[0-9a-fA-F]{32}$");
+	QSqlQuery query(m_database);
+	const QString rated = "SELECT key FROM images WHERE liked=1 OR favorite=1 UNION SELECT image_key FROM members WHERE liked=1 OR favorite=1";
+	if (!query.exec("SELECT i.key,i.metadata FROM images i WHERE i.key IN (" + rated + ")")) {
+		m_error = query.lastError().text();
+		return;
+	}
+	while (query.next()) {
+		m_ratedKeys.insert(query.value(0).toString());
+		const QString hash = QJsonDocument::fromJson(query.value(1).toByteArray()).object().value("md5").toString();
+		if (md5.match(hash).hasMatch()) {
+			m_ratedMd5s.insert(hash.toLower());
+		}
+	}
+	if (query.exec("SELECT source_key FROM source_links WHERE image_key IN (" + rated + ")")) {
+		while (query.next()) {
+			m_ratedKeys.insert(query.value(0).toString());
+		}
+	}
+	if (query.exec("SELECT md5,source_md5 FROM local_files WHERE image_key IN (" + rated + ")")) {
+		while (query.next()) {
+			for (int column = 0; column < 2; ++column) {
+				const QString hash = query.value(column).toString();
+				if (md5.match(hash).hasMatch()) {
+					m_ratedMd5s.insert(hash.toLower());
+				}
+			}
+		}
+	}
+}
+
+bool LibraryStore::isRated(const Image &image)
+{
+	if (m_ratedDirty) {
+		loadRatedIndex();
+	}
+	if (m_ratedKeys.isEmpty() && m_ratedMd5s.isEmpty()) {
+		return false;
+	}
+	const QString md5 = image.md5().toLower();
+	return (!md5.isEmpty() && m_ratedMd5s.contains(md5)) || m_ratedKeys.contains(imageKey(image));
 }
 
 QString LibraryStore::keyForImage(const Image &image)

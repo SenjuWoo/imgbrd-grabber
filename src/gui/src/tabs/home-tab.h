@@ -1,92 +1,87 @@
 #ifndef HOME_TAB_H
 #define HOME_TAB_H
 
-#include <QWidget>
-#include <QPointer>
+#include <QHash>
 #include <QSharedPointer>
-#include "models/library-recommendations.h"
+#include <QWidget>
+#include "ui/image-grid.h"
 
+class DiscoveryFeed;
+class DownloadQueue;
 class Image;
-class ImageLibraryActions;
-class ImagePreview;
-class Page;
-class QHideEvent;
-class QTimer;
+class LibraryRecommendations;
+class LibraryStore;
 class MainWindow;
 class Profile;
 class QComboBox;
+class QFrame;
+class QHBoxLayout;
 class QLabel;
-class QListWidget;
 class QProgressBar;
 class QPushButton;
-class QShowEvent;
+class QStackedWidget;
+class QToolButton;
+struct DiscoveryItem;
 
+/**
+ * Discover: an endless feed of new pictures from the selected sources, learned from likes and
+ * favorites (favorites count three times as much). Optional local AI ranks pictures that look alike.
+ */
 class HomeTab : public QWidget
 {
 	Q_OBJECT
 
 	public:
-		HomeTab(Profile *profile, MainWindow *parent);
+		HomeTab(Profile *profile, MainWindow *parent, DownloadQueue *downloadQueue = nullptr);
 		~HomeTab() override;
-		void reload();
+		void refresh();
+		ImageGridView *grid() const;
+		DiscoveryFeed *feed() const;
 
 	signals:
 		void libraryRequested(qint64 collection, int smartFilter);
-		void pictureRequested(const QString &key, const QStringList &keys, qint64 collection);
+		void searchRequested(const QString &tags);
 
 	protected:
 		void showEvent(QShowEvent *event) override;
-		void hideEvent(QHideEvent *event) override;
 
 	private:
-		void scheduleReload();
-		void cancelDiscovery();
-		void startDiscovery(const QString &session);
-		void finishDiscovery(Page *page, bool success);
-		void showDiscovery(const QString &selected);
-		QSharedPointer<Image> discoveredImage(const QString &key) const;
-		void updateSelection();
-		void updateDensity();
-		void updateModelStatus();
-		void openSelected();
-		QString selectedKey() const;
-		MainWindow *m_mainWindow;
+		void addItems(const QList<DiscoveryItem> &items);
+		void triggerAction(ImageGridView::Action action, const QStringList &keys);
+		void rate(const QString &key, bool favorite);
+		void openPicture(const QString &key);
+		void showMenu(const QStringList &keys, const QPoint &position);
+		void updateHeader();
+		void updateChips();
+		void updateAi();
+		void updateScopes();
+		void enableAi();
+		void syncRating(const QString &libraryKey);
+		QString libraryKey(const QString &key);
+
 		Profile *m_profile;
+		MainWindow *m_mainWindow;
+		DownloadQueue *m_downloadQueue;
 		LibraryStore *m_store;
 		LibraryRecommendations *m_recommendations;
+		DiscoveryFeed *m_feed;
+		QLabel *m_subtitle;
 		QComboBox *m_scope;
-		QComboBox *m_mode;
-		QComboBox *m_density;
-		QComboBox *m_pictureCount;
+		QToolButton *m_more;
 		QPushButton *m_refresh;
-		QLabel *m_hint;
-		QLabel *m_coverage;
-		QLabel *m_status;
+		QFrame *m_aiBanner;
+		QLabel *m_aiText;
+		QPushButton *m_aiEnable;
+		QProgressBar *m_aiProgress;
+		QWidget *m_chips;
+		QHBoxLayout *m_chipsLayout;
+		QProgressBar *m_busy;
+		QStackedWidget *m_stack;
+		ImageGridView *m_grid;
 		QLabel *m_empty;
-		QLabel *m_selectionHint;
-		QListWidget *m_grid;
-		QProgressBar *m_progress;
-		QPushButton *m_setup;
-		QPushButton *m_update;
-		QPushButton *m_cancel;
-		QPushButton *m_add;
-		QPushButton *m_view;
-		QPushButton *m_hide;
-		QPushButton *m_restore;
-		ImageLibraryActions *m_actions;
-		qint64 m_collection = 0;
-		QHash<qint64, quint64> m_rotations;
-		QHash<Page*, LibraryDiscoveryTopic> m_discoveryPages;
-		QList<QPointer<ImagePreview>> m_previewLoaders;
-		QList<QPointer<QWidget>> m_previewContainers;
-		QList<QSharedPointer<Image>> m_discoveryImages;
-		QHash<QString, QString> m_discoveryReasons;
-		QStringList m_discoveryErrors;
-		QString m_discoverySession;
-		QTimer *m_discoveryTimeout;
-		quint64 m_discoveryGeneration = 0;
-		bool m_discoveryHadTopics = false;
-		bool m_reloadPending = false;
+		QLabel *m_status;
+		QHash<QString, QString> m_libraryKeys;
+		bool m_started = false;
 };
 
 #endif // HOME_TAB_H

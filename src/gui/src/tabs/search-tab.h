@@ -16,6 +16,7 @@
 #include "models/image.h"
 #include "models/page-information.h"
 #include "models/search-query/search-query.h"
+#include "utils/image-fingerprint.h"
 
 
 class DownloadQueryGroup;
@@ -199,6 +200,9 @@ class SearchTab : public QWidget
 		// UI stuff
 		TextEdit *m_postFiltering = nullptr;
 		QCheckBox *ui_checkMergeResults = nullptr;
+		QCheckBox *m_hideRated = nullptr;
+		QList<ImageFingerprint> m_mergedFingerprints;
+		int m_mergedDuplicates = 0;
 		QProgressBar *ui_progressMergeResults = nullptr;
 		QStackedWidget *ui_stackedMergeResults = nullptr;
 		QSpinBox *ui_spinPage = nullptr;

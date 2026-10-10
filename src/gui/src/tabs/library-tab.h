@@ -8,13 +8,15 @@
 #include <atomic>
 #include <memory>
 #include "models/library-store.h"
+#include "ui/image-grid.h"
 
+class DownloadQueue;
 class Image;
 class ImageLibraryActions;
 class QLabel;
 class QLineEdit;
-class QListWidget;
 class QComboBox;
+class QFrame;
 class QTreeWidget;
 class QPushButton;
 class QStackedWidget;
@@ -30,13 +32,17 @@ class LibraryTab : public QWidget
 	Q_OBJECT
 
 	public:
-		LibraryTab(Profile *profile, MainWindow *parent);
+		enum SmartView { AllPictures, Unsorted, Liked, Favorites, RecentlySaved, NeedsTags, NeedsSource, MetadataErrors, Duplicates };
+
+		LibraryTab(Profile *profile, MainWindow *parent, DownloadQueue *downloadQueue = nullptr);
 		~LibraryTab() override;
 		void reload();
 		void showView(qint64 collection = 0, int smartFilter = 0);
 		void openPicture(const QString &key, const QStringList &keys, qint64 collection = 0);
 		void importPaths(const QStringList &paths, bool copy = false, const QString &expectedKey = {});
 		bool importing() const { return m_importing; }
+		ImageGridView *grid() const { return m_grid; }
+		QStringList viewKeys() const { return m_viewKeys; }
 
 	signals:
 		void importFinished(int added, int duplicates, int failed);
@@ -54,30 +60,36 @@ class LibraryTab : public QWidget
 		void findSource(const QString &key);
 		void updateSelection();
 		void collectionMenu(const QPoint &pos);
-		void imageMenu(const QPoint &pos);
+		void imageMenu(const QStringList &keys, const QPoint &globalPosition);
 		void newCollection();
 		void openImage(const QString &key);
+		void gridAction(ImageGridView::Action action, const QStringList &keys);
+		void download(const QStringList &keys);
+		void saveToFolder(const QStringList &keys);
+		void removeFromLibrary(const QStringList &keys);
+		QStringList duplicateKeys(const QList<LibraryEntry> &entries) const;
 		QSharedPointer<Image> restoreImage(const LibraryEntry &entry);
 		Profile *m_profile;
 		MainWindow *m_mainWindow;
+		DownloadQueue *m_downloadQueue;
 		LibraryStore *m_store;
 		QTreeWidget *m_sidebar;
 		QPushButton *m_manage;
-		QPushButton *m_more;
-		QPushButton *m_findSource, *m_previousPage, *m_nextPage;
-		QLabel *m_pageLabel;
+		QPushButton *m_selectAll;
+		QPushButton *m_downloadAll;
 		QStringList m_viewKeys;
-		int m_page = 0;
-		int m_pageSize = 100;
-		QComboBox *m_density, *m_pageSizeControl;
-		QListWidget *m_grid;
+		ImageGridView *m_grid;
 		QLineEdit *m_search;
 		QComboBox *m_filter;
+		QComboBox *m_sort;
 		QLabel *m_title;
 		QLabel *m_count;
 		QLabel *m_hint;
 		QLabel *m_empty;
 		QStackedWidget *m_stack;
+		QFrame *m_selectionBar;
+		QLabel *m_selectionCount;
+		QPushButton *m_findSource;
 		ImageLibraryActions *m_actions;
 		QHash<QString, LibraryEntry> m_entries;
 		qint64 m_collection = 0;

@@ -36,6 +36,12 @@ StartWindow::StartWindow(Profile *profile, QWidget *parent)
 	if (sources.contains("safebooru.org")) {
 		ui->comboSource->setCurrentText("safebooru.org");
 	}
+	// Keep the shipped multi-source preset unless the user picks a single source.
+	const int preset = int(profile->getSettings()->value("sites").toStringList().size());
+	if (preset > 1) {
+		ui->comboSource->insertItem(0, tr("Recommended: %n sources", "", preset));
+		ui->comboSource->setCurrentIndex(0);
+	}
 
 	// Default values
 	QDir desktop(QStandardPaths::writableLocation(QStandardPaths::DesktopLocation));

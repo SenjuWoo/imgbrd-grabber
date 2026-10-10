@@ -3,6 +3,7 @@
 #include <QCompleter>
 #include <QDesktopServices>
 #include <QDir>
+#include <QDockWidget>
 #include <QFile>
 #include <QFileInfo>
 #include <QFileDialog>
@@ -15,6 +16,7 @@
 	#include <QSysInfo>
 #endif
 #include <QTimer>
+#include <QToolBar>
 #include <algorithm>
 #if defined(Q_OS_WIN)
 	#include <cfloat>
@@ -61,6 +63,7 @@
 #include "tags/tag-stylist.h"
 #include "theme-loader.h"
 #include "ui/QAffiche.h"
+#include "ui/nav-rail.h"
 #include "ui/tab-selector.h"
 #include "utils/blacklist-fix/blacklist-fix-1.h"
 #include "utils/empty-dirs-fix/empty-dirs-fix-1.h"
@@ -316,19 +319,15 @@ void MainWindow::init(const QStringList &args, const QMap<QString, QString> &par
 	favoritesDock->tabChanged(m_favoritesTab);
 
 	// Library tab
-	m_libraryTab = new LibraryTab(m_profile, this);
+	m_libraryTab = new LibraryTab(m_profile, this, m_downloadQueue);
 	ui->tabWidget->insertTab(m_tabs.size(), m_libraryTab, m_libraryTab->windowTitle());
 
-	// Home uses the same Library viewers and actions, with explicit preference scope.
-	m_homeTab = new HomeTab(m_profile, this);
+	// Discover: endless personal feed learned from Library likes and favorites.
+	m_homeTab = new HomeTab(m_profile, this, m_downloadQueue);
 	ui->tabWidget->insertTab(m_tabs.size(), m_homeTab, m_homeTab->windowTitle());
 	connect(m_homeTab, &HomeTab::libraryRequested, this, [this](qint64 collection, int smartFilter) {
 		m_libraryTab->showView(collection, smartFilter);
 		ui->tabWidget->setCurrentWidget(m_libraryTab);
-	});
-	connect(m_homeTab, &HomeTab::pictureRequested, this, [this](const QString &key, const QStringList &keys, qint64 collection) {
-		m_libraryTab->showView(collection);
-		m_libraryTab->openPicture(key, keys, collection);
 	});
 
 	// Tab corner widget
@@ -363,6 +362,41 @@ void MainWindow::init(const QStringList &args, const QMap<QString, QString> &par
 		if (m_logTab != nullptr)
 		{ m_tabSelector->markStaticTab(m_logTab); }
 		layout->addWidget(m_tabSelector);
+
+	// Navigation rail: permanent pages leave the tab strip, which only lists search tabs.
+	m_nav = new NavRail(this);
+	m_nav->addPage("discover", tr("Discover"), NavRail::Discover, tr("New pictures picked from your likes and favorites"));
+	m_nav->addPage("search", tr("Search"), NavRail::Search, tr("Your search tabs (Ctrl+T for a new one)"));
+	m_nav->addPage("library", tr("Library"), NavRail::Library, tr("Liked, favorited and imported pictures"));
+	m_nav->addPage("following", tr("Following"), NavRail::Following, tr("Favorite tags and artists, with new posts since your last visit"));
+	m_nav->addPage("downloads", tr("Downloads"), NavRail::Downloads, tr("Download queue and batch downloads"));
+	m_nav->addPage("monitors", tr("Monitors"), NavRail::Monitors, tr("Automatic checks for new posts"));
+	m_nav->addStretch();
+	if (m_logTab != nullptr) {
+		m_nav->addPage("log", tr("Log"), NavRail::Log, tr("Technical log"));
+	}
+	m_nav->addAction("settings", tr("Settings"), NavRail::Settings, tr("Options"));
+	// A toolbar area sits outside the dock areas, so the rail stays at the window edge.
+	auto *navBar = new QToolBar(tr("Navigation"), this);
+	navBar->setObjectName("navigationBar");
+	navBar->setMovable(false);
+	navBar->setFloatable(false);
+	navBar->setContextMenuPolicy(Qt::PreventContextMenu);
+	navBar->toggleViewAction()->setEnabled(false);
+	navBar->setStyleSheet("QToolBar#navigationBar { border: 0; padding: 0; margin: 0; spacing: 0; }");
+	navBar->addWidget(m_nav);
+	addToolBar(Qt::LeftToolBarArea, navBar);
+	connect(m_nav, &NavRail::pageRequested, this, &MainWindow::showPage);
+	connect(m_nav, &NavRail::actionRequested, this, [this](const QString &id) {
+		if (id == QLatin1String("settings")) {
+			options();
+		}
+	});
+	for (QWidget *page : {static_cast<QWidget*>(m_homeTab), static_cast<QWidget*>(m_libraryTab), static_cast<QWidget*>(m_favoritesTab), static_cast<QWidget*>(m_downloadsTab), static_cast<QWidget*>(m_monitorsTab), static_cast<QWidget*>(m_logTab)}) {
+		if (page != nullptr) {
+			ui->tabWidget->setTabVisible(ui->tabWidget->indexOf(page), false);
+		}
+	}
 
 	// Load given files
 	parseArgs(args, params);
@@ -407,6 +441,7 @@ void MainWindow::parseArgs(const QStringList &args, const QMap<QString, QString>
 		}
 
 		// Search any image by its MD5
+		m_explicitStart = true;
 		loadMd5(info.absoluteFilePath(), true, false, false);
 		return;
 	}
@@ -415,6 +450,7 @@ void MainWindow::parseArgs(const QStringList &args, const QMap<QString, QString>
 	tags.append(args);
 	tags.append(params.value("tags").split(' ', Qt::SkipEmptyParts));
 	if (!tags.isEmpty() || m_settings->value("start", "restore").toString() == "firstpage") {
+		m_explicitStart = true;
 		loadTag(tags.join(' '), true, false, false);
 	}
 }
@@ -462,6 +498,11 @@ void MainWindow::initialLoginsDone()
 	} else {
 		// Saved numbers index search tabs, not their movable positions in the widget.
 		ui->tabWidget->setCurrentWidget(m_tabs.value(qMax(0, m_forcedTab.toInt()), m_tabs.first()));
+		m_lastSearchTab = m_tabs.value(qMax(0, m_forcedTab.toInt()), m_tabs.first());
+		// Discover is the home page unless Grabber was opened for a specific search.
+		if (!m_explicitStart) {
+			ui->tabWidget->setCurrentWidget(m_homeTab);
+		}
 	}
 	m_forcedTab.clear();
 
@@ -674,6 +715,7 @@ void MainWindow::currentTabChanged(int tab)
 {
 	Q_UNUSED(tab)
 
+	syncChrome();
 	if (!m_loaded) {
 		return;
 	}
@@ -709,6 +751,75 @@ void MainWindow::setCurrentTab(QWidget *widget)
 
 		Analytics::getInstance().sendScreenView(searchTab->screenName());
 	}
+}
+
+void MainWindow::showPage(const QString &id)
+{
+	const QHash<QString, QWidget*> pages {
+		{"discover", m_homeTab}, {"library", m_libraryTab}, {"following", m_favoritesTab},
+		{"downloads", m_downloadsTab}, {"monitors", m_monitorsTab}, {"log", m_logTab},
+	};
+	if (QWidget *page = pages.value(id)) {
+		ui->tabWidget->setCurrentWidget(page);
+		return;
+	}
+	if (id == QLatin1String("search")) {
+		if (m_tabs.contains(qobject_cast<SearchTab*>(ui->tabWidget->currentWidget()))) {
+			focusSearch();
+		} else if (m_lastSearchTab && m_tabs.contains(m_lastSearchTab.data())) {
+			ui->tabWidget->setCurrentWidget(m_lastSearchTab);
+		} else if (!m_tabs.isEmpty()) {
+			ui->tabWidget->setCurrentWidget(m_tabs.first());
+		} else {
+			addTab();
+		}
+	}
+	syncChrome();
+}
+
+void MainWindow::setDocksShown(bool shown)
+{
+	if (shown == m_docksShown) {
+		return;
+	}
+	const auto docks = findChildren<QDockWidget*>(QString(), Qt::FindDirectChildrenOnly);
+	if (!shown) {
+		m_dockVisibility.clear();
+		for (auto *dock : docks) {
+			m_dockVisibility.insert(dock, dock->isVisibleTo(this));
+			dock->hide();
+		}
+	} else {
+		for (auto *dock : docks) {
+			if (m_dockVisibility.value(dock, false)) {
+				dock->show();
+			}
+		}
+	}
+	m_docksShown = shown;
+}
+
+void MainWindow::syncChrome()
+{
+	if (m_nav == nullptr) {
+		return;
+	}
+	QWidget *current = ui->tabWidget->currentWidget();
+	auto *searchTab = qobject_cast<SearchTab*>(current);
+	const bool search = searchTab != nullptr && m_tabs.contains(searchTab);
+	if (search) {
+		m_lastSearchTab = searchTab;
+	}
+	ui->tabWidget->tabBar()->setVisible(search);
+	if (ui->tabWidget->cornerWidget() != nullptr) {
+		ui->tabWidget->cornerWidget()->setVisible(search);
+	}
+	setDocksShown(search || current == m_favoritesTab);
+	const QHash<QWidget*, QString> ids {
+		{m_homeTab, "discover"}, {m_libraryTab, "library"}, {m_favoritesTab, "following"},
+		{m_downloadsTab, "downloads"}, {m_monitorsTab, "monitors"}, {m_logTab, "log"},
+	};
+	m_nav->setCurrent(search ? QStringLiteral("search") : ids.value(current));
 }
 
 void MainWindow::closeCurrentTab()
@@ -835,6 +946,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
 	log(QStringLiteral("Saving..."), Logger::Debug);
 		m_downloadsTab->saveLinkList(m_profile->getPath() + "/restore.igl");
 		saveTabs(m_profile->getPath() + "/tabs.json");
+		setDocksShown(true); // Persist the search layout, not the temporarily hidden one.
 		m_settings->setValue("state", saveState());
 		m_settings->setValue("geometry", saveGeometry());
 		m_settings->setValue("crashed", false);

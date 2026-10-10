@@ -16,7 +16,7 @@ class DownloadQueue;
 class Image;
 class ImageLibraryActions;
 class MainWindow;
-class NetworkReply;
+class ThumbnailLoader;
 class Profile;
 class QBouton;
 class QMenu;
@@ -30,6 +30,7 @@ class ImagePreview : public QObject
 	public:
 		ImagePreview(QSharedPointer<Image> image, QWidget *container, Profile *profile, DownloadQueue *downloadQueue, MainWindow *mainWindow, QObject *parent = nullptr);
 		~ImagePreview() override;
+		QWidget *container() const { return m_container; }
 		void setCustomContextMenu(std::function<void (QMenu *, const QSharedPointer<Image> &)> customContextMenu);
 
 	public slots:
@@ -45,7 +46,6 @@ class ImagePreview : public QObject
 		bool eventFilter(QObject *object, QEvent *event) override;
 
 	protected slots:
-		void finishedLoadingPreview();
 		void customContextMenuRequested();
 		void contextSaveImage();
 		void contextSaveImageAs();
@@ -65,22 +65,15 @@ class ImagePreview : public QObject
 		MainWindow *m_mainWindow;
 		static QMovie *m_loadingMovie;
 
-		NetworkReply *m_reply = nullptr;
+		ThumbnailLoader *m_loader;
 		bool m_aborted = false;
 		bool m_checked = false;
-		QSet<QString> m_redirectsSeen;
-		int m_redirectHops = 0;
-
-		QUrl m_thumbnailUrl;
-		QList<QUrl> m_fallbackUrls;
 		QString m_previewError;
 		QPixmap m_displayImage;
 		int m_borderSize = 0;
 		QString m_counter;
 		QPointer<QBouton> m_bouton = nullptr;
 		QPointer<ImageLibraryActions> m_actions = nullptr;
-		void resetThumbnailUrls();
-		void failThumbnail(const QString &reason);
 		void updateActionsVisibility();
 		std::function<void (QMenu *, const QSharedPointer<Image> &)> m_customContextMenu = nullptr;
 };
