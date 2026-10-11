@@ -46,6 +46,7 @@ class ImageGridModel : public QAbstractListModel
 		void setPixmap(const QString &key, const QPixmap &pixmap);
 		void setRating(const QString &key, bool liked, bool favorite);
 		void remove(const QString &key);
+		void insert(int row, const ImageGridItem &item);
 
 	private:
 		void reindex(int from);
@@ -89,6 +90,8 @@ class ImageGridView : public QListView
 		const QList<Action> &actions() const;
 		void setShowRatings(bool show);
 		bool showRatings() const;
+		/** Whether the action being handled came from a keyboard shortcut rather than a tile button. */
+		bool keyboardAction() const { return m_keyboardAction; }
 		QStringList selectedKeys() const;
 		QString currentKey() const;
 		QRect actionRect(const QRect &tile, int position) const;
@@ -122,6 +125,7 @@ class ImageGridView : public QListView
 		QSize m_tile {200, 250};
 		QList<Action> m_actions;
 		bool m_showRatings = true;
+		bool m_keyboardAction = false;
 		QTimer *m_fadeTimer;
 		QPersistentModelIndex m_hoverIndex;
 		int m_hoverAction = -1;

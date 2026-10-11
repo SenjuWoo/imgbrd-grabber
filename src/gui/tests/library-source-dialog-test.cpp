@@ -1,7 +1,11 @@
 #include <QApplication>
 #include <QAbstractButton>
 #include <QComboBox>
+#include <QDir>
 #include <QFile>
+#include <QFileInfo>
+#include <QJsonObject>
+#include <QScopeGuard>
 #include <QImage>
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -128,4 +132,70 @@ TEST_CASE("Source linking validates metadata URLs and keeps candidates explicit"
 		REQUIRE(results->item(0)->text().contains("Exact MD5 match"));
 		REQUIRE(results->item(0)->icon().isNull()); // Imported pixels are not passed off as source pixels.
 	}
+}
+
+TEST_CASE("Source linking finds a Pixiv artwork from the file name and compares its original file", "[foundation][library-source][pixiv]")
+{
+	auto clearReplies = qScopeGuard([]() { CustomNetworkAccessManager::NextFiles.clear(); });
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QString sources = QDir::cleanPath(QFileInfo(QString::fromUtf8(__FILE__)).absolutePath() + "/../../sites/Pixiv");
+	REQUIRE(QDir().mkpath(directory.filePath("sites/Pixiv/www.pixiv.net")));
+	for (const QString &file : {QString("model.js"), QString("sites.txt"), QString("www.pixiv.net/defaults.ini")}) {
+		REQUIRE(QFile::copy(sources + "/" + file, directory.filePath("sites/Pixiv/" + file)));
+	}
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	REQUIRE(profile->getSites().contains("www.pixiv.net"));
+	QImage pixels(64, 48, QImage::Format_RGB32);
+	pixels.fill(QColor(200, 120, 60));
+	const QString path = directory.filePath("149621459_p5.png");
+	REQUIRE(pixels.save(path));
+	const auto data = LibraryImporter::inspect(path);
+	REQUIRE(data.error.isEmpty());
+	const QString key = profile->library()->saveLocalImage(data);
+	REQUIRE(!key.isEmpty());
+
+	LibrarySourceDialog dialog(profile.data(), key);
+	dialog.show();
+	auto *pixiv = dialog.findChild<QPushButton*>("librarySourcePixiv");
+	REQUIRE(pixiv->isVisible());
+	REQUIRE(pixiv->text().contains("149621459"));
+	REQUIRE(pixiv->text().contains("page 6"));
+
+	// Pixiv's public artwork answer (file URLs hidden, as for restricted artworks), a wrong extension guess, then the original.
+	const QJsonObject details {{"error", false}, {"body", QJsonObject {
+		{"illustId", "149621459"}, {"illustTitle", "Title"}, {"userName", "Some Artist"}, {"pageCount", 13},
+		{"tags", QJsonObject {{"tags", QJsonArray {QJsonObject {{"tag", "hairy_slut"}}}}}},
+		{"userIllusts", QJsonObject {{"149621459", QJsonObject {{"url", "https://i.pximg.net/c/250x250_80_a2/custom-thumb/img/2026/09/13/17/32/13/149621459_p0_custom1200.jpg"}}}}},
+	}}};
+	QFile response(directory.filePath("details.json"));
+	REQUIRE(response.open(QIODevice::WriteOnly));
+	REQUIRE(response.write(QJsonDocument(details).toJson()) > 0);
+	response.close();
+	CustomNetworkAccessManager::NextFiles.enqueue(response.fileName());
+	CustomNetworkAccessManager::NextFiles.enqueue("404");
+	CustomNetworkAccessManager::NextFiles.enqueue(path);
+
+	auto *results = dialog.findChild<QListWidget*>("librarySourceCandidates");
+	QTest::mouseClick(pixiv, Qt::LeftButton);
+	REQUIRE(QTest::qWaitFor([&]() { return results->count() == 1; }, 5000));
+	REQUIRE(results->item(0)->text().contains("Exact file match on Pixiv"));
+	REQUIRE(results->item(0)->text().contains("www.pixiv.net"));
+	results->setCurrentRow(0);
+	bool confirmed = false;
+	QTimer::singleShot(0, [&confirmed]() {
+		if (auto *message = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+			confirmed = true;
+			message->button(QMessageBox::Yes)->click();
+		}
+	});
+	QTest::mouseClick(dialog.findChild<QPushButton*>("librarySourceLink"), Qt::LeftButton);
+	REQUIRE(confirmed);
+	const auto linked = profile->library()->entry(key);
+	REQUIRE(linked.image.value("website").toString() == "www.pixiv.net");
+	REQUIRE(linked.image.value("page_url").toString() == "https://www.pixiv.net/artworks/149621459");
+	REQUIRE(linked.image.value("source_link_evidence").toString().startsWith("User confirmed exact-md5:"));
+	REQUIRE(linked.tags().contains("Some_Artist"));
+	REQUIRE(linked.tags().contains("hairy_slut"));
+	REQUIRE(linked.localPaths.contains(path));
 }

@@ -228,7 +228,13 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent, DownloadQueue *down
 	m_hint->setObjectName("libraryHint");
 	m_hint->setTextFormat(Qt::PlainText);
 	m_hint->setWordWrap(true);
-	contentLayout->addWidget(m_hint);
+	m_viewAction = new QPushButton(content);
+	m_viewAction->setObjectName("libraryViewAction");
+	m_viewAction->hide();
+	auto *hintRow = new QHBoxLayout();
+	hintRow->addWidget(m_hint, 1);
+	hintRow->addWidget(m_viewAction, 0, Qt::AlignVCenter);
+	contentLayout->addLayout(hintRow);
 
 	// Selection bar
 	m_selectionBar = new QFrame(content);
@@ -289,7 +295,7 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent, DownloadQueue *down
 		"#librarySidebar { border: 0; background: transparent; }"
 		"#librarySidebar::item { padding: 7px 6px; border-radius: 8px; }"
 		"#librarySearch { padding: 7px 10px; border-radius: 10px; }"
-		"#librarySelectAll, #libraryDownloadAll, #libraryImport { border-radius: 15px; padding: 6px 14px; }"
+		"#librarySelectAll, #libraryDownloadAll, #libraryImport, #libraryViewAction { border-radius: 15px; padding: 6px 14px; }"
 		"#librarySelectionBar { border-radius: 12px; background: rgba(%2, %3, %4, 34); border: 1px solid rgba(%2, %3, %4, 90); }"
 		"#librarySelectionBar QPushButton { border-radius: 12px; padding: 4px 10px; }"
 		"#librarySelectionCount { font-weight: 600; padding-right: 6px; background: transparent; }"
@@ -320,6 +326,32 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent, DownloadQueue *down
 	connect(density, &QComboBox::currentIndexChanged, this, [this](int value) {
 		m_profile->getSettings()->setValue("Gallery/density", value);
 		m_grid->setDensity(value);
+	});
+	connect(m_viewAction, &QPushButton::clicked, this, [this]() {
+		if (m_collection != 0) {
+			return;
+		}
+		if (m_smartFilter == Duplicates) {
+			const auto groups = m_store->duplicateGroups();
+			int extra = 0;
+			for (const auto &group : groups) {
+				extra += int(group.size()) - 1;
+			}
+			if (extra > 0 && QMessageBox::question(this, tr("Merge duplicates"), tr("Merge %n duplicate(s) into the picture kept from each group?\n\n"
+				"The favorite (or liked, or largest) copy is kept. Ratings, notes, collections, local files and source links move to it, "
+				"and the other sources keep pointing to it so they are never saved again as new pictures.", "", extra)) == QMessageBox::Yes) {
+				mergeGroups(groups);
+			}
+		} else if (m_smartFilter == NotRated) {
+			const QStringList keys = m_store->unratedKeys();
+			if (!keys.isEmpty() && QMessageBox::question(this, tr("Remove from Library"), tr("Remove %n picture(s) that are no longer liked, favorited, collected or annotated?", "", int(keys.size()))) == QMessageBox::Yes) {
+				int removed = 0;
+				for (const QString &key : keys) {
+					removed += m_store->removeImage(key) ? 1 : 0;
+				}
+				Toast::show(this, tr("Removed %n picture(s) from Library", "", removed));
+			}
+		}
 	});
 	connect(m_store, &LibraryStore::imageChanged, this, &LibraryTab::scheduleReload);
 	connect(m_store, &LibraryStore::collectionsChanged, this, &LibraryTab::scheduleReload);
@@ -364,7 +396,7 @@ void LibraryTab::showEvent(QShowEvent *event)
 void LibraryTab::showView(qint64 collection, int smartFilter)
 {
 	m_collection = collection;
-	m_smartFilter = collection > 0 ? 0 : qBound(0, smartFilter, int(Duplicates));
+	m_smartFilter = collection > 0 ? 0 : qBound(0, smartFilter, int(NotRated));
 	m_search->clear();
 	m_filter->setCurrentIndex(0);
 	m_grid->clearSelection();
@@ -382,41 +414,19 @@ void LibraryTab::scheduleReload()
 	QTimer::singleShot(0, this, [this]() { m_reloadPending = false; reload(); });
 }
 
-QStringList LibraryTab::duplicateKeys(const QList<LibraryEntry> &entries) const
+void LibraryTab::mergeGroups(const QList<QStringList> &groups)
 {
-	// Same file hash, or the same picture by appearance (strict, so edits stay apart).
-	QList<ImageFingerprint> prints;
-	QStringList md5s;
-	for (const auto &entry : entries) {
-		prints.append(ImageFingerprint::fromImage(QImage::fromData(entry.thumbnail)));
-		md5s.append(entry.image.value("md5").toString().toLower());
-	}
-	QVector<int> group(entries.size());
-	std::iota(group.begin(), group.end(), 0);
-	std::function<int(int)> root = [&group, &root](int index) { return group[index] == index ? index : group[index] = root(group[index]); };
-	for (int i = 0; i < entries.size(); ++i) {
-		for (int j = i + 1; j < entries.size(); ++j) {
-			if ((!md5s[i].isEmpty() && md5s[i] == md5s[j]) || prints[i].sameImage(prints[j])) {
-				group[root(j)] = root(i);
+	int merged = 0;
+	for (const auto &group : groups) {
+		for (const QString &other : group.mid(1)) {
+			if (!m_store->mergeImages(group.first(), other)) {
+				QMessageBox::warning(this, tr("Library"), m_store->lastError());
+				return;
 			}
+			++merged;
 		}
 	}
-	QHash<int, QStringList> clusters;
-	QList<int> order;
-	for (int i = 0; i < entries.size(); ++i) {
-		const int cluster = root(i);
-		if (!clusters.contains(cluster)) {
-			order.append(cluster);
-		}
-		clusters[cluster].append(entries[i].key);
-	}
-	QStringList result;
-	for (const int cluster : order) {
-		if (clusters[cluster].size() > 1) {
-			result.append(clusters[cluster]);
-		}
-	}
-	return result;
+	Toast::show(this, tr("Merged %n duplicate(s)", "", merged));
 }
 
 void LibraryTab::reload()
@@ -440,7 +450,7 @@ void LibraryTab::reload()
 	const QStringList selected = m_grid->selectedKeys();
 	const QSignalBlocker sidebarBlock(m_sidebar);
 	m_sidebar->clear();
-	const QStringList smartNames { tr("All pictures"), tr("Unsorted"), tr("♥ Liked"), tr("★ Favorites"), tr("Recently saved"), tr("Needs tags"), tr("Needs source"), tr("Metadata errors"), tr("Possible duplicates") };
+	const QStringList smartNames { tr("All pictures"), tr("Unsorted"), tr("♥ Liked"), tr("★ Favorites"), tr("Recently saved"), tr("Needs tags"), tr("Needs source"), tr("Metadata errors"), tr("Possible duplicates"), tr("Not rated") };
 	for (int index = 0; index < smartNames.size(); ++index) {
 		auto *item = new QTreeWidgetItem(m_sidebar, { smartNames[index] });
 		item->setData(0, Qt::UserRole, 0);
@@ -472,8 +482,18 @@ void LibraryTab::reload()
 	const int preference = m_filter->currentIndex();
 	auto entries = m_store->entries(m_collection);
 	QSet<QString> duplicates;
+	QSet<QString> unrated;
+	int duplicateExtras = 0;
+	if (m_collection == 0 && m_smartFilter == NotRated) {
+		const auto keys = m_store->unratedKeys();
+		unrated = QSet<QString>(keys.begin(), keys.end());
+	}
 	if (m_collection == 0 && m_smartFilter == Duplicates) {
-		const auto keys = duplicateKeys(entries);
+		QStringList keys;
+		for (const auto &group : m_store->duplicateGroups()) {
+			keys.append(group);
+			duplicateExtras += int(group.size()) - 1;
+		}
 		duplicates = QSet<QString>(keys.begin(), keys.end());
 		QHash<QString, int> order;
 		for (int i = 0; i < keys.size(); ++i) {
@@ -496,7 +516,8 @@ void LibraryTab::reload()
 			|| (preference == 1 && !entry.liked) || (preference == 2 && !entry.favorite)
 			|| (smart && m_smartFilter == RecentlySaved && QDateTime::fromString(entry.savedAt, Qt::ISODateWithMs) < QDateTime::currentDateTimeUtc().addDays(-7))
 			|| (smart && ((m_smartFilter == NeedsTags && !entry.tags().isEmpty()) || (m_smartFilter == NeedsSource && !entry.image.value("website").toString().isEmpty()) || (m_smartFilter == MetadataErrors && entry.metadataErrors().isEmpty())))
-			|| (smart && m_smartFilter == Duplicates && !duplicates.contains(entry.key))) {
+			|| (smart && m_smartFilter == Duplicates && !duplicates.contains(entry.key))
+			|| (smart && m_smartFilter == NotRated && !unrated.contains(entry.key))) {
 			continue;
 		}
 		if (!search.isEmpty()) {
@@ -563,10 +584,16 @@ void LibraryTab::reload()
 	} else if (m_smartFilter == MetadataErrors) {
 		hint = tr("Imported, but a metadata reader reported an error. Open the picture for details, then recheck metadata.");
 	} else if (m_smartFilter == Duplicates) {
-		hint = tr("Same file or the same picture from different sources, shown next to each other. Edits and variants are kept apart.");
+		hint = tr("Same file or the same picture from different sources, shown next to each other. Visibly different edits and variants are kept apart.");
+	} else if (m_smartFilter == NotRated) {
+		hint = tr("No longer liked or favorited, and in no collection. Remove them, or rate them again to keep them.");
 	}
 	m_hint->setText(hint);
 	m_hint->setVisible(!hint.isEmpty());
+	const bool merging = m_collection == 0 && m_smartFilter == Duplicates && duplicateExtras > 0;
+	const bool removing = m_collection == 0 && m_smartFilter == NotRated && !unrated.isEmpty();
+	m_viewAction->setText(merging ? tr("Merge all duplicates (%1)").arg(duplicateExtras) : tr("Remove all from Library (%1)").arg(unrated.size()));
+	m_viewAction->setVisible(merging || removing);
 	m_selectAll->setEnabled(!m_viewKeys.isEmpty());
 	m_downloadAll->setEnabled(!m_viewKeys.isEmpty());
 
@@ -578,6 +605,8 @@ void LibraryTab::reload()
 		m_empty->setText(tr("This collection is empty.\nAdd pictures from Discover, search results, the viewer or Library."));
 	} else if (m_smartFilter == Duplicates) {
 		m_empty->setText(tr("No duplicates found. Nice and tidy."));
+	} else if (m_smartFilter == NotRated) {
+		m_empty->setText(tr("Every picture here is liked, favorited, collected or annotated."));
 	} else {
 		m_empty->setText(tr("Keep the pictures you want to find again.\n♥ Like or ★ Favorite anything in Discover, search results or the viewer — or drop files here to import them."));
 	}
@@ -638,6 +667,9 @@ void LibraryTab::gridAction(ImageGridView::Action action, const QStringList &key
 			}
 		}
 		Toast::show(this, !on ? tr("Rating removed") : favorite ? tr("★ Favorited") : tr("♥ Liked"), 1600);
+		if (!on && m_collection == 0) {
+			PictureActions::offerRemoval(m_profile, keys, this);
+		}
 	}
 }
 
@@ -827,6 +859,19 @@ void LibraryTab::imageMenu(const QStringList &selected, const QPoint &globalPosi
 				}
 			});
 		}
+	}
+	if (selected.size() > 1) {
+		menu.addAction(tr("Merge into one picture"), this, [this, selected]() {
+			// Keep the favorite, else the liked one, else the first selected.
+			QStringList ordered = selected;
+			std::stable_sort(ordered.begin(), ordered.end(), [this](const QString &left, const QString &right) {
+				const auto a = m_entries.value(left), b = m_entries.value(right);
+				return std::make_pair(a.favorite, a.liked) > std::make_pair(b.favorite, b.liked);
+			});
+			if (QMessageBox::question(this, tr("Merge pictures"), tr("Merge %n picture(s) into one? Ratings, notes, collections, local files and source links are combined.", "", int(selected.size()))) == QMessageBox::Yes) {
+				mergeGroups({ordered});
+			}
+		});
 	}
 	menu.addSeparator();
 	menu.addAction(tr("Download"), this, [this, selected]() { download(selected); });

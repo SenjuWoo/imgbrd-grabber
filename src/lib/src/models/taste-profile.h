@@ -32,6 +32,21 @@ struct DiscoveryFeedback
 	double rated = 0;
 };
 
+/** What the user told Discover: tags to see more or less of, today's focus and how far to stray from known favorites. */
+struct TasteTuning
+{
+	enum Preference { Never = -2, Less = -1, More = 1 };
+	enum Variety { Familiar = 0, Balanced = 1, Adventurous = 2 };
+
+	QHash<QString, int> tags;
+	QStringList focus;
+	int variety = Balanced;
+
+	bool isNeutral() const;
+	QJsonObject toJson() const;
+	static TasteTuning fromJson(const QJsonObject &json);
+};
+
 /**
  * How common each tag is on each source, sampled from its newest posts.
  * It tells a distinctive taste (a theme, an artist) apart from tags almost every post has.
@@ -69,7 +84,7 @@ class TagBackground
 class TasteProfile
 {
 	public:
-		static TasteProfile build(const QList<LibraryEntry> &entries, const QHash<QString, double> &dislikedTags = {}, const QDateTime &now = QDateTime::currentDateTimeUtc(), const TagBackground &background = {});
+		static TasteProfile build(const QList<LibraryEntry> &entries, const QHash<QString, double> &dislikedTags = {}, const QDateTime &now = QDateTime::currentDateTimeUtc(), const TagBackground &background = {}, const TasteTuning &tuning = {});
 		static QString normalize(const QString &tag);
 		static bool isMetaTag(const QString &name, const QString &type = {});
 
@@ -78,6 +93,13 @@ class TasteProfile
 		int favorites() const;
 		double weight(const QString &tag) const;
 		QList<TasteTag> topTags(int limit, const QSet<QString> &types = {}) const;
+		/** Tags Discover learned to avoid, most avoided first. */
+		QList<TasteTag> avoidedTags(int limit) const;
+		/** The candidate's tags that match this taste best, strongest first. */
+		QStringList matches(const QStringList &tags, int limit) const;
+		/** Whether the tags include one the user never wants to see. */
+		bool blocks(const QStringList &tags) const;
+		const TasteTuning &tuning() const;
 		/** Searches for new pictures; tags whose earlier results were shown but never rated are picked less often. */
 		QList<DiscoveryQuery> queries(const QStringList &sources, int count, quint32 seed, const QHash<QString, DiscoveryFeedback> &feedback = {}) const;
 
@@ -91,11 +113,16 @@ class TasteProfile
 		const QHash<QString, double> &seedWeights() const;
 
 	private:
+		void applyTuning();
+
 		QHash<QString, TasteTag> m_tags;
 		QHash<QString, QHash<QString, double>> m_cooccurrences;
 		QHash<QString, QHash<QString, double>> m_sites;
 		QHash<QString, double> m_seedWeights;
 		QHash<QString, double> m_siteWeights;
+		TasteTuning m_tuning;
+		QSet<QString> m_pinned;
+		QSet<QString> m_blocked;
 		double m_norm = 0;
 		int m_likes = 0;
 		int m_favorites = 0;

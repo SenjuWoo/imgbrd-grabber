@@ -10,6 +10,7 @@
 #include "models/image.h"
 #include "models/library-store.h"
 #include "models/profile.h"
+#include "picture-actions.h"
 
 
 ImageLibraryActions::ImageLibraryActions(Profile *profile, const QSharedPointer<Image> &image, QWidget *parent, qint64 collection, bool compact)
@@ -65,6 +66,9 @@ ImageLibraryActions::ImageLibraryActions(Profile *profile, const QSharedPointer<
 					break;
 				}
 			}
+			if (!checked && m_collection == 0) {
+				PictureActions::offerRemoval(m_profile, m_keys, window());
+			}
 		}
 		refresh();
 	});
@@ -75,6 +79,9 @@ ImageLibraryActions::ImageLibraryActions(Profile *profile, const QSharedPointer<
 					showError();
 					break;
 				}
+			}
+			if (!checked && m_collection == 0) {
+				PictureActions::offerRemoval(m_profile, m_keys, window());
 			}
 		}
 		refresh();
@@ -121,11 +128,22 @@ void ImageLibraryActions::setSelection(const QList<QSharedPointer<Image>> &image
 
 bool ImageLibraryActions::saveSelection()
 {
+	QStringList saved;
 	for (const auto &image : m_images) {
-		if (image && m_store->saveImage(*image).isEmpty()) {
+		if (!image) {
+			continue;
+		}
+		const QString key = m_store->saveImage(*image);
+		if (key.isEmpty()) {
 			showError();
 			return false;
 		}
+		saved.append(key);
+	}
+	if (!saved.isEmpty()) {
+		// A copy of a Library picture is saved as that picture.
+		saved.removeDuplicates();
+		m_keys = saved;
 	}
 	for (const auto &key : m_keys) {
 		if (!m_store->contains(key, m_collection)) {

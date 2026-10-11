@@ -1,6 +1,7 @@
 #include <QDir>
 #include <QFile>
 #include <QJsonObject>
+#include <QPainter>
 #include <QPixmap>
 #include <QScopedPointer>
 #include <QSqlQuery>
@@ -361,4 +362,119 @@ TEST_CASE("Legacy overlapping ratings retain favorites and a recoverable backup"
 	}
 	REQUIRE(incoming.open(QIODevice::ReadOnly));
 	REQUIRE(incoming.readAll() == incomingBytes); // Restore validation must not modify the supplied backup.
+}
+
+namespace
+{
+	QPixmap paintedPicture(int width, int height, QColor accent)
+	{
+		QPixmap pixmap(width, height);
+		pixmap.fill(QColor(70, 120, 200));
+		QPainter painter(&pixmap);
+		painter.setPen(Qt::NoPen);
+		painter.setBrush(QColor(40, 140, 60));
+		painter.drawEllipse(QRectF(width * 0.1, height * 0.5, width * 0.5, height * 0.6));
+		painter.setBrush(accent);
+		painter.drawRect(QRectF(width * 0.55, height * 0.15, width * 0.3, height * 0.35));
+		return pixmap;
+	}
+}
+
+TEST_CASE("Library joins copies of a picture instead of duplicating it", "[library]")
+{
+	QTemporaryDir directory;
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	Site other("other.test", profile->getSources().value("Danbooru (2.0)"), profile.data());
+	LibraryStore store(directory.filePath("copies.sqlite"));
+	REQUIRE(store.isReady());
+
+	Image original(site, {{ "id", "7" }, { "md5", "0123456789abcdef0123456789abcdef" }, { "file_url", "https://cdn.test/a.png" }, { "width", "800" }, { "height", "600" }}, profile.data());
+	original.setPreviewImage(paintedPicture(160, 120, QColor(240, 220, 120)));
+	const QString key = store.saveImage(original);
+	REQUIRE(!key.isEmpty());
+	REQUIRE(store.setLiked(key, true));
+
+	SECTION("Same file from another source")
+	{
+		Image mirror(&other, {{ "id", "900" }, { "md5", "0123456789ABCDEF0123456789ABCDEF" }, { "file_url", "https://mirror.test/a.png" }}, profile.data());
+		REQUIRE(store.isKnown(mirror));
+		REQUIRE(store.keyForImage(mirror) == key);
+		REQUIRE(store.saveImage(mirror) == key);
+		REQUIRE(store.entries().size() == 1);
+		REQUIRE(store.entry(key).image.value("website").toString() == site->url()); // The kept picture's own details stay.
+	}
+
+	SECTION("Same picture re-encoded on another source")
+	{
+		Image copy(&other, {{ "id", "901" }, { "md5", "ffffffffffffffffffffffffffffffff" }, { "file_url", "https://mirror.test/b.jpg" }, { "width", "1600" }, { "height", "1200" }}, profile.data());
+		REQUIRE_FALSE(store.isKnown(copy));
+		copy.setPreviewImage(paintedPicture(320, 240, QColor(240, 220, 120)));
+		const auto print = ImageFingerprint::fromImage(copy.previewImage().toImage(), copy.size());
+		REQUIRE(store.sameImageKey(copy, print) == key);
+		REQUIRE(store.saveImage(copy) == key);
+		REQUIRE(store.entries().size() == 1);
+		REQUIRE(store.isKnown(copy)); // Linked now, even without its preview.
+		REQUIRE(store.isRated(copy));
+	}
+
+	SECTION("A visibly different picture stays separate")
+	{
+		Image variant(&other, {{ "id", "902" }, { "md5", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }, { "file_url", "https://mirror.test/c.jpg" }}, profile.data());
+		variant.setPreviewImage(paintedPicture(160, 120, QColor(200, 40, 160)));
+		REQUIRE(store.sameImageKey(variant, ImageFingerprint::fromImage(variant.previewImage().toImage())).isEmpty());
+		REQUIRE(store.saveImage(variant) != key);
+		REQUIRE(store.entries().size() == 2);
+	}
+}
+
+TEST_CASE("Library merges duplicates and lists unrated pictures", "[library]")
+{
+	QTemporaryDir directory;
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	LibraryStore store(directory.filePath("merge.sqlite"));
+	REQUIRE(store.isReady());
+	auto save = [&](const QString &id, QColor accent) {
+		Image image(site, {{ "id", id }, { "md5", QString(32, id.back()) }, { "file_url", "https://cdn.test/" + id + ".png" }}, profile.data());
+		image.setPreviewImage(paintedPicture(160, 120, accent));
+		// Insert directly so the copies exist side by side, as in Libraries saved before copies were joined.
+		return store.saveImage(image);
+	};
+	const QString first = save("1", QColor(240, 220, 120));
+	const QString lone = save("2", QColor(200, 40, 160));
+	REQUIRE(store.setLiked(first, true));
+	REQUIRE(store.setFavorite(lone, true));
+
+	// A re-encoded copy saved earlier under its own key.
+	Site other("other.test", profile->getSources().value("Danbooru (2.0)"), profile.data());
+	Image copy(&other, {{ "id", "3" }, { "md5", QString(32, '3') }, { "file_url", "https://other.test/3.png" }}, profile.data());
+	REQUIRE(store.saveImage(copy) == LibraryStore::imageKey(copy)); // No preview yet: nothing to compare.
+	const QString second = LibraryStore::imageKey(copy);
+	copy.setPreviewImage(paintedPicture(240, 180, QColor(240, 220, 120)));
+	REQUIRE(store.saveImage(copy) == second); // Same post again: refreshed in place.
+	const qint64 collection = store.createCollection("Kept");
+	REQUIRE(store.addToCollection(second, collection));
+	REQUIRE(store.setFavorite(second, true));
+	REQUIRE(store.setNotes(second, "from the other site"));
+
+	const auto groups = store.duplicateGroups();
+	REQUIRE(groups.size() == 1);
+	REQUIRE(groups.first() == QStringList({ second, first })); // The favorite comes first.
+	REQUIRE(store.mergeImages(groups.first()[0], groups.first()[1]));
+	REQUIRE(store.entries().size() == 2);
+	REQUIRE(store.entry(second).favorite);
+	REQUIRE(store.entry(second).notes == "from the other site");
+	Image again(site, {{ "id", "1" }, { "md5", QString(32, '1') }, { "file_url", "https://cdn.test/1.png" }}, profile.data());
+	REQUIRE(store.keyForImage(again) == second); // Its source now points at the picture kept.
+	REQUIRE(store.duplicateGroups().isEmpty());
+	REQUIRE_FALSE(store.mergeImages(second, second));
+
+	REQUIRE(store.unratedKeys().isEmpty());
+	REQUIRE(store.setFavorite(lone, false));
+	REQUIRE(store.unratedKeys() == QStringList { lone });
+	REQUIRE(store.setNotes(lone, "keep"));
+	REQUIRE(store.unratedKeys().isEmpty());
 }

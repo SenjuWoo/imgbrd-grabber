@@ -10,6 +10,7 @@
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QScopedPointer>
 #include <QTemporaryDir>
@@ -91,7 +92,7 @@ TEST_CASE("Library actions synchronize real widgets and scoped SQLite state", "[
 	REQUIRE(profile->library()->addToCollection(key, collection));
 	QApplication::processEvents();
 	auto *sidebar = library.findChild<QTreeWidget*>("librarySidebar");
-	auto *collectionItem = sidebar->topLevelItem(9)->child(0);
+	auto *collectionItem = sidebar->topLevelItem(10)->child(0);
 	REQUIRE(collectionItem->data(0, Qt::UserRole).toLongLong() == collection);
 	sidebar->setCurrentItem(collectionItem);
 	QApplication::processEvents();
@@ -180,6 +181,7 @@ TEST_CASE("Library grid reaches every picture without pages and finds duplicates
 		REQUIRE(QFile::copy(catalog, directory.filePath("library.sqlite")));
 	}
 	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	QString originalKey, copyKey;
 	if (catalog.isEmpty()) {
 		Site *site = profile->getSites().value("danbooru.donmai.us");
 		for (int index = 0; index < 650; ++index) {
@@ -206,9 +208,13 @@ TEST_CASE("Library grid reaches every picture without pages and finds duplicates
 			painter.fillRect(QRect(i * 23, i * 31, 60, 50), QColor::fromHsv(i * 29, 220, 230));
 		}
 		original.setPreviewImage(QPixmap::fromImage(art));
+		originalKey = profile->library()->saveImage(original);
+		REQUIRE(!originalKey.isEmpty());
+		// Saved now, a copy would join the original; plant one saved before its preview could be compared, as in older Libraries.
+		copyKey = profile->library()->saveImage(copy);
+		REQUIRE(copyKey != originalKey);
 		copy.setPreviewImage(QPixmap::fromImage(art.scaled(150, 210, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)));
-		REQUIRE(!profile->library()->saveImage(original).isEmpty());
-		REQUIRE(!profile->library()->saveImage(copy).isEmpty());
+		REQUIRE(profile->library()->saveImage(copy) == copyKey);
 	}
 	const int expected = profile->library()->entries().size();
 	REQUIRE(expected >= 478);
@@ -247,5 +253,17 @@ TEST_CASE("Library grid reaches every picture without pages and finds duplicates
 		QApplication::processEvents();
 		auto *grid = library.findChild<ImageGridView*>("libraryGrid");
 		REQUIRE(grid->gridModel()->rowCount() == 2);
+		auto *merge = library.findChild<QPushButton*>("libraryViewAction");
+		REQUIRE(merge->isVisible());
+		REQUIRE(merge->text().contains("(1)"));
+		QTimer::singleShot(0, []() {
+			if (auto *box = qobject_cast<QMessageBox*>(QApplication::activeModalWidget())) {
+				box->button(QMessageBox::Yes)->click();
+			}
+		});
+		QTest::mouseClick(merge, Qt::LeftButton);
+		REQUIRE(QTest::qWaitFor([grid]() { return grid->gridModel()->rowCount() == 0; }, 3000));
+		REQUIRE(profile->library()->entries().size() == expected - 1);
+		REQUIRE(profile->library()->contains(originalKey) != profile->library()->contains(copyKey));
 	}
 }

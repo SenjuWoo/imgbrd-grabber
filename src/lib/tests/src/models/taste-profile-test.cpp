@@ -219,6 +219,110 @@ TEST_CASE("Empty taste profile discovers fresh posts from each selected source",
 	REQUIRE(sites == QSet<QString> {"a.test", "b.test"});
 }
 
+TEST_CASE("Taste tuning steers searches and scores", "[discover]")
+{
+	const QList<LibraryEntry> entries {
+		rated("a", "gelbooru.com", {{"forest", "general"}, {"river", "general"}}, true),
+		rated("b", "gelbooru.com", {{"forest", "general"}, {"river", "general"}}),
+		rated("c", "gelbooru.com", {{"beach", "general"}, {"sunset", "general"}}),
+	};
+	const QStringList sources {"gelbooru.com", "danbooru.donmai.us"};
+
+	SECTION("Neutral tuning changes nothing")
+	{
+		REQUIRE(TasteTuning().isNeutral());
+		const auto plain = TasteProfile::build(entries, {}, Now);
+		const auto tuned = TasteProfile::build(entries, {}, Now, {}, TasteTuning());
+		REQUIRE(plain.weight("forest") == tuned.weight("forest"));
+	}
+
+	SECTION("More, less and never")
+	{
+		TasteTuning tuning;
+		tuning.tags.insert("sunset", TasteTuning::More);
+		tuning.tags.insert("forest", TasteTuning::Less);
+		tuning.tags.insert("river", TasteTuning::Never);
+		tuning.tags.insert("mountains", TasteTuning::More); // Never rated: still searched, on any source.
+		const auto profile = TasteProfile::build(entries, {}, Now, {}, tuning);
+		REQUIRE(profile.weight("sunset") > profile.weight("beach"));
+		REQUIRE(profile.weight("forest") < 0);
+		REQUIRE(profile.weight("river") == -1.0);
+		REQUIRE(profile.blocks({"sky", "River"}));
+		REQUIRE_FALSE(profile.blocks({"sky", "forest"}));
+		REQUIRE(profile.score({"sunset", "sky"}) > profile.score({"forest", "sky"}));
+		REQUIRE(profile.matches({"forest", "sunset", "beach", "1girl"}, 5) == QStringList({"sunset", "beach"}));
+		REQUIRE(profile.avoidedTags(5).first().name == "river");
+		QSet<QString> searched;
+		for (quint32 seed = 0; seed < 40; ++seed) {
+			for (const auto &query : profile.queries(sources, 4, seed)) {
+				for (const auto &tag : query.tags) {
+					searched.insert(tag);
+				}
+			}
+		}
+		REQUIRE(searched.contains("mountains"));
+		REQUIRE(searched.contains("sunset"));
+		REQUIRE_FALSE(searched.contains("river"));
+		REQUIRE_FALSE(searched.contains("forest"));
+	}
+
+	SECTION("Today's focus takes most searches, even without ratings")
+	{
+		TasteTuning tuning;
+		tuning.focus = {"umbrella"};
+		for (const auto &base : {entries, QList<LibraryEntry>()}) {
+			const auto profile = TasteProfile::build(base, {}, Now, {}, tuning);
+			const auto queries = profile.queries(sources, 5, 7);
+			REQUIRE(queries.size() >= 3);
+			int focused = 0;
+			for (const auto &query : queries) {
+				focused += query.tags.first() == "umbrella" ? 1 : 0;
+			}
+			REQUIRE(focused >= 3);
+			REQUIRE(queries.first().reason.contains("umbrella"));
+			REQUIRE(profile.score({"umbrella", "rain"}) > profile.score({"forest", "river"}));
+		}
+	}
+
+	SECTION("Tuning round-trips through JSON and rejects junk")
+	{
+		TasteTuning tuning;
+		tuning.tags.insert("Sunset", TasteTuning::More);
+		tuning.focus = {"Umbrella", "umbrella"};
+		tuning.variety = TasteTuning::Adventurous;
+		auto json = tuning.toJson();
+		auto tags = json.value("tags").toObject();
+		tags.insert("bad", 7);
+		json.insert("tags", tags);
+		const auto loaded = TasteTuning::fromJson(json);
+		REQUIRE(loaded.tags == QHash<QString, int>({{"sunset", TasteTuning::More}}));
+		REQUIRE(loaded.focus == QStringList({"umbrella"}));
+		REQUIRE(loaded.variety == TasteTuning::Adventurous);
+		REQUIRE(TasteTuning::fromJson({{"variety", 9}}).variety == TasteTuning::Adventurous);
+	}
+
+	SECTION("Familiar searches fewer distinct topics than adventurous")
+	{
+		QList<LibraryEntry> many;
+		for (int i = 0; i < 60; ++i) {
+			many.append(rated(QString::number(i), "gelbooru.com", {{"theme_" + QString::number(i % 40), "general"}, {"theme_" + QString::number(i % 7), "general"}}));
+		}
+		auto distinct = [&](int variety) {
+			TasteTuning tuning;
+			tuning.variety = variety;
+			const auto profile = TasteProfile::build(many, {}, Now, {}, tuning);
+			QSet<QString> topics;
+			for (quint32 seed = 0; seed < 60; ++seed) {
+				for (const auto &query : profile.queries({"gelbooru.com"}, 4, seed)) {
+					topics.insert(query.tags.first());
+				}
+			}
+			return topics.size();
+		};
+		REQUIRE(distinct(TasteTuning::Familiar) < distinct(TasteTuning::Adventurous));
+	}
+}
+
 // Developer aid: GRABBER_DIAG_PROFILE=<copy of a profile folder> lib-tests "[diag]" prints what Discover would search.
 TEST_CASE("Taste profile diagnostics for a profile copy", "[.][diag]")
 {

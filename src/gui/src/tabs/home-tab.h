@@ -17,6 +17,7 @@ class QComboBox;
 class QFrame;
 class QHBoxLayout;
 class QLabel;
+class QMenu;
 class QProgressBar;
 class QPushButton;
 class QStackedWidget;
@@ -51,6 +52,11 @@ class HomeTab : public QWidget
 		void rate(const QString &key, bool favorite);
 		void openPicture(const QString &key);
 		void showMenu(const QStringList &keys, const QPoint &position);
+		/** Fills a "Not interested" menu: hide only, or say which of the picture's tags to see less of or never. */
+		void fillNotInterested(QMenu *menu, const QStringList &keys);
+		void notInterested(const QStringList &keys, const QStringList &tags, bool never);
+		void tuneTaste();
+		void showHidden();
 		void updateHeader();
 		void updateChips();
 		void updateAi();
@@ -69,6 +75,7 @@ class HomeTab : public QWidget
 		QComboBox *m_scope;
 		QToolButton *m_more;
 		QPushButton *m_refresh;
+		QPushButton *m_tune;
 		QFrame *m_aiBanner;
 		QLabel *m_aiText;
 		QPushButton *m_aiEnable;

@@ -5,7 +5,14 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QComboBox>
 #include <QLabel>
+#include <QLineEdit>
+#include <QListWidget>
+#include <QPainter>
+#include <QTableWidget>
+#include <QMessageBox>
+#include <QPushButton>
 #include <QScopedPointer>
 #include <QScopeGuard>
 #include <QSettings>
@@ -16,6 +23,7 @@
 #include <QTest>
 #include "catch.h"
 #include "custom-network-access-manager.h"
+#include "discover-dialogs.h"
 #include "discovery-feed.h"
 #include "models/image.h"
 #include "models/library-store.h"
@@ -28,6 +36,7 @@
 #include "tabs/tag-tab.h"
 #include "tags/tag.h"
 #include "ui/image-grid.h"
+#include "ui/toast.h"
 #include "viewer/viewer-window.h"
 
 namespace
@@ -145,7 +154,22 @@ TEST_CASE("Discover learns from ratings and hides rated, blacklisted and dismiss
 	REQUIRE(model->item(0).liked);
 	REQUIRE(profile->library()->entry(libraryKey).image.value("website").toString() == site->url());
 	QTest::keyClick(grid, Qt::Key_L);
-	REQUIRE_FALSE(profile->library()->contains(libraryKey)); // Un-rating leaves no Library trace.
+	// Un-rating asks whether to remove the picture from Library too.
+	QMessageBox *ask = nullptr;
+	REQUIRE(QTest::qWaitFor([&ask]() {
+		for (auto *widget : QApplication::topLevelWidgets()) {
+			auto *box = qobject_cast<QMessageBox*>(widget);
+			ask = box != nullptr && box->isVisible() ? box : ask;
+		}
+		return ask != nullptr;
+	}, 3000));
+	REQUIRE(ask->text().contains("no longer liked"));
+	for (auto *button : ask->buttons()) {
+		if (button->text() == "Remove") {
+			button->click();
+		}
+	}
+	REQUIRE(QTest::qWaitFor([&]() { return !profile->library()->contains(libraryKey); }, 3000));
 	QTest::keyClick(grid, Qt::Key_F);
 	REQUIRE(profile->library()->entry(libraryKey).favorite);
 	REQUIRE_FALSE(profile->library()->entry(libraryKey).liked);
@@ -200,8 +224,8 @@ TEST_CASE("Discover samples newest posts to learn how common tags are on each so
 		post(903, "33333333333333333333333333333333", "forest spiders"),
 		post(904, "44444444444444444444444444444444", "forest lake"),
 	});
-	// Two newest-post samples and the "forest" search, in any order, then two previews.
-	for (int i = 0; i < 3; ++i) {
+	// One newest-post sample (one source still being learned) and the "forest" search, in any order, then two previews.
+	for (int i = 0; i < 2; ++i) {
 		CustomNetworkAccessManager::NextFiles.enqueue(posts);
 	}
 	CustomNetworkAccessManager::NextFiles.enqueue(writePreview(directory, "a.png", Qt::red));
@@ -214,12 +238,12 @@ TEST_CASE("Discover samples newest posts to learn how common tags are on each so
 	REQUIRE(QTest::qWaitFor([&home]() { return !home.feed()->isBusy() && home.grid()->gridModel()->rowCount() == 2; }, 8000));
 	REQUIRE(model->rowCount() == 2); // Samples still never show rated, blacklisted or repeated pictures.
 	// Every valid sampled post counts, rated and blacklisted ones too: they are part of what the source has.
-	REQUIRE(home.feed()->background().posts(site->url()) == 8);
+	REQUIRE(home.feed()->background().posts(site->url()) == 4);
 	QFile state(DiscoveryFeed::statePath(profile->getPath()));
 	REQUIRE(state.open(QIODevice::ReadOnly));
 	const auto saved = QJsonDocument::fromJson(state.readAll()).object();
 	REQUIRE(TagBackground::fromJson(saved.value("background").toObject()).frequency("forest") < 0); // Not yet well sampled.
-	REQUIRE(saved.value("background").toObject().value(site->url()).toObject().value("posts").toDouble() == 8);
+	REQUIRE(saved.value("background").toObject().value(site->url()).toObject().value("posts").toDouble() == 4);
 }
 
 TEST_CASE("Discover reports failed sources and starts fresh without ratings", "[library][home][discovery]")
@@ -324,4 +348,176 @@ TEST_CASE("Home and movable search tabs retain named and numeric session identit
 	REQUIRE(tabs.indexOf(second) != current.toInt());
 	REQUIRE(restored.value(current.toInt())->tags() == "city");
 	qDeleteAll(restored);
+}
+
+namespace
+{
+	QImage paintedArt(QColor accent, const QSize &size = QSize(240, 300))
+	{
+		QImage art(size, QImage::Format_RGB32);
+		art.fill(QColor(30, 40, 90));
+		QPainter painter(&art);
+		for (int i = 0; i < 10; ++i) {
+			painter.fillRect(QRectF(size.width() * (i % 5) / 5.0, size.height() * (i / 5) / 2.0 + i * 3, size.width() / 7.0, size.height() / 5.0), QColor::fromHsv((i * 37 + accent.hue()) % 360, 220, 230));
+		}
+		return art;
+	}
+
+	QString writeArt(const QTemporaryDir &directory, const QString &name, const QImage &art)
+	{
+		const QString path = directory.filePath(name);
+		REQUIRE(art.save(path));
+		return path;
+	}
+}
+
+TEST_CASE("Discover never shows Library pictures, even copies from other sources", "[library][home][discovery]")
+{
+	auto clearReplies = qScopeGuard([]() { CustomNetworkAccessManager::NextFiles.clear(); });
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = jsonDanbooru(profile.data());
+	seedTagBackground(profile.data(), site->url());
+	// Liked earlier from another post: same picture, different file.
+	const QImage liked = paintedArt(Qt::red);
+	Image saved(site, {{"id", "700"}, {"md5", QString(32, '7')}, {"file_url", "https://test.invalid/700.png"}, {"tags", "forest"}}, profile.data());
+	saved.setTags({Tag("forest", "general")});
+	saved.setPreviewImage(QPixmap::fromImage(liked));
+	const QString key = profile->library()->saveImage(saved);
+	REQUIRE(profile->library()->setLiked(key, true));
+	CustomNetworkAccessManager::NextFiles.enqueue(writePosts(directory, "posts.json", {
+		post(901, QString(32, '1'), "forest river"),
+		post(902, QString(32, '2'), "forest lake"),
+	}));
+	CustomNetworkAccessManager::NextFiles.enqueue(writeArt(directory, "copy.jpg", liked.scaled(120, 150, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)));
+	CustomNetworkAccessManager::NextFiles.enqueue(writeArt(directory, "other.png", paintedArt(Qt::blue).mirrored(true, false)));
+
+	HomeTab home(profile.data(), nullptr);
+	home.resize(1100, 800);
+	home.show();
+	auto *model = home.grid()->gridModel();
+	REQUIRE(QTest::qWaitFor([&home, model]() { return !home.feed()->isBusy() && model->rowCount() > 0; }, 8000));
+	REQUIRE(model->rowCount() == 1);
+	REQUIRE(home.feed()->image(model->item(0).key)->id() == 902);
+	REQUIRE(model->item(0).tooltip.contains("Matches your taste: forest"));
+}
+
+TEST_CASE("Discover lets users say what is not interesting, undo it and restore hidden pictures", "[library][home][discovery]")
+{
+	auto clearReplies = qScopeGuard([]() { CustomNetworkAccessManager::NextFiles.clear(); });
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = jsonDanbooru(profile.data());
+	seedTagBackground(profile.data(), site->url());
+	saveRated(profile.data(), 801, QString(32, '8'), "forest", true);
+	CustomNetworkAccessManager::NextFiles.enqueue(writePosts(directory, "posts.json", {
+		post(901, QString(32, '1'), "forest river"),
+		post(902, QString(32, '2'), "forest lake"),
+	}));
+	CustomNetworkAccessManager::NextFiles.enqueue(writePreview(directory, "a.png", Qt::red));
+	CustomNetworkAccessManager::NextFiles.enqueue(writePreview(directory, "b.png", Qt::blue));
+
+	HomeTab home(profile.data(), nullptr);
+	home.resize(1100, 800);
+	home.show();
+	auto *grid = home.grid();
+	auto *model = grid->gridModel();
+	REQUIRE(QTest::qWaitFor([&home, model]() { return !home.feed()->isBusy() && model->rowCount() == 2; }, 8000));
+	auto *feed = home.feed();
+
+	// X hides at once; Undo in the toast brings the picture back where it was.
+	const QString first = model->item(0).key;
+	grid->setFocus();
+	grid->selectionModel()->select(model->index(0), QItemSelectionModel::ClearAndSelect);
+	QTest::keyClick(grid, Qt::Key_X);
+	REQUIRE(model->rowCount() == 1);
+	REQUIRE(feed->dismissedCount() == 1);
+	auto *toast = home.findChild<Toast*>(QString(), Qt::FindDirectChildrenOnly);
+	REQUIRE(toast != nullptr);
+	REQUIRE(toast->text().contains("Undo"));
+	emit toast->linkActivated("action");
+	REQUIRE(model->rowCount() == 2);
+	REQUIRE(model->item(0).key == first);
+	REQUIRE(feed->dismissedCount() == 0);
+	REQUIRE(feed->taste().weight("river") >= 0); // Its tags were not held against it.
+
+	// Naming a tag affects only that tag, and the picture can be restored later.
+	const QString lakeKey = feed->image(model->item(1).key)->id() == 902 ? model->item(1).key : model->item(0).key;
+	feed->dismiss(lakeKey, {"lake"}, false);
+	REQUIRE(feed->tuning().tags.value("lake") == TasteTuning::Less);
+	REQUIRE(feed->taste().weight("lake") < 0);
+	REQUIRE(feed->taste().weight("forest") > 0);
+	REQUIRE(feed->hiddenPictures().size() == 1);
+	REQUIRE(feed->hiddenPictures().first().image->id() == 902);
+
+	CustomNetworkAccessManager::NextFiles.enqueue(writePreview(directory, "c.png", Qt::blue));
+	{
+		DiscoverHiddenDialog dialog(feed, &home);
+		dialog.show();
+		auto *list = dialog.findChild<QListWidget*>("discoverHiddenList");
+		REQUIRE(list->count() == 1);
+		list->item(0)->setSelected(true);
+		auto *restore = dialog.findChild<QPushButton*>("discoverRestoreSelected");
+		REQUIRE(restore->isEnabled());
+		QTest::mouseClick(restore, Qt::LeftButton);
+		REQUIRE(list->count() == 0);
+		REQUIRE(dialog.restoredCount() == 1);
+	}
+	REQUIRE(feed->dismissedCount() == 0);
+	REQUIRE(feed->hiddenPictures().isEmpty());
+
+	// Hidden pictures and tuning survive a restart.
+	feed->dismiss(lakeKey, {}, false);
+	DiscoveryFeed reloaded(profile.data(), nullptr);
+	REQUIRE(reloaded.dismissedCount() == 1);
+	REQUIRE(reloaded.hiddenPictures().size() == 1);
+	REQUIRE(reloaded.tuning().tags.value("lake") == TasteTuning::Less);
+}
+
+TEST_CASE("The taste dialog explains Discover and edits focus, variety and tag preferences", "[library][home][discovery]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = jsonDanbooru(profile.data());
+	seedTagBackground(profile.data(), site->url());
+	saveRated(profile.data(), 801, QString(32, '8'), "forest", true);
+	saveRated(profile.data(), 802, QString(32, '9'), "forest river", false);
+	DiscoveryFeed feed(profile.data(), nullptr);
+	DiscoverTasteDialog dialog(&feed);
+	REQUIRE(dialog.findChild<QLabel*>("discoverHow")->text().contains("How Discover picks pictures"));
+	REQUIRE(dialog.findChild<QLabel*>("discoverStats")->text().contains("1 favorite"));
+	auto *table = dialog.findChild<QTableWidget*>("discoverTasteTags");
+	int forest = -1;
+	for (int row = 0; row < table->rowCount(); ++row) {
+		forest = table->item(row, 0)->text() == "forest" ? row : forest;
+	}
+	REQUIRE(forest >= 0);
+	REQUIRE(table->item(forest, 3)->text() == "2");
+	auto *choice = static_cast<QComboBox*>(table->cellWidget(forest, 5));
+	choice->setCurrentIndex(choice->findData(int(TasteTuning::Never)));
+	dialog.findChild<QLineEdit*>("discoverFocus")->setText("Umbrella, beach");
+	auto *variety = dialog.findChild<QComboBox*>("discoverVariety");
+	variety->setCurrentIndex(variety->findData(int(TasteTuning::Adventurous)));
+	dialog.findChild<QLineEdit*>("discoverNewTag")->setText("rainy day");
+	QTest::mouseClick(dialog.findChild<QPushButton*>("discoverAdd3"), Qt::LeftButton); // More
+	const QString screenshot = qEnvironmentVariable("GRABBER_TASTE_SCREENSHOT");
+	if (!screenshot.isEmpty()) {
+		dialog.show();
+		QApplication::processEvents();
+		REQUIRE(dialog.grab().save(screenshot));
+	}
+	const auto tuning = dialog.tuning();
+	REQUIRE(tuning.focus == QStringList({"umbrella", "beach"}));
+	REQUIRE(tuning.variety == TasteTuning::Adventurous);
+	REQUIRE(tuning.tags.value("forest") == TasteTuning::Never);
+	REQUIRE(tuning.tags.value("rainy_day") == TasteTuning::More);
+	feed.setTuning(tuning);
+	REQUIRE(feed.taste().blocks({"forest"}));
+	REQUIRE(feed.taste().queries({site->url()}, 5, 3).first().reason.contains("focus"));
+
+	QTest::mouseClick(dialog.findChild<QPushButton*>("discoverResetTuning"), Qt::LeftButton);
+	REQUIRE(dialog.tuning().isNeutral());
 }

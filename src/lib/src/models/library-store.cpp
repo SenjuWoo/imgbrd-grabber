@@ -14,6 +14,10 @@
 #include <QSqlQuery>
 #include <QTemporaryDir>
 #include <QUuid>
+#include <QtConcurrent>
+#include <functional>
+#include <numeric>
+#include <tuple>
 #include "models/image.h"
 #include "models/library-importer.h"
 #include "models/site.h"
@@ -58,7 +62,17 @@ LibraryStore::LibraryStore(const QString &path, QObject *parent)
 		m_error = tr("Cannot create the Library directory.");
 		return;
 	}
-	connect(this, &LibraryStore::imageChanged, this, [this]() { m_ratedDirty = true; });
+	connect(this, &LibraryStore::imageChanged, this, [this](const QString &key) {
+		m_ratedDirty = true;
+		if (!key.isEmpty()) {
+			m_staleFingerprints.insert(key);
+		} else if (!m_visualJob.isValid()) {
+			// Many pictures changed at once (restore, link): rebuild the visual index on next use.
+			m_visualLoaded = false;
+			m_fingerprints.clear();
+			m_staleFingerprints.clear();
+		}
+	});
 	connect(this, &LibraryStore::collectionsChanged, this, [this]() { m_ratedDirty = true; });
 	m_database = QSqlDatabase::addDatabase("QSQLITE", m_connection);
 	m_database.setDatabaseName(path);
@@ -256,10 +270,30 @@ QString LibraryStore::saveImage(const Image &image)
 	if (!m_ready) {
 		return {};
 	}
-	const QString key = keyForImage(image);
+	const QString source = imageKey(image);
+	QString key = keyForImage(image);
 	if (key.isEmpty()) {
 		m_error = tr("This picture has no usable source identity.");
 		return {};
+	}
+	if (!contains(key) && !image.previewImage().isNull()) {
+		// Local imports link to a source only after review (Find source); looks alone never attach to them.
+		const QString same = sameImageKey(image, ImageFingerprint::fromImage(image.previewImage().toImage(), image.size()));
+		if (!same.isEmpty() && !entry(same).image.value("website").toString().isEmpty()) {
+			key = same;
+		}
+	}
+	if (key != source && contains(key)) {
+		const auto stored = entry(key).image;
+		const bool samePost = image.parentSite() != nullptr && stored.value("website").toString() == image.parentSite()->url() && stored.value("id").toString() == QString::number(image.id());
+		// A copy from another source (same file, or the same picture re-encoded) joins the Library picture and keeps its details.
+		if (!samePost) {
+			if (!execute("INSERT INTO source_links(source_key,image_key) VALUES(?,?) ON CONFLICT(source_key) DO UPDATE SET image_key=excluded.image_key", { source, key })) {
+				return {};
+			}
+			emit imageChanged(key);
+			return key;
+		}
 	}
 	QJsonObject metadata;
 	image.write(metadata);
@@ -537,8 +571,36 @@ void LibraryStore::loadRatedIndex()
 	if (!m_ready) {
 		return;
 	}
+	m_knownKeys.clear();
+	m_md5Keys.clear();
 	static const QRegularExpression md5("^[0-9a-fA-F]{32}$");
 	QSqlQuery query(m_database);
+	if (query.exec("SELECT key,json_extract(metadata,'$.md5') FROM images ORDER BY saved_at,key")) {
+		while (query.next()) {
+			m_knownKeys.insert(query.value(0).toString());
+			const QString hash = query.value(1).toString().toLower();
+			if (md5.match(hash).hasMatch() && !m_md5Keys.contains(hash)) {
+				m_md5Keys.insert(hash, query.value(0).toString());
+			}
+		}
+	} else {
+		m_error = query.lastError().text();
+	}
+	if (query.exec("SELECT source_key FROM source_links")) {
+		while (query.next()) {
+			m_knownKeys.insert(query.value(0).toString());
+		}
+	}
+	if (query.exec("SELECT image_key,md5,source_md5 FROM local_files ORDER BY path")) {
+		while (query.next()) {
+			for (int column = 1; column < 3; ++column) {
+				const QString hash = query.value(column).toString().toLower();
+				if (md5.match(hash).hasMatch() && !m_md5Keys.contains(hash)) {
+					m_md5Keys.insert(hash, query.value(0).toString());
+				}
+			}
+		}
+	}
 	const QString rated = "SELECT key FROM images WHERE liked=1 OR favorite=1 UNION SELECT image_key FROM members WHERE liked=1 OR favorite=1";
 	if (!query.exec("SELECT i.key,i.metadata FROM images i WHERE i.key IN (" + rated + ")")) {
 		m_error = query.lastError().text();
@@ -580,6 +642,196 @@ bool LibraryStore::isRated(const Image &image)
 	return (!md5.isEmpty() && m_ratedMd5s.contains(md5)) || m_ratedKeys.contains(imageKey(image));
 }
 
+bool LibraryStore::isKnown(const Image &image)
+{
+	if (m_ratedDirty) {
+		loadRatedIndex();
+	}
+	const QString md5 = image.md5().toLower();
+	return (!md5.isEmpty() && m_md5Keys.contains(md5)) || m_knownKeys.contains(imageKey(image));
+}
+
+QString LibraryStore::sameImageKey(const Image &image, const ImageFingerprint &fingerprint, bool variants)
+{
+	if (!m_ready) {
+		return {};
+	}
+	const QString key = keyForImage(image);
+	if (!key.isEmpty() && contains(key)) {
+		return key;
+	}
+	if (!fingerprint.valid) {
+		return {};
+	}
+	loadVisualIndex();
+	for (auto it = m_fingerprints.constBegin(); it != m_fingerprints.constEnd(); ++it) {
+		if ((variants ? it.value().similarImage(fingerprint) : it.value().sameImage(fingerprint)) && contains(it.key())) {
+			return it.key();
+		}
+	}
+	return {};
+}
+
+namespace
+{
+	QHash<QString, ImageFingerprint> thumbnailFingerprints(const QList<QPair<QString, QByteArray>> &thumbnails)
+	{
+		QHash<QString, ImageFingerprint> result;
+		for (const auto &thumbnail : thumbnails) {
+			const auto print = ImageFingerprint::fromImage(QImage::fromData(thumbnail.second));
+			if (print.valid) {
+				result.insert(thumbnail.first, print);
+			}
+		}
+		return result;
+	}
+}
+
+void LibraryStore::prepareVisualIndex()
+{
+	if (!m_ready || m_visualLoaded || m_visualJob.isValid()) {
+		return;
+	}
+	// SQLite stays on this thread; only thumbnails go to the worker.
+	QList<QPair<QString, QByteArray>> thumbnails;
+	QSqlQuery query(m_database);
+	if (query.exec("SELECT key,thumbnail FROM images WHERE thumbnail IS NOT NULL")) {
+		while (query.next()) {
+			thumbnails.append({ query.value(0).toString(), query.value(1).toByteArray() });
+		}
+	}
+	m_staleFingerprints.clear();
+	m_visualJob = QtConcurrent::run(thumbnailFingerprints, thumbnails);
+}
+
+void LibraryStore::loadVisualIndex()
+{
+	if (!m_visualLoaded) {
+		prepareVisualIndex();
+		if (!m_visualJob.isValid()) {
+			return;
+		}
+		const auto computed = m_visualJob.result();
+		m_visualJob = {};
+		m_visualLoaded = true;
+		// Pictures changed while the worker ran are recomputed below.
+		for (auto it = computed.constBegin(); it != computed.constEnd(); ++it) {
+			if (!m_staleFingerprints.contains(it.key())) {
+				m_fingerprints.insert(it.key(), it.value());
+			}
+		}
+	}
+	if (m_staleFingerprints.isEmpty()) {
+		return;
+	}
+	QSqlQuery query(m_database);
+	query.prepare("SELECT thumbnail FROM images WHERE key=?");
+	for (const QString &key : std::as_const(m_staleFingerprints)) {
+		m_fingerprints.remove(key);
+		query.addBindValue(key);
+		if (query.exec() && query.next()) {
+			const auto print = ImageFingerprint::fromImage(QImage::fromData(query.value(0).toByteArray()));
+			if (print.valid) {
+				m_fingerprints.insert(key, print);
+			}
+		}
+		query.finish();
+	}
+	m_staleFingerprints.clear();
+}
+
+QList<QStringList> LibraryStore::duplicateGroups()
+{
+	QList<QStringList> result;
+	const auto all = entries();
+	if (all.size() < 2) {
+		return result;
+	}
+	loadVisualIndex();
+	QVector<int> group(all.size());
+	std::iota(group.begin(), group.end(), 0);
+	std::function<int(int)> root = [&group, &root](int index) { return group[index] == index ? index : group[index] = root(group[index]); };
+	for (int i = 0; i < all.size(); ++i) {
+		const QString md5 = all[i].image.value("md5").toString().toLower();
+		const auto left = m_fingerprints.value(all[i].key);
+		for (int j = i + 1; j < all.size(); ++j) {
+			if ((!md5.isEmpty() && md5 == all[j].image.value("md5").toString().toLower()) || left.sameImage(m_fingerprints.value(all[j].key))) {
+				group[root(j)] = root(i);
+			}
+		}
+	}
+	// Keep the favorite, then the liked, curated or local copy, then the largest and the oldest.
+	const auto rank = [](const LibraryEntry &entry) {
+		const auto full = entry.image.value("sizes").toObject().value("full").toObject();
+		return std::make_tuple(entry.favorite, entry.liked, entry.collectionCount > 0 || !entry.notes.isEmpty(), !entry.localPaths.isEmpty(),
+			qint64(full.value("width").toInt()) * full.value("height").toInt());
+	};
+	QHash<int, QList<int>> clusters;
+	QList<int> order;
+	for (int i = 0; i < all.size(); ++i) {
+		const int cluster = root(i);
+		if (!clusters.contains(cluster)) {
+			order.append(cluster);
+		}
+		clusters[cluster].append(i);
+	}
+	for (const int cluster : order) {
+		auto members = clusters.value(cluster);
+		if (members.size() < 2) {
+			continue;
+		}
+		std::stable_sort(members.begin(), members.end(), [&](int left, int right) {
+			const auto a = rank(all[left]), b = rank(all[right]);
+			return a != b ? a > b : all[left].savedAt < all[right].savedAt;
+		});
+		QStringList keys;
+		for (const int member : members) {
+			keys.append(all[member].key);
+		}
+		result.append(keys);
+	}
+	return result;
+}
+
+bool LibraryStore::mergeImages(const QString &into, const QString &from)
+{
+	if (!m_ready || into == from || !contains(into) || !contains(from)) {
+		m_error = tr("The pictures to merge are no longer in the Library.");
+		return false;
+	}
+	if (!m_database.transaction()) {
+		m_error = m_database.lastError().text(); return false;
+	}
+	// The removed picture's source keeps pointing at the one kept, so it is never saved again as new.
+	const bool ok = mergeRows(into, from)
+		&& execute("INSERT INTO source_links(source_key,image_key) VALUES(?,?) ON CONFLICT(source_key) DO UPDATE SET image_key=excluded.image_key", { from, into });
+	if (!ok || !m_database.commit()) {
+		if (ok) {
+			m_error = m_database.lastError().text();
+		}
+		m_database.rollback(); return false;
+	}
+	emit imageChanged(from);
+	emit imageChanged(into);
+	emit collectionsChanged();
+	return true;
+}
+
+QStringList LibraryStore::unratedKeys()
+{
+	QStringList result;
+	QSqlQuery query(m_database);
+	if (!m_ready || !query.exec("SELECT key FROM images i WHERE liked=0 AND favorite=0 AND notes='' "
+		"AND NOT EXISTS(SELECT 1 FROM members WHERE image_key=i.key) AND NOT EXISTS(SELECT 1 FROM local_files WHERE image_key=i.key) ORDER BY saved_at DESC,key")) {
+		m_error = query.lastError().text();
+		return result;
+	}
+	while (query.next()) {
+		result.append(query.value(0).toString());
+	}
+	return result;
+}
+
 QString LibraryStore::keyForImage(const Image &image)
 {
 	const QString source = imageKey(image);
@@ -592,7 +844,21 @@ QString LibraryStore::keyForImage(const Image &image)
 	if (!query.exec()) {
 		m_error = query.lastError().text(); return {};
 	}
-	return query.next() ? query.value(0).toString() : source;
+	if (query.next()) {
+		return query.value(0).toString();
+	}
+	query.finish();
+	if (!image.md5().isEmpty() && !contains(source)) {
+		// The same file saved from another source is the same Library picture.
+		if (m_ratedDirty) {
+			loadRatedIndex();
+		}
+		const QString same = m_md5Keys.value(image.md5().toLower());
+		if (!same.isEmpty()) {
+			return same;
+		}
+	}
+	return source;
 }
 
 QString LibraryStore::saveLocalImage(const LibraryImportData &data, qint64 collection, const QString &expectedKey)
@@ -766,21 +1032,8 @@ bool LibraryStore::linkSource(const QString &key, const Image &image, const QStr
 	if (!m_database.transaction()) {
 		m_error = m_database.lastError().text(); return false;
 	}
-	bool ok = true;
-	if (other != key && contains(other)) {
-		ok = execute("UPDATE images SET liked=CASE WHEN max(favorite,(SELECT favorite FROM images WHERE key=?))=1 THEN 0 ELSE max(liked,(SELECT liked FROM images WHERE key=?)) END, "
-			"favorite=max(favorite,(SELECT favorite FROM images WHERE key=?)), "
-			"notes=CASE WHEN notes='' THEN (SELECT notes FROM images WHERE key=?) WHEN (SELECT notes FROM images WHERE key=?)='' OR notes=(SELECT notes FROM images WHERE key=?) THEN notes "
-			"ELSE notes || char(10) || (SELECT notes FROM images WHERE key=?) END WHERE key=?", {other, other, other, other, other, other, other, key})
-			&& execute("INSERT INTO members(image_key,collection_id,liked,favorite,notes) SELECT ?,collection_id,CASE WHEN favorite=1 THEN 0 ELSE liked END,favorite,notes FROM members WHERE image_key=? "
-			"ON CONFLICT(image_key,collection_id) DO UPDATE SET liked=CASE WHEN max(members.favorite,excluded.favorite)=1 THEN 0 ELSE max(members.liked,excluded.liked) END, "
-			"favorite=max(members.favorite,excluded.favorite), "
-			"notes=CASE WHEN members.notes='' THEN excluded.notes WHEN excluded.notes='' OR members.notes=excluded.notes THEN members.notes ELSE members.notes || char(10) || excluded.notes END", {key, other})
-			&& execute("UPDATE collections SET cover_key=? WHERE cover_key=?", {key, other})
-			&& execute("UPDATE local_files SET image_key=? WHERE image_key=?", {key, other})
-			&& execute("UPDATE source_links SET image_key=? WHERE image_key=?", {key, other})
-			&& execute("DELETE FROM images WHERE key=?", {other});
-	}
+	const bool merged = other != key && contains(other);
+	bool ok = !merged || mergeRows(key, other);
 	ok = ok && execute("UPDATE images SET metadata=?,updated_at=? WHERE key=?",
 		{QString::fromUtf8(QJsonDocument(metadata).toJson(QJsonDocument::Compact)), QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs), key})
 		&& execute("INSERT INTO source_links(source_key,image_key) VALUES(?,?) ON CONFLICT(source_key) DO UPDATE SET image_key=excluded.image_key", {source, key});
@@ -790,9 +1043,28 @@ bool LibraryStore::linkSource(const QString &key, const Image &image, const QStr
 		}
 		m_database.rollback(); return false;
 	}
+	if (merged) {
+		emit imageChanged(other);
+	}
 	emit imageChanged(QString());
 	emit collectionsChanged();
 	return true;
+}
+
+bool LibraryStore::mergeRows(const QString &key, const QString &other)
+{
+	return execute("UPDATE images SET liked=CASE WHEN max(favorite,(SELECT favorite FROM images WHERE key=?))=1 THEN 0 ELSE max(liked,(SELECT liked FROM images WHERE key=?)) END, "
+		"favorite=max(favorite,(SELECT favorite FROM images WHERE key=?)), "
+		"notes=CASE WHEN notes='' THEN (SELECT notes FROM images WHERE key=?) WHEN (SELECT notes FROM images WHERE key=?)='' OR notes=(SELECT notes FROM images WHERE key=?) THEN notes "
+		"ELSE notes || char(10) || (SELECT notes FROM images WHERE key=?) END WHERE key=?", {other, other, other, other, other, other, other, key})
+		&& execute("INSERT INTO members(image_key,collection_id,liked,favorite,notes) SELECT ?,collection_id,CASE WHEN favorite=1 THEN 0 ELSE liked END,favorite,notes FROM members WHERE image_key=? "
+		"ON CONFLICT(image_key,collection_id) DO UPDATE SET liked=CASE WHEN max(members.favorite,excluded.favorite)=1 THEN 0 ELSE max(members.liked,excluded.liked) END, "
+		"favorite=max(members.favorite,excluded.favorite), "
+		"notes=CASE WHEN members.notes='' THEN excluded.notes WHEN excluded.notes='' OR members.notes=excluded.notes THEN members.notes ELSE members.notes || char(10) || excluded.notes END", {key, other})
+		&& execute("UPDATE collections SET cover_key=? WHERE cover_key=?", {key, other})
+		&& execute("UPDATE local_files SET image_key=? WHERE image_key=?", {key, other})
+		&& execute("UPDATE source_links SET image_key=? WHERE image_key=?", {key, other})
+		&& execute("DELETE FROM images WHERE key=?", {other});
 }
 
 bool LibraryStore::backupTo(const QString &path)

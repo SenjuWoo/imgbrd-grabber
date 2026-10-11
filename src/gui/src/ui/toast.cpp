@@ -44,6 +44,22 @@ Toast *Toast::show(QWidget *parent, const QString &text, int milliseconds)
 	return toast;
 }
 
+Toast *Toast::show(QWidget *parent, const QString &text, const QString &actionText, const std::function<void()> &action, int milliseconds)
+{
+	Toast *toast = show(parent, text, milliseconds);
+	toast->setAttribute(Qt::WA_TransparentForMouseEvents, false);
+	toast->setTextFormat(Qt::RichText);
+	toast->setTextInteractionFlags(Qt::LinksAccessibleByMouse | Qt::LinksAccessibleByKeyboard);
+	toast->setText(text.toHtmlEscaped() + QStringLiteral(" &nbsp; <a href=\"action\" style=\"color:#8ab4ff\">%1</a>").arg(actionText.toHtmlEscaped()));
+	toast->place();
+	connect(toast, &QLabel::linkActivated, toast, [toast, action]() {
+		toast->hide();
+		toast->deleteLater();
+		action();
+	});
+	return toast;
+}
+
 void Toast::place()
 {
 	auto *parent = parentWidget();

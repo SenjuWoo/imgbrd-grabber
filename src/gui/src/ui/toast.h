@@ -2,6 +2,7 @@
 #define TOAST_H
 
 #include <QLabel>
+#include <functional>
 
 
 class QTimer;
@@ -13,6 +14,8 @@ class Toast : public QLabel
 
 	public:
 		static Toast *show(QWidget *parent, const QString &text, int milliseconds = 2400);
+		/** Toast with one clickable action, such as Undo, that runs `action` and closes the toast. */
+		static Toast *show(QWidget *parent, const QString &text, const QString &actionText, const std::function<void()> &action, int milliseconds = 6000);
 
 	protected:
 		bool eventFilter(QObject *watched, QEvent *event) override;

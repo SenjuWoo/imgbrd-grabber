@@ -83,3 +83,13 @@ bool ImageFingerprint::sameImage(const ImageFingerprint &other) const
 	const int shared = sharedGradients(*this, other);
 	return std::abs(std::log(aspect / other.aspect)) < 0.03 && shared >= 24 && structureDistance(other) * 20 <= shared && colorDistance(other) <= 24;
 }
+
+bool ImageFingerprint::similarImage(const ImageFingerprint &other) const
+{
+	if (!valid || !other.valid || aspect <= 0 || other.aspect <= 0) {
+		return false;
+	}
+	// Colors are ignored and a few gradients may differ; the layout must still match.
+	const int shared = sharedGradients(*this, other);
+	return std::abs(std::log(aspect / other.aspect)) < 0.05 && shared >= 24 && structureDistance(other) * 10 <= shared;
+}

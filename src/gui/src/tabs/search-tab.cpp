@@ -630,6 +630,16 @@ void SearchTab::finishedLoadingPreview()
 		return;
 	}
 
+	// Hide liked also hides re-encoded copies of liked pictures, which only their looks give away.
+	if (m_settings->value("hideLibraryRated", false).toBool() && !img->previewImage().isNull() && preview->container() != nullptr) {
+		const QString known = m_profile->library()->sameImageKey(*img, ImageFingerprint::fromImage(img->previewImage().toImage(), img->size()));
+		const auto entry = known.isEmpty() ? LibraryEntry() : m_profile->library()->entry(known);
+		if (entry.liked || entry.favorite) {
+			preview->container()->hide();
+			return;
+		}
+	}
+
 	// Merged results: the same picture re-uploaded elsewhere often has another checksum; compare appearance.
 	if (ui_checkMergeResults != nullptr && ui_checkMergeResults->isChecked() && !img->previewImage().isNull()) {
 		const auto fingerprint = ImageFingerprint::fromImage(img->previewImage().toImage(), img->size());

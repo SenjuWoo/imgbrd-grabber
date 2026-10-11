@@ -90,7 +90,7 @@ TEST_CASE("Library demo capture", "[.][library][demo]")
 	library.resize(1440, 860);
 	library.show();
 	auto *sidebar = library.findChild<QTreeWidget*>("librarySidebar");
-	sidebar->setCurrentItem(sidebar->topLevelItem(9)->child(0));
+	sidebar->setCurrentItem(sidebar->topLevelItem(10)->child(0));
 	QApplication::processEvents();
 	auto *grid = library.grid();
 	REQUIRE(grid->gridModel()->rowCount() == 18);

@@ -8,9 +8,11 @@
 #include <QSharedPointer>
 #include <atomic>
 #include <memory>
+#include "models/pixiv-artwork.h"
 
 class Image;
 class LibraryStore;
+class NetworkReply;
 class Page;
 class Profile;
 class QComboBox;
@@ -42,6 +44,10 @@ class LibrarySourceDialog : public QDialog
 		void clearCandidates();
 		void addCandidate(const QSharedPointer<Image> &image, const QByteArray &thumbnail, const QString &label, const QString &evidence);
 		void linkSelected();
+		void findOnPixiv();
+		void pixivDetailsLoaded(NetworkReply *reply);
+		void tryPixivFile();
+		void addPixivCandidate(const QUrl &file, const QString &md5, bool exact);
 		Profile *m_profile;
 		LibraryStore *m_store;
 		QString m_key;
@@ -51,6 +57,11 @@ class LibrarySourceDialog : public QDialog
 		QComboBox *m_hash;
 		QPushButton *m_lookup;
 		QPushButton *m_similar;
+		QPushButton *m_pixiv;
+		QPair<QString, int> m_pixivId;
+		PixivArtwork m_artwork;
+		QList<QUrl> m_pixivFiles;
+		QPointer<NetworkReply> m_pixivReply;
 		QPushButton *m_link;
 		QLabel *m_status;
 		QListWidget *m_results;

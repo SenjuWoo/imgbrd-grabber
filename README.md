@@ -10,6 +10,16 @@ An all-in-one image searcher, downloader and personal picture Library. Search do
 
 *Discover with generated demo artwork. Pictures stay clean until you select one; then ♥ Like, ★ Favorite, Download and Not interested appear on it.*
 
+## What's new in 7.19
+
+- **Your Library never comes back in Discover.** Pictures you already have are recognised by source, by file and by look, so copies from other sites, re-encodes and barely different variants stay out of the feed. A feed also shows only one picture of a set of variants.
+- **No more duplicate Library entries.** Liking a copy of a picture you already have (another site, same file or same look) rates the one you have and remembers the new source. **Possible duplicates** gets **Merge all duplicates**, and **Merge into one picture** works on any selection.
+- **Un-liking asks before keeping clutter.** When a picture is no longer liked, favorited, collected or annotated, Grabber offers to remove it from Library (you can make it remember). A **Not rated** view lists leftovers with **Remove all**.
+- **Tell Discover what you are not into.** The ✕ button asks: hide just this picture, show less of one of its tags, or never show a tag again. **X** hides at once with **Undo**, and **Hidden pictures** brings back anything hidden by mistake.
+- **Tune taste.** See what Discover learned and how it picks: strength of each tag, how many of your pictures carry it and how often its searches got rated. Set any tag to More, Less or Never, add **today's focus** tags, and choose **Familiar**, **Balanced** or **Adventurous**. Tooltips say why a picture was picked.
+- **Find on Pixiv.** Find source reads a Pixiv file name (`123456_p5.jpg`), checks the artwork's public page and compares the original file byte for byte. No login needed.
+- **Fixes.** Danbooru works again (its servers started refusing Grabber's old browser-style User-Agent, which broke listings and full-size files). Discover no longer trips rule34.xxx rate limits: it samples only sources it still needs to learn and sends at most two requests per source per batch.
+
 ## What's new in 7.18
 
 - **Discover is the home page.** An endless, personal feed of *new* pictures from your selected sources. It searches with the real tags of what you like, favorites count three times as much as likes, recent ratings count a bit more, and every like, favorite or "Not interested" changes what comes next. Results stream in source by source and keep loading as you scroll.
@@ -27,7 +37,9 @@ Open **Discover** (it is also where Grabber starts). Like ♥ or favorite ★ an
 
 - Queries come from your actual saved tags, weighted by how often and how strongly you rated them, and paired with tags that appear together in your favorites so searches stay specific. Overly common tags (like `1girl` or `highres`) are down-weighted.
 - Each source's results are filtered (blacklist, already rated, already shown, hidden), de-duplicated by checksum and by appearance, ranked, and streamed in. Only the best share reaches the screen.
-- **Not interested** (✕ or **X**) hides a picture for good and gently steers away from its tags. *⋯ → Show hidden pictures again* resets this.
+- Pictures already in your Library never show up: not the same post, not the same file from another site and not the same picture re-encoded or slightly edited. One picture of each set of variants is shown.
+- **Not interested** (✕) asks what is wrong: hide only this picture, show less of one of its tags, or never show a tag. **X** hides at once; the toast has **Undo**, and *⋯ → Hidden pictures* restores any hidden picture later.
+- **Tune taste** shows what Discover learned, how strongly, and how well each search worked. Set tags to More, Less or Never, add today's focus tags, and choose Familiar, Balanced or Adventurous. Hover a picture to see which of your tastes it matches.
 - Choose **Everything I love** or a single collection's taste. Collections keep their own likes and favorites.
 - With no ratings yet, Discover shows fresh posts from your sources until you rate a few.
 
@@ -102,6 +114,16 @@ npm test -- --runInBand
 ```
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
+
+## Changes in 7.19.0
+
+- Recognise Library pictures in Discover by source link, file checksum and a background visual index of Library thumbnails; skip variants within a feed and of Library pictures.
+- Join copies of Library pictures on save (same checksum, or same look for pictures saved from a site) as source links instead of new entries; resolve same-checksum copies everywhere ratings are shown. Add duplicate groups with a best-copy choice, **Merge all duplicates**, **Merge into one picture**, a **Not rated** view and an opt-out prompt to remove pictures that are no longer rated.
+- Discover: per-tag More/Less/Never, today's focus, variety, "Matches your taste" tooltips, a **Tune taste** dialog with learned strengths and search hit rates, a **Not interested** menu with tag choices, quick hide with Undo, and restorable hidden pictures (kept with their details in `discover.json`).
+- Search **Hide liked** also hides re-encoded copies of liked pictures.
+- **Find on Pixiv** in Find source: artwork ID from file names or URLs, public artwork details without login, original file compared by MD5.
+- Danbooru: use a plain `Grabber/<version>` User-Agent; the Firefox-style one is now refused (HTTP 403) for listings and files.
+- Discover samples newest posts only on sources it still needs to learn and sends at most two page requests per source per batch, avoiding rule34.xxx HTTP 429.
 
 ## Changes in 7.18.0
 

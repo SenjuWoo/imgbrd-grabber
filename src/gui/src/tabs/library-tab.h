@@ -32,7 +32,7 @@ class LibraryTab : public QWidget
 	Q_OBJECT
 
 	public:
-		enum SmartView { AllPictures, Unsorted, Liked, Favorites, RecentlySaved, NeedsTags, NeedsSource, MetadataErrors, Duplicates };
+		enum SmartView { AllPictures, Unsorted, Liked, Favorites, RecentlySaved, NeedsTags, NeedsSource, MetadataErrors, Duplicates, NotRated };
 
 		LibraryTab(Profile *profile, MainWindow *parent, DownloadQueue *downloadQueue = nullptr);
 		~LibraryTab() override;
@@ -67,7 +67,7 @@ class LibraryTab : public QWidget
 		void download(const QStringList &keys);
 		void saveToFolder(const QStringList &keys);
 		void removeFromLibrary(const QStringList &keys);
-		QStringList duplicateKeys(const QList<LibraryEntry> &entries) const;
+		void mergeGroups(const QList<QStringList> &groups);
 		QSharedPointer<Image> restoreImage(const LibraryEntry &entry);
 		Profile *m_profile;
 		MainWindow *m_mainWindow;
@@ -85,6 +85,7 @@ class LibraryTab : public QWidget
 		QLabel *m_title;
 		QLabel *m_count;
 		QLabel *m_hint;
+		QPushButton *m_viewAction;
 		QLabel *m_empty;
 		QStackedWidget *m_stack;
 		QFrame *m_selectionBar;

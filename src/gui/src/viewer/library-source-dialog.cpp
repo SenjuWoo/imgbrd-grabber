@@ -1,5 +1,7 @@
 #include "viewer/library-source-dialog.h"
 #include <QComboBox>
+#include <QCryptographicHash>
+#include <QFileInfo>
 #include <QDesktopServices>
 #include <QDialogButtonBox>
 #include <QFutureWatcher>
@@ -26,6 +28,8 @@
 #include "models/profile.h"
 #include "models/search-query/search-query.h"
 #include "models/site.h"
+#include "network/network-reply.h"
+#include "tags/tag.h"
 
 
 LibrarySourceDialog::LibrarySourceDialog(Profile *profile, const QString &key, QWidget *parent)
@@ -109,6 +113,26 @@ LibrarySourceDialog::LibrarySourceDialog(Profile *profile, const QString &key, Q
 	m_similar->setEnabled(m_store->isReady() && !entry.key.isEmpty());
 	layout->addWidget(m_similar);
 	connect(m_similar, &QPushButton::clicked, this, &LibrarySourceDialog::findSimilar);
+	// Pixiv names its files "<artwork>_p<page>"; the artwork's public page then gives the original file to compare.
+	QStringList names = entry.localPaths;
+	for (const auto &value : m_local.value("source_urls").toArray()) {
+		names.append(value.toString());
+	}
+	names.append(entry.image.value("name").toString());
+	for (const QString &name : names) {
+		const auto id = PixivArtwork::idFrom(name.contains("pixiv") ? name : QFileInfo(name).fileName());
+		if (!id.first.isEmpty()) {
+			m_pixivId = id;
+			break;
+		}
+	}
+	m_pixiv = new QPushButton(tr("Find on Pixiv (artwork #%1, page %2)").arg(m_pixivId.first).arg(m_pixivId.second + 1), this);
+	m_pixiv->setObjectName("librarySourcePixiv");
+	m_pixiv->setToolTip(tr("Reads the artwork's public Pixiv page and compares the original file with yours. No login needed; nothing is uploaded."));
+	m_pixiv->setVisible(!m_pixivId.first.isEmpty());
+	m_pixiv->setEnabled(m_store->isReady() && !entry.key.isEmpty());
+	layout->addWidget(m_pixiv);
+	connect(m_pixiv, &QPushButton::clicked, this, &LibrarySourceDialog::findOnPixiv);
 	m_status = new QLabel(tr("Exact lookup sends only the selected MD5 hash to the selected source. Similarity search stays on this PC."), this);
 	m_status->setObjectName("librarySourceStatus");
 	m_status->setTextFormat(Qt::PlainText);
@@ -199,6 +223,13 @@ void LibrarySourceDialog::exactLookup()
 void LibrarySourceDialog::cancelLookup()
 {
 	m_timeout->stop();
+	if (m_pixivReply) {
+		disconnect(m_pixivReply, nullptr, this, nullptr);
+		m_pixivReply->abort();
+		m_pixivReply->deleteLater();
+		m_pixivReply.clear();
+	}
+	m_pixiv->setEnabled(true);
 	if (m_cancelVisual) {
 		m_cancelVisual->store(true);
 		m_cancelVisual.reset();
@@ -227,7 +258,9 @@ void LibrarySourceDialog::showExactResults(Page *page, const QString &hash)
 			image->write(metadata);
 			auto candidate = QSharedPointer<Image>::create(m_profile);
 			if (candidate->read(metadata, m_profile->getSites())) {
-				addCandidate(candidate, m_store->entry(m_store->keyForImage(*candidate)).thumbnail, tr("Exact MD5 match — review before linking"), "User confirmed exact-md5:" + hash);
+				// Same file: the key may resolve to this very picture, whose imported pixels must not pose as the source's.
+				const QString known = m_store->keyForImage(*candidate);
+				addCandidate(candidate, known == m_key ? QByteArray() : m_store->entry(known).thumbnail, tr("Exact MD5 match — review before linking"), "User confirmed exact-md5:" + hash);
 			}
 		}
 	}
@@ -309,6 +342,110 @@ void LibrarySourceDialog::findSimilar()
 	}));
 }
 
+void LibrarySourceDialog::findOnPixiv()
+{
+	Site *site = m_profile->getSites().value("www.pixiv.net");
+	if (site == nullptr) {
+		m_status->setText(tr("Add the Pixiv source (www.pixiv.net) to your sources first."));
+		return;
+	}
+	cancelLookup();
+	clearCandidates();
+	m_pixiv->setEnabled(false);
+	m_status->setText(tr("Asking Pixiv about artwork #%1…").arg(m_pixivId.first));
+	PixivArtwork artwork;
+	artwork.id = m_pixivId.first;
+	m_pixivReply = site->get(artwork.detailsUrl(), Site::QueryType::Details, artwork.pageUrl(), "page");
+	connect(m_pixivReply, &NetworkReply::finished, this, [this, reply = m_pixivReply.data()]() { pixivDetailsLoaded(reply); });
+	m_timeout->start(30000);
+}
+
+void LibrarySourceDialog::pixivDetailsLoaded(NetworkReply *reply)
+{
+	if (reply != m_pixivReply) {
+		return;
+	}
+	m_pixivReply.clear();
+	reply->deleteLater();
+	QString error;
+	m_artwork = reply->error() == NetworkReply::NetworkError::NoError
+		? PixivArtwork::fromDetails(reply->readAll(), m_pixivId.first, m_pixivId.second, &error)
+		: PixivArtwork();
+	if (!m_artwork.isValid()) {
+		cancelLookup();
+		m_status->setText(tr("Pixiv lookup failed: %1").arg(error.isEmpty() ? reply->errorString() : error));
+		return;
+	}
+	m_pixivFiles = m_artwork.originalCandidates();
+	tryPixivFile();
+}
+
+void LibrarySourceDialog::tryPixivFile()
+{
+	Site *site = m_profile->getSites().value("www.pixiv.net");
+	if (site == nullptr || m_pixivFiles.isEmpty()) {
+		cancelLookup();
+		addPixivCandidate(m_artwork.sampleUrl(), {}, false);
+		m_status->setText(tr("Found the Pixiv artwork, but could not download its original file to compare. Review it before linking."));
+		return;
+	}
+	m_status->setText(tr("Comparing your file with Pixiv's original…"));
+	const QUrl url = m_pixivFiles.takeFirst();
+	m_pixivReply = site->get(url, Site::QueryType::Img, m_artwork.pageUrl(), "image");
+	connect(m_pixivReply, &NetworkReply::finished, this, [this, url, reply = m_pixivReply.data()]() {
+		if (reply != m_pixivReply) {
+			return;
+		}
+		m_pixivReply.clear();
+		reply->deleteLater();
+		if (reply->error() != NetworkReply::NetworkError::NoError) {
+			tryPixivFile(); // Wrong extension guess: try the next one.
+			return;
+		}
+		const QString md5 = QString::fromLatin1(QCryptographicHash::hash(reply->readAll(), QCryptographicHash::Md5).toHex());
+		const QString local = m_local.value("md5").toString().toLower();
+		cancelLookup();
+		addPixivCandidate(url, md5, md5 == local);
+		m_status->setText(md5 == local ? tr("Pixiv's original file is byte-for-byte your file. Review it, then link it.")
+			: tr("Found the Pixiv artwork, but its original file differs from yours (edited or re-saved). Review it before linking."));
+	});
+}
+
+void LibrarySourceDialog::addPixivCandidate(const QUrl &file, const QString &md5, bool exact)
+{
+	Site *site = m_profile->getSites().value("www.pixiv.net");
+	if (site == nullptr) {
+		return;
+	}
+	QString name = m_artwork.title;
+	if (m_artwork.pageCount > 1) {
+		name += ' ' + tr("(page %1 of %2)").arg(m_artwork.page + 1).arg(m_artwork.pageCount);
+	}
+	QMap<QString, QString> details {
+		{"id", m_artwork.id}, {"file_url", file.toString()}, {"sample_url", m_artwork.sampleUrl().toString()},
+		{"preview_url", m_artwork.thumbnailUrl().toString()}, {"page_url", m_artwork.pageUrl().toString()}, {"name", name},
+	};
+	if (!md5.isEmpty()) {
+		details.insert("md5", md5);
+	}
+	if (m_artwork.page == 0 && m_artwork.firstPageSize.isValid()) {
+		details.insert("width", QString::number(m_artwork.firstPageSize.width()));
+		details.insert("height", QString::number(m_artwork.firstPageSize.height()));
+	}
+	QList<Tag> tags;
+	if (!m_artwork.author.isEmpty()) {
+		tags.append(Tag(QString(m_artwork.author).replace(' ', '_'), "artist"));
+	}
+	for (const QString &tag : m_artwork.tags) {
+		tags.append(Tag(tag, "general"));
+	}
+	// Each page of an artwork is its own Library picture.
+	const QVariantMap identity {{"id", m_artwork.id}, {"page", m_artwork.page}};
+	auto image = QSharedPointer<Image>::create(site, details, identity, QVariantMap {{"tags", QVariant::fromValue(tags)}}, m_profile);
+	addCandidate(image, m_thumbnail, exact ? tr("Exact file match on Pixiv — review before linking") : tr("Same Pixiv artwork, file not identical — review before linking"),
+		exact ? "User confirmed exact-md5:" + md5 : "User confirmed pixiv-artwork-from-file-name:" + m_artwork.id + "_p" + QString::number(m_artwork.page));
+}
+
 void LibrarySourceDialog::linkSelected()
 {
 	const int row = m_results->currentRow();
@@ -316,7 +453,10 @@ void LibrarySourceDialog::linkSelected()
 		return;
 	}
 	const auto candidate = m_candidates[row];
-	const QString text = tr("Link this picture to %1, picture #%2?\n\nYour local file stays on disk. Library preferences and collection membership are preserved.\n\n%3").arg(candidate.image->parentSite()->url()).arg(candidate.image->id()).arg(candidate.evidence.contains("visual-candidate:") ? tr("This visual suggestion has not been verified as an exact match.") : tr("The source reports the selected MD5 hash."));
+	const QString evidence = candidate.evidence.contains("visual-candidate:") ? tr("This visual suggestion has not been verified as an exact match.")
+		: candidate.evidence.contains("pixiv-artwork-from-file-name:") ? tr("The artwork ID comes from the file name; the files are not identical.")
+		: tr("The source reports the selected MD5 hash.");
+	const QString text = tr("Link this picture to %1, picture #%2?\n\nYour local file stays on disk. Library preferences and collection membership are preserved.\n\n%3").arg(candidate.image->parentSite()->url()).arg(candidate.image->id()).arg(evidence);
 	if (QMessageBox::question(this, tr("Confirm source link"), text, QMessageBox::Yes | QMessageBox::No, QMessageBox::No) != QMessageBox::Yes) {
 		return;
 	}

@@ -45,7 +45,7 @@ TEST_CASE("Asynchronous folder import keeps the UI and collection preferences us
 	library.resize(1180, 740);
 	library.show();
 	auto *sidebar = library.findChild<QTreeWidget*>("librarySidebar");
-	sidebar->setCurrentItem(sidebar->topLevelItem(9)->child(0));
+	sidebar->setCurrentItem(sidebar->topLevelItem(10)->child(0));
 	QApplication::processEvents();
 	int added = -1, duplicates = -1, failed = -1;
 	QObject::connect(&library, &LibraryTab::importFinished, [&](int a, int d, int f) { added = a; duplicates = d; failed = f; });

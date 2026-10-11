@@ -22,6 +22,8 @@ struct ImageFingerprint
 	int structureDistance(const ImageFingerprint &other) const;
 	int colorDistance(const ImageFingerprint &other) const;
 	bool sameImage(const ImageFingerprint &other) const;
+	/** Same composition: the same picture or a variant of it (other colors, small edits, added text). */
+	bool similarImage(const ImageFingerprint &other) const;
 };
 
 #endif // IMAGE_FINGERPRINT_H

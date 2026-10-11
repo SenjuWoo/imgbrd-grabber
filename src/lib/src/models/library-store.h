@@ -2,12 +2,15 @@
 #define LIBRARY_STORE_H
 
 #include <QByteArray>
+#include <QFuture>
+#include <QHash>
 #include <QJsonObject>
 #include <QObject>
 #include <QSet>
 #include <QSqlDatabase>
 #include <QVariant>
 #include <QStringList>
+#include "utils/image-fingerprint.h"
 
 class Image;
 struct LibraryImportData;
@@ -67,6 +70,22 @@ class LibraryStore : public QObject
 		bool contains(const QString &key, qint64 collection = 0);
 		/** Whether this picture, or the same file from another source, is liked or favorited in any scope. */
 		bool isRated(const Image &image);
+		/** Whether this picture, a source linked to a Library picture or the same file is in the Library, rated or not. */
+		bool isKnown(const Image &image);
+		/**
+		 * Library picture that shows the same image: a linked source, the same file, or with a valid fingerprint
+		 * the same picture by appearance (a re-encoded copy from another source). Empty when there is none.
+		 * With `variants`, pictures that only differ in colors or small edits count as the same.
+		 */
+		QString sameImageKey(const Image &image, const ImageFingerprint &fingerprint = {}, bool variants = false);
+		/** Starts computing the visual index in the background so the first visual check does not stall. */
+		void prepareVisualIndex();
+		/** Moves ratings, notes, collections, local files and source links of `from` onto `into`, then removes `from`. */
+		bool mergeImages(const QString &into, const QString &from);
+		/** Pictures that are the same file or the same picture by appearance, grouped; the one to keep comes first. */
+		QList<QStringList> duplicateGroups();
+		/** Pictures neither liked nor favorited in any scope, in no collection, without notes or local files. */
+		QStringList unratedKeys();
 
 	signals:
 		void imageChanged(const QString &key);
@@ -78,9 +97,17 @@ class LibraryStore : public QObject
 		QString storedPath(const QString &path) const;
 		QString resolvedPath(const QString &path) const;
 		void loadRatedIndex();
+		bool mergeRows(const QString &into, const QString &from);
+		void loadVisualIndex();
 		QSet<QString> m_ratedKeys;
 		QSet<QString> m_ratedMd5s;
+		QSet<QString> m_knownKeys;
+		QHash<QString, QString> m_md5Keys;
 		bool m_ratedDirty = true;
+		QHash<QString, ImageFingerprint> m_fingerprints;
+		QSet<QString> m_staleFingerprints;
+		QFuture<QHash<QString, ImageFingerprint>> m_visualJob;
+		bool m_visualLoaded = false;
 		QString m_directory;
 		QString m_connection;
 		QSqlDatabase m_database;

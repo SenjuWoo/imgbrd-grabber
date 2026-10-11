@@ -5,7 +5,9 @@
 #include <QDateTime>
 #include <QDesktopServices>
 #include <QFrame>
+#include <QCursor>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
 #include <QProgressBar>
@@ -16,6 +18,7 @@
 #include <QTimer>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include "discover-dialogs.h"
 #include "discovery-feed.h"
 #include "main-window.h"
 #include "models/image.h"
@@ -75,6 +78,9 @@ HomeTab::HomeTab(Profile *profile, MainWindow *parent, DownloadQueue *downloadQu
 	m_scope->setAccessibleName(tr("Taste to discover with"));
 	m_scope->setToolTip(tr("Use every like and favorite, or only one collection's taste."));
 	m_scope->setMinimumWidth(170);
+	m_tune = new QPushButton(tr("Tune taste"), this);
+	m_tune->setObjectName("homeTune");
+	m_tune->setToolTip(tr("See what Discover learned and how it picks pictures; set today's focus, variety and tags you want more or less of"));
 	m_refresh = new QPushButton(tr("↻  Refresh"), this);
 	m_refresh->setObjectName("homeRefresh");
 	m_refresh->setToolTip(tr("Start a fresh feed with new topics (F5)"));
@@ -85,7 +91,7 @@ HomeTab::HomeTab(Profile *profile, MainWindow *parent, DownloadQueue *downloadQu
 	m_more->setToolTip(tr("Discover options"));
 	m_more->setAccessibleName(tr("Discover options"));
 	m_more->setPopupMode(QToolButton::InstantPopup);
-	for (QWidget *widget : {static_cast<QWidget*>(m_scope), static_cast<QWidget*>(m_refresh), static_cast<QWidget*>(m_more)}) {
+	for (QWidget *widget : {static_cast<QWidget*>(m_scope), static_cast<QWidget*>(m_tune), static_cast<QWidget*>(m_refresh), static_cast<QWidget*>(m_more)}) {
 		header->addWidget(widget, 0, Qt::AlignVCenter);
 	}
 	layout->addLayout(header);
@@ -160,7 +166,7 @@ HomeTab::HomeTab(Profile *profile, MainWindow *parent, DownloadQueue *downloadQu
 		"#pageTitle { font-size: 22pt; font-weight: 700; }"
 		"#pageSubtitle, #homeStatus { color: %1; }"
 		"#homeEmpty { font-size: 12pt; color: %1; }"
-		"#homeRefresh, #homeMore, #homeChips QPushButton { border-radius: 15px; padding: 6px 14px; }"
+		"#homeRefresh, #homeTune, #homeMore, #homeChips QPushButton { border-radius: 15px; padding: 6px 14px; }"
 		"#homeChips QPushButton { padding: 4px 12px; }"
 		"#homeAiBanner { border-radius: 12px; background: rgba(%2, %3, %4, 30); border: 1px solid rgba(%2, %3, %4, 90); }"
 		"#homeAiIcon { font-size: 16pt; background: transparent; }"
@@ -200,15 +206,14 @@ HomeTab::HomeTab(Profile *profile, MainWindow *parent, DownloadQueue *downloadQu
 			menu->addAction(tr("Update visual index (%n picture(s))", "", m_recommendations->indexedCount()), m_recommendations, &LibraryRecommendations::startIndexing)->setEnabled(!m_recommendations->busy());
 		}
 		menu->addSeparator();
-		menu->addAction(tr("Show hidden pictures again (%1)").arg(m_feed->dismissedCount()), this, [this]() {
-			m_feed->resetDismissed();
-			Toast::show(this, tr("Hidden pictures can appear again."));
-		})->setEnabled(m_feed->dismissedCount() > 0);
+		menu->addAction(tr("Tune taste…"), this, &HomeTab::tuneTaste);
+		menu->addAction(tr("Hidden pictures (%1)…").arg(m_feed->dismissedCount()), this, &HomeTab::showHidden)->setEnabled(m_feed->dismissedCount() > 0);
 		menu->addAction(tr("Open Library"), this, [this]() { emit libraryRequested(m_feed->scope(), 0); });
 	});
 	m_more->setMenu(menu);
 
 	connect(m_refresh, &QPushButton::clicked, this, &HomeTab::refresh);
+	connect(m_tune, &QPushButton::clicked, this, &HomeTab::tuneTaste);
 	connect(m_scope, &QComboBox::currentIndexChanged, this, [this]() {
 		const qint64 scope = m_scope->currentData().toLongLong();
 		m_profile->getSettings()->setValue("Home/collection", scope);
@@ -337,6 +342,13 @@ void HomeTab::updateHeader()
 	if (m_feed->visualActive()) {
 		text += tr(" · smart visual matching on");
 	}
+	const auto &tuning = m_feed->tuning();
+	if (!tuning.focus.isEmpty()) {
+		text += tr(" · focus: %1").arg(tuning.focus.join(", "));
+	}
+	if (tuning.variety != TasteTuning::Balanced) {
+		text += tuning.variety == TasteTuning::Familiar ? tr(" · familiar picks") : tr(" · adventurous picks");
+	}
 	m_subtitle->setText(text + tr(" · favorites count 3× more"));
 }
 
@@ -430,6 +442,9 @@ void HomeTab::addItems(const QList<DiscoveryItem> &items)
 		tile.shownAt = now;
 		tile.title = pictureTitle(item.image);
 		QStringList details {tile.title, item.reason};
+		if (!item.matches.isEmpty()) {
+			details.append(tr("Matches your taste: %1").arg(item.matches.join(", ")));
+		}
 		if (item.visual) {
 			details.append(tr("Looks like pictures you love"));
 		}
@@ -479,11 +494,7 @@ void HomeTab::rate(const QString &key, bool favorite)
 		return;
 	}
 	if (!on && scope == 0) {
-		// Un-rating a picture that only entered the Library through Discover leaves no trace.
-		const auto entry = m_store->entry(saved);
-		if (!entry.liked && !entry.favorite && entry.collectionCount == 0 && entry.notes.isEmpty() && entry.localPaths.isEmpty()) {
-			m_store->removeImage(saved);
-		}
+		PictureActions::offerRemoval(m_profile, {saved}, this);
 	}
 	const auto entry = m_store->entry(saved, scope);
 	m_grid->gridModel()->setRating(key, entry.liked, entry.favorite);
@@ -519,13 +530,17 @@ void HomeTab::triggerAction(ImageGridView::Action action, const QStringList &key
 			PictureActions::download(m_profile, m_downloadQueue, images, this);
 			break;
 		}
-		case ImageGridView::Hide:
-			for (const auto &key : keys) {
-				m_feed->dismiss(key);
-				m_grid->gridModel()->remove(key);
+		case ImageGridView::Hide: {
+			// The X key hides at once (Undo in the toast); the tile button asks what is not interesting.
+			if (m_grid->keyboardAction()) {
+				notInterested(keys, {}, false);
+				break;
 			}
-			Toast::show(this, tr("Hidden. You'll see fewer pictures like this."));
+			QMenu menu(this);
+			fillNotInterested(&menu, keys);
+			menu.exec(QCursor::pos());
 			break;
+		}
 	}
 }
 
@@ -603,6 +618,93 @@ void HomeTab::showMenu(const QStringList &keys, const QPoint &position)
 		}
 	}
 	menu.addSeparator();
-	menu.addAction(tr("Not interested"), this, [this, keys]() { triggerAction(ImageGridView::Hide, keys); });
+	fillNotInterested(menu.addMenu(tr("Not interested")), keys);
 	menu.exec(position);
+}
+
+void HomeTab::fillNotInterested(QMenu *menu, const QStringList &keys)
+{
+	menu->addAction(keys.size() == 1 ? tr("Hide this picture") : tr("Hide these %n pictures", "", int(keys.size())), this, [this, keys]() { notInterested(keys, {}, false); });
+	const auto image = m_feed->image(keys.value(0));
+	if (!image) {
+		return;
+	}
+	// The tags that made Discover pick it, then who drew it and what it shows.
+	QStringList choices = m_feed->taste().matches(image->tagsString(), 6);
+	for (const auto &tag : image->tags()) {
+		const QString type = tag.type().name();
+		const QString name = TasteProfile::normalize(tag.text());
+		if ((type == QLatin1String("artist") || type == QLatin1String("character") || type == QLatin1String("copyright")) && !choices.contains(name) && choices.size() < 9) {
+			choices.append(name);
+		}
+	}
+	QStringList all;
+	for (const QString &tag : image->tagsString()) {
+		const QString name = TasteProfile::normalize(tag);
+		if (!name.isEmpty() && !TasteProfile::isMetaTag(name)) {
+			all.append(name);
+		}
+	}
+	if (choices.isEmpty()) {
+		choices = all.mid(0, 6);
+	}
+	menu->addSection(tr("Show less of…"));
+	for (const QString &tag : choices) {
+		menu->addAction(QString(tag).replace('_', ' '), this, [this, keys, tag]() { notInterested(keys, {tag}, false); });
+	}
+	auto *never = menu->addMenu(tr("Never show…"));
+	for (const QString &tag : choices) {
+		never->addAction(QString(tag).replace('_', ' '), this, [this, keys, tag]() { notInterested(keys, {tag}, true); });
+	}
+	menu->addAction(tr("Another tag…"), this, [this, keys, all]() {
+		bool ok = false;
+		const QString tag = QInputDialog::getItem(this, tr("Not interested"), tr("Show less of this tag:"), all, 0, true, &ok).trimmed();
+		if (ok && !tag.isEmpty()) {
+			notInterested(keys, {tag}, false);
+		}
+	});
+}
+
+void HomeTab::notInterested(const QStringList &keys, const QStringList &tags, bool never)
+{
+	const TasteTuning previous = m_feed->tuning();
+	QList<QPair<int, ImageGridItem>> removed;
+	for (const auto &key : keys) {
+		const int row = m_grid->gridModel()->row(key);
+		if (row >= 0) {
+			removed.append({row, m_grid->gridModel()->item(row)});
+		}
+		m_feed->dismiss(key, tags, never);
+		m_grid->gridModel()->remove(key);
+	}
+	const QString what = tags.isEmpty() ? tr("Hidden. You'll see fewer pictures like this.")
+		: never ? tr("Hidden. You won't see %1 again.").arg(tags.join(", ")) : tr("Hidden. You'll see less %1.").arg(tags.join(", "));
+	Toast::show(this, what, tr("Undo"), [this, keys, removed, previous]() {
+		m_feed->restore(keys);
+		m_feed->setTuning(previous);
+		for (const auto &entry : removed) {
+			m_grid->gridModel()->insert(entry.first, entry.second);
+		}
+		m_stack->setCurrentWidget(m_grid);
+	});
+}
+
+void HomeTab::tuneTaste()
+{
+	DiscoverTasteDialog dialog(m_feed, this);
+	if (dialog.exec() != QDialog::Accepted) {
+		return;
+	}
+	m_feed->setTuning(dialog.tuning());
+	refresh();
+	Toast::show(this, tr("Discover is following your new settings."));
+}
+
+void HomeTab::showHidden()
+{
+	DiscoverHiddenDialog dialog(m_feed, this);
+	dialog.exec();
+	if (dialog.restoredCount() > 0) {
+		Toast::show(this, tr("%n picture(s) can show up again.", "", dialog.restoredCount()));
+	}
 }

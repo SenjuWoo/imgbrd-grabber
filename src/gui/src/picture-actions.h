@@ -2,6 +2,7 @@
 #define PICTURE_ACTIONS_H
 
 #include <QList>
+#include <QStringList>
 #include <QSharedPointer>
 #include <QString>
 
@@ -23,6 +24,12 @@ namespace PictureActions
 	 * Returns whether the rating is now on; `ok` reports storage errors.
 	 */
 	bool toggleRating(LibraryStore *store, const QString &key, qint64 scope, bool favorite, bool *ok = nullptr);
+
+	/**
+	 * After un-rating, offers to remove the pictures that are no longer liked, favorited, collected or annotated.
+	 * Asks without blocking unless "Library/removeUnrated" remembers an answer (1 remove, 2 keep).
+	 */
+	void offerRemoval(Profile *profile, const QStringList &keys, QWidget *parent);
 }
 
 #endif // PICTURE_ACTIONS_H

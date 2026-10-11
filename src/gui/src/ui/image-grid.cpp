@@ -213,6 +213,18 @@ void ImageGridModel::setRating(const QString &key, bool liked, bool favorite)
 	emit dataChanged(index(position), index(position), {LikedRole, FavoriteRole});
 }
 
+void ImageGridModel::insert(int position, const ImageGridItem &item)
+{
+	if (item.key.isEmpty() || m_rows.contains(item.key)) {
+		return;
+	}
+	position = std::clamp(position, 0, int(m_items.size()));
+	beginInsertRows({}, position, position);
+	m_items.insert(position, item);
+	reindex(position);
+	endInsertRows();
+}
+
 void ImageGridModel::remove(const QString &key)
 {
 	const int position = row(key);
@@ -604,7 +616,9 @@ void ImageGridView::keyPressEvent(QKeyEvent *event)
 		const QHash<int, Action> shortcuts {{Qt::Key_L, Like}, {Qt::Key_F, Favorite}, {Qt::Key_D, Download}, {Qt::Key_X, Hide}, {Qt::Key_Delete, Hide}};
 		const auto it = shortcuts.constFind(event->key());
 		if (it != shortcuts.cend() && m_actions.contains(*it)) {
+			m_keyboardAction = true;
 			emit actionTriggered(*it, keys);
+			m_keyboardAction = false;
 			return;
 		}
 	}

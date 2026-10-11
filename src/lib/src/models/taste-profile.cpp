@@ -4,6 +4,7 @@
 #include <QJsonObject>
 #include <QRandomGenerator>
 #include <algorithm>
+#include <array>
 #include <functional>
 #include <cmath>
 
@@ -298,9 +299,81 @@ bool TasteProfile::isMetaTag(const QString &name, const QString &type)
 		|| name.startsWith(QLatin1String("rating:"));
 }
 
-TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash<QString, double> &dislikedTags, const QDateTime &now, const TagBackground &background)
+bool TasteTuning::isNeutral() const
+{
+	return tags.isEmpty() && focus.isEmpty() && variety == Balanced;
+}
+
+QJsonObject TasteTuning::toJson() const
+{
+	QJsonObject preferences;
+	for (auto it = tags.constBegin(); it != tags.constEnd(); ++it) {
+		preferences.insert(it.key(), it.value());
+	}
+	return {{"tags", preferences}, {"focus", QJsonArray::fromStringList(focus)}, {"variety", variety}};
+}
+
+TasteTuning TasteTuning::fromJson(const QJsonObject &json)
+{
+	TasteTuning tuning;
+	const auto preferences = json.value("tags").toObject();
+	for (auto it = preferences.constBegin(); it != preferences.constEnd(); ++it) {
+		const QString name = TasteProfile::normalize(it.key());
+		const int value = it.value().toInt();
+		if (!name.isEmpty() && (value == Never || value == Less || value == More)) {
+			tuning.tags.insert(name, value);
+		}
+	}
+	for (const auto &value : json.value("focus").toArray()) {
+		const QString name = TasteProfile::normalize(value.toString());
+		if (!name.isEmpty() && !tuning.focus.contains(name)) {
+			tuning.focus.append(name);
+		}
+	}
+	tuning.variety = std::clamp(json.value("variety").toInt(Balanced), int(Familiar), int(Adventurous));
+	return tuning;
+}
+
+void TasteProfile::applyTuning()
+{
+	for (auto it = m_tuning.tags.constBegin(); it != m_tuning.tags.constEnd(); ++it) {
+		const QString name = normalize(it.key());
+		if (name.isEmpty()) {
+			continue;
+		}
+		auto &tag = m_tags[name];
+		tag.name = name;
+		if (it.value() == TasteTuning::More) {
+			// Asked-for tags rank with the strongest learned ones and can be searched on every source.
+			tag.weight = std::max(tag.weight, 0.6) + 0.4;
+			m_pinned.insert(name);
+		} else if (it.value() == TasteTuning::Less) {
+			tag.weight = std::max(-1.0, std::min(tag.weight, 0.0) - 0.6);
+		} else if (it.value() == TasteTuning::Never) {
+			tag.weight = -1.0;
+			m_blocked.insert(name);
+		}
+	}
+	for (const QString &focus : m_tuning.focus) {
+		const QString name = normalize(focus);
+		if (!name.isEmpty() && !m_blocked.contains(name)) {
+			auto &tag = m_tags[name];
+			tag.name = name;
+			tag.weight = std::max(tag.weight, 0.5);
+			m_pinned.insert(name);
+		}
+	}
+	double squares = 0;
+	for (const auto &tag : m_tags) {
+		squares += tag.weight > 0 ? tag.weight * tag.weight : 0;
+	}
+	m_norm = std::sqrt(squares);
+}
+
+TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash<QString, double> &dislikedTags, const QDateTime &now, const TagBackground &background, const TasteTuning &tuning)
 {
 	TasteProfile profile;
+	profile.m_tuning = tuning;
 	struct Seed
 	{
 		QString key;
@@ -341,6 +414,7 @@ TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash
 		seeds.append(seed);
 	}
 	if (seeds.isEmpty()) {
+		profile.applyTuning();
 		return profile;
 	}
 
@@ -426,11 +500,7 @@ TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash
 		tag.weight = std::max(-1.0, tag.weight);
 	}
 
-	double squares = 0;
-	for (const auto &tag : profile.m_tags) {
-		squares += tag.weight > 0 ? tag.weight * tag.weight : 0;
-	}
-	profile.m_norm = std::sqrt(squares);
+	profile.applyTuning();
 	return profile;
 }
 
@@ -459,6 +529,50 @@ QList<TasteTag> TasteProfile::topTags(int limit, const QSet<QString> &types) con
 	return result.mid(0, std::max(0, limit));
 }
 
+QList<TasteTag> TasteProfile::avoidedTags(int limit) const
+{
+	QList<TasteTag> result;
+	for (const auto &tag : m_tags) {
+		if (tag.weight < -0.05) {
+			result.append(tag);
+		}
+	}
+	std::sort(result.begin(), result.end(), [](const TasteTag &left, const TasteTag &right) {
+		return left.weight != right.weight ? left.weight < right.weight : left.name < right.name;
+	});
+	return result.mid(0, std::max(0, limit));
+}
+
+QStringList TasteProfile::matches(const QStringList &tags, int limit) const
+{
+	QList<QPair<double, QString>> ranked;
+	QSet<QString> unique;
+	for (const QString &tag : tags) {
+		const QString name = normalize(tag);
+		const double value = m_tags.value(name).weight;
+		if (value > 0.05 && !isMetaTag(name) && !isGeneric(name) && !unique.contains(name)) {
+			unique.insert(name);
+			ranked.append({value, name});
+		}
+	}
+	std::sort(ranked.begin(), ranked.end(), [](const auto &left, const auto &right) { return left.first != right.first ? left.first > right.first : left.second < right.second; });
+	QStringList result;
+	for (const auto &entry : ranked.mid(0, std::max(0, limit))) {
+		result.append(entry.second);
+	}
+	return result;
+}
+
+bool TasteProfile::blocks(const QStringList &tags) const
+{
+	if (m_blocked.isEmpty()) {
+		return false;
+	}
+	return std::any_of(tags.begin(), tags.end(), [this](const QString &tag) { return m_blocked.contains(normalize(tag)); });
+}
+
+const TasteTuning &TasteProfile::tuning() const { return m_tuning; }
+
 double TasteProfile::score(const QStringList &tags) const
 {
 	if (m_norm <= 0) {
@@ -466,6 +580,7 @@ double TasteProfile::score(const QStringList &tags) const
 	}
 	QSet<QString> unique;
 	double sum = 0;
+	bool focused = false;
 	for (const QString &tag : tags) {
 		const QString name = normalize(tag);
 		if (isMetaTag(name) || unique.contains(name)) {
@@ -473,8 +588,10 @@ double TasteProfile::score(const QStringList &tags) const
 		}
 		unique.insert(name);
 		sum += m_tags.value(name).weight;
+		focused = focused || m_tuning.focus.contains(name);
 	}
-	return unique.isEmpty() ? 0 : sum / (std::sqrt(double(unique.size())) * m_norm);
+	// Today's focus outranks everything else that is merely close to the usual taste.
+	return unique.isEmpty() ? 0 : sum / (std::sqrt(double(unique.size())) * m_norm) + (focused ? 1.0 : 0.0);
 }
 
 QList<DiscoveryQuery> TasteProfile::queries(const QStringList &sources, int count, quint32 seed, const QHash<QString, DiscoveryFeedback> &feedback) const
@@ -498,32 +615,53 @@ QList<DiscoveryQuery> TasteProfile::queries(const QStringList &sources, int coun
 	}
 
 	const QSet<QString> selected(available.begin(), available.end());
+	// Familiar searches only the strongest tags; adventurous gives fainter ones a real chance.
+	const int variety = std::clamp(m_tuning.variety, int(TasteTuning::Familiar), int(TasteTuning::Adventurous));
+	const int poolSize = std::array<int, 3> {12, QueryPool, 80}[variety];
+	const double exponent = std::array<double, 3> {3.0, 2.0, 1.0}[variety];
 	QList<QPair<double, QString>> eligible;
 	for (const QString &name : sortedKeys(m_tags)) {
 		const auto &tag = m_tags[name];
-		if (tag.weight <= 0.02 || isGeneric(name) || !queryable(name)) {
+		if (tag.weight <= 0.02 || isGeneric(name) || !queryable(name) || m_tuning.focus.contains(name)) {
 			continue;
 		}
 		bool onSelected = false;
 		for (auto it = m_sites.value(name).constBegin(); it != m_sites.value(name).constEnd(); ++it) {
 			onSelected = onSelected || selected.contains(it.key());
 		}
-		if (!onSelected && !crossSiteType(tag.type)) {
+		if (!onSelected && !crossSiteType(tag.type) && !m_pinned.contains(name)) {
 			continue;
 		}
-		eligible.append({tag.weight * tag.weight * typeBoost(tag.type) * feedbackBoost(feedback, name), name});
+		eligible.append({std::pow(tag.weight, exponent) * typeBoost(tag.type) * feedbackBoost(feedback, name), name});
 	}
 	const auto byPriority = [](const auto &left, const auto &right) { return left.first != right.first ? left.first > right.first : left.second < right.second; };
 	std::sort(eligible.begin(), eligible.end(), byPriority);
 	QList<QPair<double, QString>> pool;
-	for (const auto &entry : eligible.mid(0, QueryPool)) {
+	for (const auto &entry : eligible.mid(0, poolSize)) {
 		// Weighted sampling without replacement (Efraimidis-Spirakis).
 		pool.append({std::pow(std::max(1e-12, rng.generateDouble()), 1.0 / entry.first), entry.second});
 	}
 	std::sort(pool.begin(), pool.end(), byPriority);
 
-	for (const auto &entry : pool.mid(0, count)) {
-		const QString &primary = entry.second;
+	// Today's focus takes most searches; learned tastes fill the rest.
+	QList<QPair<QString, bool>> picks;
+	QStringList focus;
+	for (const QString &name : m_tuning.focus) {
+		if (queryable(name) && !m_blocked.contains(name)) {
+			focus.append(name);
+		}
+	}
+	std::shuffle(focus.begin(), focus.end(), rng);
+	const int focused = focus.isEmpty() ? 0 : std::max(1, (count * 3 + 4) / 5);
+	for (int i = 0; i < focused; ++i) {
+		picks.append({focus[i % focus.size()], true});
+	}
+	for (const auto &entry : pool.mid(0, count - focused)) {
+		picks.append({entry.second, false});
+	}
+
+	for (const auto &pick : picks) {
+		const QString &primary = pick.first;
 		const auto &tag = m_tags[primary];
 		QHash<QString, double> sites;
 		for (auto it = m_sites.value(primary).constBegin(); it != m_sites.value(primary).constEnd(); ++it) {
@@ -535,8 +673,8 @@ QList<DiscoveryQuery> TasteProfile::queries(const QStringList &sources, int coun
 		if (website.isEmpty()) {
 			website = available[int(rng.bounded(quint32(available.size())))];
 		}
-		DiscoveryQuery query {website, {primary}, QCoreApplication::translate("TasteProfile", "Because you like %1").arg(primary)};
-		const double pairChance = crossSiteType(tag.type) ? 0.35 : 0.75;
+		DiscoveryQuery query {website, {primary}, pick.second ? QCoreApplication::translate("TasteProfile", "Today's focus: %1").arg(primary) : QCoreApplication::translate("TasteProfile", "Because you like %1").arg(primary)};
+		const double pairChance = pick.second ? 0.4 : (crossSiteType(tag.type) ? 0.35 : 0.75);
 		if (rng.generateDouble() < pairChance) {
 			QHash<QString, double> partners;
 			for (auto it = m_cooccurrences.value(primary).constBegin(); it != m_cooccurrences.value(primary).constEnd(); ++it) {
@@ -550,7 +688,7 @@ QList<DiscoveryQuery> TasteProfile::queries(const QStringList &sources, int coun
 			const QString partner = weightedPick(partners, rng);
 			if (!partner.isEmpty()) {
 				query.tags.append(partner);
-				query.reason = QCoreApplication::translate("TasteProfile", "Because you like %1 and %2").arg(primary, partner);
+				query.reason = pick.second ? QCoreApplication::translate("TasteProfile", "Today's focus: %1, with %2").arg(primary, partner) : QCoreApplication::translate("TasteProfile", "Because you like %1 and %2").arg(primary, partner);
 			}
 		}
 		result.append(query);

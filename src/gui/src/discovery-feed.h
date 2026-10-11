@@ -1,7 +1,9 @@
 #ifndef DISCOVERY_FEED_H
 #define DISCOVERY_FEED_H
 
+#include <QDateTime>
 #include <QHash>
+#include <QJsonObject>
 #include <QList>
 #include <QObject>
 #include <QPointer>
@@ -28,6 +30,15 @@ struct DiscoveryItem
 	QString reason;
 	double score = 0;
 	bool visual = false;
+	QStringList matches;
+};
+
+/** A picture hidden with "Not interested", kept so it can be restored. */
+struct HiddenPicture
+{
+	QString key;
+	QSharedPointer<Image> image;
+	QDateTime hiddenAt;
 };
 
 /**
@@ -56,9 +67,19 @@ class DiscoveryFeed : public QObject
 		const TagBackground &background() const { return m_background; }
 		const QHash<QString, DiscoveryFeedback> &feedback() const { return m_feedback; }
 		QSharedPointer<Image> image(const QString &key) const;
-		void dismiss(const QString &key);
+		/**
+		 * Hides a picture. Without tags, all its tags count slightly against it; with tags, only those are
+		 * turned into "show less" (or "never show") preferences.
+		 */
+		void dismiss(const QString &key, const QStringList &tags = {}, bool never = false);
 		void resetDismissed();
 		int dismissedCount() const;
+		/** Hidden pictures that can be shown again, newest first. */
+		QList<HiddenPicture> hiddenPictures() const;
+		/** Shows hidden pictures again and takes back the penalties hiding them added. */
+		void restore(const QStringList &keys);
+		const TasteTuning &tuning() const;
+		void setTuning(const TasteTuning &tuning);
 		static QString statePath(const QString &profileDirectory);
 
 	signals:
@@ -67,6 +88,12 @@ class DiscoveryFeed : public QObject
 		void statusChanged(const QString &status);
 
 	private:
+		struct HiddenRecord
+		{
+			QJsonObject image;
+			QStringList penalized;
+			QString at;
+		};
 		struct Candidate
 		{
 			DiscoveryItem item;
@@ -126,6 +153,8 @@ class DiscoveryFeed : public QObject
 		QSet<QString> m_seenSet;
 		QStringList m_hidden;
 		QSet<QString> m_hiddenSet;
+		QHash<QString, HiddenRecord> m_hiddenRecords;
+		TasteTuning m_tuning;
 		QHash<QString, double> m_dislikedTags;
 		TagBackground m_background;
 		bool m_backgroundChanged = false;

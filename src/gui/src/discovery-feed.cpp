@@ -35,6 +35,14 @@ namespace
 	constexpr int SampleLimit = 100;
 	constexpr int SampleShown = 6;
 	constexpr double WellSampled = 200;
+	// Hidden pictures remembered with enough detail to show them again.
+	constexpr int MaxHiddenRecords = 300;
+	// Requests per source in one batch; more trips rate limits (rule34.xxx answers 429).
+	constexpr int MaxPagesPerSource = 2;
+
+	// Share of each source's results and of each batch kept, by variety (familiar, balanced, adventurous).
+	double sourceShare(int variety) { return variety == TasteTuning::Familiar ? 0.5 : variety == TasteTuning::Adventurous ? 1.0 : 0.7; }
+	double batchShare(int variety) { return variety == TasteTuning::Familiar ? 0.6 : variety == TasteTuning::Adventurous ? 1.0 : 0.8; }
 
 	void zNormalize(QVector<double> &values)
 	{
@@ -71,6 +79,8 @@ DiscoveryFeed::DiscoveryFeed(Profile *profile, LibraryRecommendations *recommend
 	connect(profile->library(), &LibraryStore::imageChanged, this, &DiscoveryFeed::ratingChanged);
 	connect(recommendations, &LibraryRecommendations::changed, this, [this]() { m_tasteDirty = true; });
 	loadState();
+	// Library pictures are recognized by appearance too; build that index while the first searches run.
+	profile->library()->prepareVisualIndex();
 }
 
 DiscoveryFeed::~DiscoveryFeed()
@@ -97,7 +107,7 @@ void DiscoveryFeed::ratingChanged()
 void DiscoveryFeed::loadState()
 {
 	QFile file(statePath(m_profile->getPath()));
-	if (!file.open(QIODevice::ReadOnly) || file.size() > 8 * 1024 * 1024) {
+	if (!file.open(QIODevice::ReadOnly) || file.size() > 16 * 1024 * 1024) {
 		return;
 	}
 	const auto root = QJsonDocument::fromJson(file.readAll()).object();
@@ -118,6 +128,18 @@ void DiscoveryFeed::loadState()
 		}
 	}
 	m_background = TagBackground::fromJson(root.value("background").toObject());
+	m_tuning = TasteTuning::fromJson(root.value("tuning").toObject());
+	const auto records = root.value("hiddenItems").toObject();
+	for (auto it = records.constBegin(); it != records.constEnd(); ++it) {
+		const auto record = it.value().toObject();
+		if (m_hiddenSet.contains(it.key()) && record.value("image").isObject()) {
+			QStringList penalized;
+			for (const auto &tag : record.value("penalized").toArray()) {
+				penalized.append(tag.toString());
+			}
+			m_hiddenRecords.insert(it.key(), {record.value("image").toObject(), penalized, record.value("at").toString()});
+		}
+	}
 	const auto feedback = root.value("feedback").toObject();
 	for (auto it = feedback.constBegin(); it != feedback.constEnd() && m_feedback.size() < MaxFeedback; ++it) {
 		const auto values = it.value().toArray();
@@ -145,11 +167,17 @@ void DiscoveryFeed::saveState() const
 		const auto &value = m_feedback[entry.second];
 		feedback.insert(entry.second, QJsonArray {value.shown, value.rated});
 	}
+	QJsonObject records;
+	for (auto it = m_hiddenRecords.constBegin(); it != m_hiddenRecords.constEnd(); ++it) {
+		records.insert(it.key(), QJsonObject {{"image", it->image}, {"penalized", QJsonArray::fromStringList(it->penalized)}, {"at", it->at}});
+	}
 	const QJsonObject root {
-		{"version", 2},
+		{"version", 3},
 		{"seen", QJsonArray::fromStringList(m_seen)},
 		{"hidden", QJsonArray::fromStringList(m_hidden)},
+		{"hiddenItems", records},
 		{"disliked", disliked},
+		{"tuning", m_tuning.toJson()},
 		{"background", m_background.toJson()},
 		{"feedback", feedback},
 	};
@@ -203,7 +231,7 @@ const TasteProfile &DiscoveryFeed::taste()
 void DiscoveryFeed::rebuildTaste()
 {
 	m_tasteDirty = false;
-	m_taste = TasteProfile::build(m_profile->library()->entries(m_scope), m_dislikedTags, QDateTime::currentDateTimeUtc(), m_background);
+	m_taste = TasteProfile::build(m_profile->library()->entries(m_scope), m_dislikedTags, QDateTime::currentDateTimeUtc(), m_background, m_tuning);
 	m_visualSeeds.clear();
 	if (m_encoder != nullptr) {
 		const auto &vectors = m_recommendations->vectors();
@@ -221,18 +249,46 @@ QSharedPointer<Image> DiscoveryFeed::image(const QString &key) const
 	return m_shown.value(key);
 }
 
-void DiscoveryFeed::dismiss(const QString &key)
+void DiscoveryFeed::dismiss(const QString &key, const QStringList &tags, bool never)
 {
 	if (!m_hiddenSet.contains(key)) {
 		m_hidden.append(key);
 		m_hiddenSet.insert(key);
 		while (m_hidden.size() > MaxHidden) {
-			m_hiddenSet.remove(m_hidden.takeFirst());
+			const QString oldest = m_hidden.takeFirst();
+			m_hiddenSet.remove(oldest);
+			m_hiddenRecords.remove(oldest);
 		}
 	}
+	HiddenRecord record;
+	record.at = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
 	if (const auto image = m_shown.value(key)) {
-		for (const QString &tag : image->tagsString()) {
-			m_dislikedTags[TasteProfile::normalize(tag)] += 1;
+		image->write(record.image);
+		if (tags.isEmpty()) {
+			for (const QString &tag : image->tagsString()) {
+				const QString name = TasteProfile::normalize(tag);
+				if (!name.isEmpty() && !record.penalized.contains(name)) {
+					m_dislikedTags[name] += 1;
+					record.penalized.append(name);
+				}
+			}
+		}
+	}
+	// The user named what they do not want: only those tags are affected.
+	for (const QString &tag : tags) {
+		const QString name = TasteProfile::normalize(tag);
+		if (!name.isEmpty()) {
+			m_tuning.tags.insert(name, never ? TasteTuning::Never : TasteTuning::Less);
+		}
+	}
+	if (!record.image.isEmpty()) {
+		m_hiddenRecords.insert(key, record);
+		if (m_hiddenRecords.size() > MaxHiddenRecords) {
+			for (const QString &hidden : std::as_const(m_hidden)) {
+				if (m_hiddenRecords.remove(hidden) > 0) {
+					break;
+				}
+			}
 		}
 	}
 	// Hiding is stronger than scrolling past.
@@ -247,7 +303,53 @@ void DiscoveryFeed::resetDismissed()
 {
 	m_hidden.clear();
 	m_hiddenSet.clear();
+	m_hiddenRecords.clear();
 	m_dislikedTags.clear();
+	m_tasteDirty = true;
+	saveState();
+}
+
+QList<HiddenPicture> DiscoveryFeed::hiddenPictures() const
+{
+	QList<HiddenPicture> result;
+	for (auto it = m_hidden.crbegin(); it != m_hidden.crend(); ++it) {
+		const auto record = m_hiddenRecords.constFind(*it);
+		if (record == m_hiddenRecords.cend()) {
+			continue;
+		}
+		auto image = QSharedPointer<Image>::create(m_profile);
+		if (image->read(record->image, m_profile->getSites())) {
+			result.append({*it, image, QDateTime::fromString(record->at, Qt::ISODateWithMs)});
+		}
+	}
+	return result;
+}
+
+void DiscoveryFeed::restore(const QStringList &keys)
+{
+	for (const QString &key : keys) {
+		if (!m_hiddenSet.remove(key)) {
+			continue;
+		}
+		m_hidden.removeAll(key);
+		for (const QString &tag : m_hiddenRecords.take(key).penalized) {
+			auto it = m_dislikedTags.find(tag);
+			if (it != m_dislikedTags.end() && (*it -= 1) <= 0) {
+				m_dislikedTags.erase(it);
+			}
+		}
+		m_seenSet.remove(key);
+		m_seen.removeAll(key);
+	}
+	m_tasteDirty = true;
+	saveState();
+}
+
+const TasteTuning &DiscoveryFeed::tuning() const { return m_tuning; }
+
+void DiscoveryFeed::setTuning(const TasteTuning &tuning)
+{
+	m_tuning = tuning;
 	m_tasteDirty = true;
 	saveState();
 }
@@ -326,17 +428,22 @@ void DiscoveryFeed::fetchMore()
 	const quint32 batchSeed = m_seed + quint32(m_batch) * 7919u;
 	QRandomGenerator rng(batchSeed);
 	const int wanted = m_taste.isEmpty() ? std::min<int>(BatchQueries, int(sources.size())) : BatchQueries;
-	// Sample newest posts until every rated source is well known, then now and then to follow trends.
+	// Sample newest posts of sources not yet well known, then now and then to follow trends.
 	QStringList sampleSources;
-	bool unsampled = false;
+	QStringList unsampled;
 	for (const QString &source : sources) {
 		// Only sources with ratings matter for how distinctive a rated tag is.
 		if (!m_unsampleable.contains(source) && m_taste.siteWeights().value(source) > 0) {
 			sampleSources.append(source);
-			unsampled = unsampled || m_background.posts(source) < WellSampled;
+			if (m_background.posts(source) < WellSampled) {
+				unsampled.append(source);
+			}
 		}
 	}
-	const int samples = m_taste.isEmpty() || sampleSources.isEmpty() ? 0 : (unsampled ? 2 : (m_batch % 3 == 2 ? 1 : 0));
+	if (!unsampled.isEmpty()) {
+		sampleSources = unsampled; // Well-known sources would only spend their rate limit on samples.
+	}
+	const int samples = m_taste.isEmpty() || sampleSources.isEmpty() ? 0 : (!unsampled.isEmpty() ? std::min<int>(2, int(unsampled.size())) : (m_batch % 3 == 2 ? 1 : 0));
 	++m_batch;
 	m_failedSources.clear();
 	m_candidates.clear();
@@ -352,16 +459,18 @@ void DiscoveryFeed::fetchMore()
 	for (int i = 0; i < samples; ++i) {
 		queries.append({sampleSources[i % sampleSources.size()], {}, tr("New on %1").arg(sampleSources[i % sampleSources.size()])});
 	}
-	queries.append(m_taste.queries(sources, wanted + 3, batchSeed, m_feedback));
+	queries.append(m_taste.queries(sources, wanted + 4, batchSeed, m_feedback));
+	QHash<QString, int> perSource;
 	for (const auto &query : queries) {
 		if (m_pages.size() >= wanted + samples) {
 			break;
 		}
 		const QString signature = query.website + '|' + query.tags.join(' ');
 		Site *site = sites.value(query.website);
-		if (site == nullptr || m_exhausted.contains(signature)) {
+		if (site == nullptr || m_exhausted.contains(signature) || perSource.value(query.website) >= MaxPagesPerSource) {
 			continue;
 		}
+		perSource[query.website] += 1;
 		// Single tags start at a random early page so refreshes are not always the same posts.
 		const int page = m_nextPage.value(signature, query.tags.size() == 1 ? 1 + int(rng.bounded(3u)) : 1);
 		m_nextPage.insert(signature, page + 1);
@@ -425,7 +534,7 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 			batchMd5.insert(candidate.item.image->md5().toLower());
 		}
 		for (const auto &source : images) {
-			if (!source || !source->isValid() || source->isGallery()
+			if (!source || !source->isValid() || source->isGallery() || m_taste.blocks(source->tagsString())
 				|| !m_profile->getBlacklist().match(source->tokens(m_profile)).isEmpty()) {
 				continue;
 			}
@@ -439,7 +548,7 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 			const QString key = LibraryStore::imageKey(*image);
 			const QString md5 = image->md5().toLower();
 			if (key.isEmpty() || m_seenSet.contains(key) || m_hiddenSet.contains(key) || m_shown.contains(key) || m_candidates.contains(key)
-				|| (!md5.isEmpty() && (m_shownMd5.contains(md5) || batchMd5.contains(md5))) || store->isRated(*image)) {
+				|| (!md5.isEmpty() && (m_shownMd5.contains(md5) || batchMd5.contains(md5))) || store->isKnown(*image)) {
 				continue;
 			}
 			if (!md5.isEmpty()) {
@@ -460,7 +569,7 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 		found.erase(std::remove_if(found.begin(), found.end(), [](const Candidate &candidate) { return candidate.tagScore <= 0; }), found.end());
 		found = found.mid(0, SampleShown);
 	} else if (!m_taste.isEmpty() && found.size() > 12) {
-		found = found.mid(0, std::max<qsizetype>(12, qsizetype(found.size() * 0.7)));
+		found = found.mid(0, std::max<qsizetype>(12, qsizetype(found.size() * sourceShare(m_tuning.variety))));
 	} else if (queryTags.isEmpty()) {
 		found = found.mid(0, PageLimit);
 	}
@@ -505,11 +614,16 @@ void DiscoveryFeed::previewFinished(ThumbnailLoader *loader, const QString &key)
 		bool duplicate = preview.isNull();
 		if (!duplicate) {
 			candidate.fingerprint = ImageFingerprint::fromImage(preview.toImage(), candidate.item.image->size());
+			// A feed shows one picture of a set of variants (recolors, small edits), and none the Library already has.
 			for (const auto &shown : m_shownFingerprints) {
-				duplicate = duplicate || candidate.fingerprint.sameImage(shown);
+				duplicate = duplicate || candidate.fingerprint.similarImage(shown);
 			}
 			for (auto it = m_candidates.constBegin(); it != m_candidates.constEnd() && !duplicate; ++it) {
-				duplicate = it.key() != key && it->fingerprint.valid && candidate.fingerprint.sameImage(it->fingerprint);
+				duplicate = it.key() != key && it->fingerprint.valid && candidate.fingerprint.similarImage(it->fingerprint);
+			}
+			if (!duplicate && !m_profile->library()->sameImageKey(*candidate.item.image, candidate.fingerprint, true).isEmpty()) {
+				log(QStringLiteral("Discover: skipped %1, already in Library").arg(candidate.item.image->pageUrl().toString()), Logger::Debug);
+				duplicate = true;
 			}
 		}
 		if (duplicate) {
@@ -608,19 +722,20 @@ void DiscoveryFeed::emitGroup(int group, bool force)
 	}
 	std::stable_sort(ready.begin(), ready.end(), [](const Candidate &left, const Candidate &right) { return left.item.score > right.item.score; });
 	if (!m_taste.isEmpty() && ready.size() > 8) {
-		ready = ready.mid(0, qsizetype(std::ceil(ready.size() * 0.8)));
+		ready = ready.mid(0, qsizetype(std::ceil(ready.size() * batchShare(m_tuning.variety))));
 	}
 
 	QList<DiscoveryItem> items;
 	for (const auto &candidate : ready) {
 		bool duplicate = false;
 		for (const auto &shown : m_shownFingerprints) {
-			duplicate = duplicate || candidate.fingerprint.sameImage(shown); // Another source may have streamed it meanwhile.
+			duplicate = duplicate || candidate.fingerprint.similarImage(shown); // Another source may have streamed it meanwhile.
 		}
 		if (duplicate) {
 			continue;
 		}
 		items.append(candidate.item);
+		items.last().matches = m_taste.matches(candidate.item.image->tagsString(), 3);
 		m_shown.insert(candidate.item.key, candidate.item.image);
 		m_shownQueries.insert(candidate.item.key, candidate.query);
 		for (const QString &tag : candidate.query) {

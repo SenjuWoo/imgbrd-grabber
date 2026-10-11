@@ -1,6 +1,9 @@
 #include "picture-actions.h"
+#include <QCheckBox>
 #include <QDir>
+#include <QMessageBox>
 #include <QPointer>
+#include <QPushButton>
 #include <QSettings>
 #include <QWidget>
 #include <memory>
@@ -68,4 +71,58 @@ bool PictureActions::toggleRating(LibraryStore *store, const QString &key, qint6
 		*ok = success;
 	}
 	return success && on;
+}
+
+void PictureActions::offerRemoval(Profile *profile, const QStringList &keys, QWidget *parent)
+{
+	LibraryStore *store = profile->library();
+	QStringList unrated;
+	const QStringList all = store->unratedKeys();
+	for (const QString &key : keys) {
+		if (all.contains(key) && !unrated.contains(key)) {
+			unrated.append(key);
+		}
+	}
+	if (unrated.isEmpty()) {
+		return;
+	}
+	// Context menus close (and may be deleted) right after their action: ask from the window behind them.
+	QWidget *owner = parent != nullptr ? parent->window() : nullptr;
+	while (owner != nullptr && owner->windowFlags().testFlag(Qt::Popup)) {
+		owner = owner->parentWidget() != nullptr ? owner->parentWidget()->window() : nullptr;
+	}
+	auto remove = [store, unrated, parent = QPointer<QWidget>(owner)]() {
+		int removed = 0;
+		for (const QString &key : unrated) {
+			removed += store->removeImage(key) ? 1 : 0;
+		}
+		if (parent) {
+			Toast::show(parent, QObject::tr("Removed %n picture(s) from Library", "", removed));
+		}
+	};
+	const int remembered = profile->getSettings()->value("Library/removeUnrated", 0).toInt();
+	if (remembered == 1) {
+		remove();
+		return;
+	}
+	if (remembered == 2) {
+		return;
+	}
+	auto *box = new QMessageBox(QMessageBox::Question, QObject::tr("Remove from Library?"),
+		QObject::tr("%n picture(s) are no longer liked or favorited. Remove them from your Library too?", "", int(unrated.size())), QMessageBox::NoButton, owner);
+	box->setAttribute(Qt::WA_DeleteOnClose);
+	auto *removeButton = box->addButton(QObject::tr("Remove"), QMessageBox::AcceptRole);
+	box->addButton(QObject::tr("Keep"), QMessageBox::RejectRole);
+	box->setDefaultButton(removeButton);
+	box->setCheckBox(new QCheckBox(QObject::tr("Remember my choice"), box));
+	QObject::connect(box, &QMessageBox::finished, box, [box, removeButton, remove, settings = profile->getSettings()]() {
+		const bool removing = box->clickedButton() == removeButton;
+		if (box->checkBox()->isChecked()) {
+			settings->setValue("Library/removeUnrated", removing ? 1 : 2);
+		}
+		if (removing) {
+			remove();
+		}
+	});
+	box->open();
 }
