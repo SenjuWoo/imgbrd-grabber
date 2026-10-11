@@ -10,6 +10,19 @@ An all-in-one image searcher, downloader and personal picture Library. Search do
 
 *Discover with generated demo artwork. Pictures stay clean until you select one; then ♥ Like, ★ Favorite, Download and Not interested appear on it.*
 
+## What's new in 7.20
+
+- **Only exact duplicates are hidden.** Discover and merged searches drop the same picture from another site or re-encoded, and nothing else: edits, recolors, alternate versions and variants show up again. Pictures already in your Library are matched the same strict way.
+- **No repeats across pages.** Merged search remembers what earlier pages of the same search showed, so a copy from another site on page 3 no longer repeats a picture from page 1.
+- **Copies of liked pictures show as liked** in search tiles and the viewer, not only once you like them again.
+- **Tag adapter.** Names sources give the same theme (hidden_sex_toy and stealth_sex_toy, stealth_masturbation and secret_masturbation, netorare, ntr and cuckold, …) and other spellings (bodypaint, body_paint) count as one tag. Merged searches also search the other names and combine the results; Discover searches each source under the name it uses.
+- **No more guessed dislikes.** Discover no longer marks tags as avoided because they are rarer in your likes than on the site (solo, 1girl, looking_at_viewer, dialogue and the like). A tag is only avoided when you say so, or when several hidden pictures share it and none of your ratings has it.
+- **Tune taste, clearer.** A **Neutral** choice drops a tag learned by mistake, each avoided tag says why, synonyms are listed once with their other names, the visual matching status is shown and **Hidden pictures** opens from the dialog.
+- **Discover and search see what blacklisted pictures look like.** Untagged black and white pictures and sketches count as a blacklisted monochrome, greyscale, sketch, lineart, draft or unfinished.
+- **Search tiles act like Discover.** Next to ♥, ★ and + there are ⤓ Download and ✕ Not interested (hide, see less of a tag, never see a tag, with Undo), also in the right-click menu. Hidden pictures and never-show tags apply to searches too.
+- **62 per page everywhere.** rule34.xxx, rule34.us and gelbooru HTML pages hold 42 pictures; Grabber now loads two of them to fill a page.
+- **Thumbnails.** Long comic-strip thumbnails load instead of showing a broken tile, failed thumbnails retry twice, and failures are logged. Merged results say how many pictures your blacklist, Hide liked or Not interested hid.
+
 ## What's new in 7.19
 
 - **Your Library never comes back in Discover.** Pictures you already have are recognised by source, by file and by look, so copies from other sites, re-encodes and barely different variants stay out of the feed. A feed also shows only one picture of a set of variants.
@@ -37,9 +50,11 @@ Open **Discover** (it is also where Grabber starts). Like ♥ or favorite ★ an
 
 - Queries come from your actual saved tags, weighted by how often and how strongly you rated them, and paired with tags that appear together in your favorites so searches stay specific. Overly common tags (like `1girl` or `highres`) are down-weighted.
 - Each source's results are filtered (blacklist, already rated, already shown, hidden), de-duplicated by checksum and by appearance, ranked, and streamed in. Only the best share reaches the screen.
-- Pictures already in your Library never show up: not the same post, not the same file from another site and not the same picture re-encoded or slightly edited. One picture of each set of variants is shown.
+- Pictures already in your Library never show up: not the same post, not the same file from another site and not the same picture re-encoded. Edits and variants are different pictures and do show up.
+- Synonyms and other spellings of a tag count as one taste, searched under the name each source uses. Nothing is avoided by guesswork: only tags you turned down, or that several hidden pictures share while none of your ratings has them.
+- Untagged black and white pictures and sketches count as blacklisted when your blacklist has monochrome, greyscale, sketch, lineart, draft or unfinished.
 - **Not interested** (✕) asks what is wrong: hide only this picture, show less of one of its tags, or never show a tag. **X** hides at once; the toast has **Undo**, and *⋯ → Hidden pictures* restores any hidden picture later.
-- **Tune taste** shows what Discover learned, how strongly, and how well each search worked. Set tags to More, Less or Never, add today's focus tags, and choose Familiar, Balanced or Adventurous. Hover a picture to see which of your tastes it matches.
+- **Tune taste** shows what Discover learned, how strongly, why a tag is avoided and how well each search worked. Set tags to More, Neutral, Less or Never, add today's focus tags, and choose Familiar, Balanced or Adventurous. Hover a picture to see which of your tastes it matches. Search tiles have the same ✕ Not interested.
 - Choose **Everything I love** or a single collection's taste. Collections keep their own likes and favorites.
 - With no ratings yet, Discover shows fresh posts from your sources until you rate a few.
 
@@ -89,7 +104,7 @@ Select one picture and click **Find source…** in the selection bar. Choose a s
 The upstream downloader features remain: multiple tabs and sources, tag autocomplete, blacklists, filters, filename tokens, authentication, batch downloads, monitors and CLI commands. Sources include Danbooru, Gelbooru, Rule34, e621, Sankaku, Pixiv, Reddit, Kemono, Zerochan and more. Website availability and account requirements vary; some sites sit behind Cloudflare challenges or need API keys, and Discover reports sources that did not respond.
 
 - **Pixiv** requires authentication. **Reddit** searches keywords, authors, subreddits and flair rather than booru tags.
-- Discover searches the sources you selected in a search tab. Tag vocabularies differ between sites, so general tags are only searched on sites where you rated them; artists, characters and series can be searched anywhere.
+- Discover searches the sources you selected in a search tab. Tag vocabularies differ between sites, so general tags are searched on sites where you rated them or whose sampled posts carry them (under any of their names); artists, characters and series can be searched anywhere.
 - Visual matching compares previews against your own rated pictures. It does not perform Internet-wide reverse searches or upload files.
 
 The Library stores its catalog and bounded previews locally. Fresh profiles have usage analytics disabled by default. Built-in backups include the catalog and managed copies; externally referenced originals need their own backup. Android uses a separate QML UI without these features.
@@ -114,6 +129,15 @@ npm test -- --runInBand
 ```
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
+
+## Changes in 7.20.0
+
+- Discover, merged search and Library matching hide exact duplicates only (same post, checksum or strict look); the 7.19 variant matching is removed. Merged search remembers checksums and looks per page of a search and drops repeats on later pages. Library actions show the rating of a matching Library picture for re-encoded copies.
+- Taste profile: no negative weights from lower-than-background frequency or from absence; plain hides only count for tags absent from every rating and shared by two or more hidden pictures; aspect-ratio and `_(artwork)` tags are meta. Verified synonym groups plus separator-only spellings share weights, are listed once, and are searched under each source's own name; Discover may search a tag on sources whose samples carry it. New **Neutral** preference.
+- Merged search runs up to three extra queries with other names of a typed tag (tag adapter). Search tiles get Download and Not interested; Not interested and never-show tags apply to searches.
+- Thumbnail fingerprints measure colorfulness; pictures that look monochrome or like sketches match those blacklisted tags in Discover and search.
+- Fixed-size sources (`forcedLimit`) join consecutive source pages to fill larger pages; a failed follow-up request keeps the pictures already found. rule34.us pages hold 42 pictures. Discover samples 42 newest posts per request.
+- Thumbnails up to 30000 px tall load; transient failures retry after 1 s and 4 s; final failures are logged.
 
 ## Changes in 7.19.0
 

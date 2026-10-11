@@ -51,6 +51,8 @@ class ImagePreview : public QObject
 		void contextSaveImageAs();
 		void contextSaveImageProgress(const QSharedPointer<Image> &img, qint64 v1, qint64 v2);
 		void toggledWithId(int id, bool toggle, bool range);
+		void notInterested(const QStringList &tags, bool never);
+		void fillNotInterested(QMenu *menu);
 
 	signals:
 		void finished();

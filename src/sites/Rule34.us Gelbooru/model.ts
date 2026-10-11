@@ -29,7 +29,7 @@ export const source: ISource = {
         html: {
             name: "Regex",
             auth: [],
-            forcedLimit: 20,
+            forcedLimit: 42,
             search: {
                 url: (query: ISearchQuery): string => {
                     const page: number = query.page - 1;

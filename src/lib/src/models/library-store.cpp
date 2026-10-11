@@ -271,17 +271,10 @@ QString LibraryStore::saveImage(const Image &image)
 		return {};
 	}
 	const QString source = imageKey(image);
-	QString key = keyForImage(image);
+	const QString key = matchingKey(image);
 	if (key.isEmpty()) {
 		m_error = tr("This picture has no usable source identity.");
 		return {};
-	}
-	if (!contains(key) && !image.previewImage().isNull()) {
-		// Local imports link to a source only after review (Find source); looks alone never attach to them.
-		const QString same = sameImageKey(image, ImageFingerprint::fromImage(image.previewImage().toImage(), image.size()));
-		if (!same.isEmpty() && !entry(same).image.value("website").toString().isEmpty()) {
-			key = same;
-		}
 	}
 	if (key != source && contains(key)) {
 		const auto stored = entry(key).image;
@@ -321,6 +314,17 @@ QString LibraryStore::saveImage(const Image &image)
 	}
 	emit imageChanged(key);
 	return key;
+}
+
+QString LibraryStore::matchingKey(const Image &image)
+{
+	const QString key = keyForImage(image);
+	if (key.isEmpty() || !m_ready || contains(key) || image.previewImage().isNull()) {
+		return key;
+	}
+	// Local imports link to a source only after review (Find source); looks alone never attach to them.
+	const QString same = sameImageKey(image, ImageFingerprint::fromImage(image.previewImage().toImage(), image.size()));
+	return !same.isEmpty() && !entry(same).image.value("website").toString().isEmpty() ? same : key;
 }
 
 QList<LibraryEntry> LibraryStore::entries(qint64 collection)
@@ -651,7 +655,7 @@ bool LibraryStore::isKnown(const Image &image)
 	return (!md5.isEmpty() && m_md5Keys.contains(md5)) || m_knownKeys.contains(imageKey(image));
 }
 
-QString LibraryStore::sameImageKey(const Image &image, const ImageFingerprint &fingerprint, bool variants)
+QString LibraryStore::sameImageKey(const Image &image, const ImageFingerprint &fingerprint)
 {
 	if (!m_ready) {
 		return {};
@@ -665,7 +669,7 @@ QString LibraryStore::sameImageKey(const Image &image, const ImageFingerprint &f
 	}
 	loadVisualIndex();
 	for (auto it = m_fingerprints.constBegin(); it != m_fingerprints.constEnd(); ++it) {
-		if ((variants ? it.value().similarImage(fingerprint) : it.value().sameImage(fingerprint)) && contains(it.key())) {
+		if (it.value().sameImage(fingerprint) && contains(it.key())) {
 			return it.key();
 		}
 	}

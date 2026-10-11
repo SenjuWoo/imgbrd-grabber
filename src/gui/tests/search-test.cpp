@@ -45,4 +45,7 @@ TEST_CASE("Merged search keeps edits and stable image bindings", "[search][merge
 	REQUIRE(search.m_images.first() == original); // Richer metadata must not replace a widget's bound pointer.
 	search.clear();
 	REQUIRE(search.mergeResults(1, {same}).size() == 1); // Same-query reload cannot inherit hidden hashes.
+	search.clear();
+	REQUIRE(search.mergeResults(2, {same}).isEmpty()); // Page 1 of this search showed it already.
+	REQUIRE(search.mergeResults(3, {picture("5", b.toUpper(), "https://test.invalid/5.png")}).isEmpty());
 }

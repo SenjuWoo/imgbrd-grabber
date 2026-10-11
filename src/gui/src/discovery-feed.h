@@ -58,6 +58,7 @@ class DiscoveryFeed : public QObject
 		qint64 scope() const;
 		void setVisualEnabled(bool enabled);
 		bool visualActive() const;
+		bool visualEnabled() const { return m_visualEnabled; }
 		void restart();
 		void fetchMore();
 		void cancel();
@@ -66,12 +67,18 @@ class DiscoveryFeed : public QObject
 		const TasteProfile &taste();
 		const TagBackground &background() const { return m_background; }
 		const QHash<QString, DiscoveryFeedback> &feedback() const { return m_feedback; }
+		/** How many hidden pictures carried each tag. */
+		const QHash<QString, double> &hiddenTags() const { return m_dislikedTags; }
 		QSharedPointer<Image> image(const QString &key) const;
 		/**
 		 * Hides a picture. Without tags, all its tags count slightly against it; with tags, only those are
 		 * turned into "show less" (or "never show") preferences.
 		 */
-		void dismiss(const QString &key, const QStringList &tags = {}, bool never = false);
+		void dismiss(const QString &key, const QStringList &tags = {}, bool never = false, const QSharedPointer<Image> &image = {});
+		/** Whether a picture was hidden with "Not interested", here or in a search. */
+		bool isHidden(const QString &key) const;
+		/** The first of these tags the user never wants to see, or an empty string. */
+		QString neverShown(const QStringList &tags) const;
 		void resetDismissed();
 		int dismissedCount() const;
 		/** Hidden pictures that can be shown again, newest first. */

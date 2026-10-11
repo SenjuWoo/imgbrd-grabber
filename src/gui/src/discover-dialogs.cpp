@@ -60,8 +60,11 @@ DiscoverTasteDialog::DiscoverTasteDialog(DiscoveryFeed *feed, QWidget *parent)
 	auto *how = new QLabel(tr("<b>How Discover picks pictures</b><br>"
 		"It searches your selected sources with the tags that set your likes and favorites apart. Each tag is compared with recent posts "
 		"sampled from the same sources, so themes, artists and characters you pick far more often than other people outrank tags nearly every post has. "
-		"Favorites count 3× a like, recent ratings a bit more. Searches whose pictures you rate come back more often; ignored or hidden ones fade. "
-		"Pictures already in your Library (also copies from other sources), blacklisted or hidden never show up."), this);
+		"Favorites count 3× a like, recent ratings a bit more. Names sources give the same theme (hidden_sex_toy, stealth_sex_toy) and other spellings "
+		"count as one tag, searched under the name each source uses. Searches whose pictures you rate come back more often.<br>"
+		"Nothing is avoided by guesswork: a tag is only avoided when you say so here or with Not interested, or when several hidden pictures share it "
+		"and none of your ratings has it. Pictures already in your Library (also copies from other sources), exact duplicates, blacklisted or hidden "
+		"never show up; untagged black and white pictures and sketches count as blacklisted \"monochrome\" or \"sketch\"."), this);
 	how->setObjectName("discoverHow");
 	how->setWordWrap(true);
 	layout->addWidget(how);
@@ -74,10 +77,24 @@ DiscoverTasteDialog::DiscoverTasteDialog(DiscoveryFeed *feed, QWidget *parent)
 		sampledSources += posts > 0 ? 1 : 0;
 	}
 	auto *stats = new QLabel(tr("Learned from %n favorite(s)", "", taste.favorites()) + tr(" and %n like(s)", "", taste.likes())
-		+ tr(" · %1 posts sampled on %n source(s)", "", sampledSources).arg(int(sampled)) + tr(" · %n picture(s) hidden", "", feed->dismissedCount()), this);
+		+ tr(" · %1 posts sampled on %n source(s)", "", sampledSources).arg(int(sampled))
+		+ " · " + (feed->visualActive() ? tr("Visual matching on: a local model also compares how each picture looks with your favorites")
+			: feed->visualEnabled() ? tr("Visual matching is on but has no indexed favorites yet (⋯ → Update visual index)")
+			: tr("Visual matching off: turn on Smart visual matching in Discover's ⋯ menu so it also compares how pictures look")), this);
 	stats->setObjectName("discoverStats");
 	stats->setWordWrap(true);
-	layout->addWidget(stats);
+	auto *statsRow = new QHBoxLayout;
+	statsRow->addWidget(stats, 1);
+	auto *hidden = new QPushButton(tr("Hidden pictures (%1)…").arg(feed->dismissedCount()), this);
+	hidden->setObjectName("discoverShowHidden");
+	hidden->setToolTip(tr("See and restore pictures you marked Not interested"));
+	connect(hidden, &QPushButton::clicked, this, [this, hidden]() {
+		DiscoverHiddenDialog dialog(m_feed, this);
+		dialog.exec();
+		hidden->setText(tr("Hidden pictures (%1)…").arg(m_feed->dismissedCount()));
+	});
+	statsRow->addWidget(hidden);
+	layout->addLayout(statsRow);
 
 	auto *form = new QFormLayout;
 	m_focus = new QLineEdit(tuning.focus.join(' '), this);
@@ -100,7 +117,7 @@ DiscoverTasteDialog::DiscoverTasteDialog(DiscoveryFeed *feed, QWidget *parent)
 	connect(m_variety, &QComboBox::currentIndexChanged, this, &DiscoverTasteDialog::updateVariety);
 	updateVariety();
 
-	layout->addWidget(new QLabel(tr("<b>What Discover learned</b> · set any tag to More, Less or Never"), this));
+	layout->addWidget(new QLabel(tr("<b>What Discover learned</b> · set any tag to More, Less or Never; Neutral drops a tag learned by mistake"), this));
 	m_tags = new QTableWidget(0, 6, this);
 	m_tags->setObjectName("discoverTasteTags");
 	m_tags->setHorizontalHeaderLabels({tr("Tag"), tr("Kind"), tr("Strength"), tr("In your pictures"), tr("Rated from its searches"), tr("You want")});
@@ -111,6 +128,7 @@ DiscoverTasteDialog::DiscoverTasteDialog(DiscoveryFeed *feed, QWidget *parent)
 	for (int column = 1; column < 6; ++column) {
 		m_tags->horizontalHeader()->setSectionResizeMode(column, QHeaderView::ResizeToContents);
 	}
+	m_tags->horizontalHeader()->setMinimumSectionSize(60);
 	layout->addWidget(m_tags, 1);
 	QSet<QString> added;
 	for (const auto &tag : taste.topTags(60)) {
@@ -172,21 +190,31 @@ void DiscoverTasteDialog::addRow(const TasteTag &tag, int preference)
 {
 	const int row = m_tags->rowCount();
 	m_tags->insertRow(row);
-	auto *name = new QTableWidgetItem(tag.name);
+	const QStringList others = m_feed->taste().equivalents(tag.name);
+	auto *name = new QTableWidgetItem(others.isEmpty() ? tag.name : tr("%1 (also %2)").arg(tag.name, others.join(", ")));
 	name->setData(Qt::UserRole, tag.name);
+	name->setToolTip(others.isEmpty() ? QString() : tr("Other sources call it %1; Discover searches each under its own name.").arg(others.join(", ")));
 	m_tags->setItem(row, 0, name);
 	m_tags->setItem(row, 1, new QTableWidgetItem(kindName(tag.type)));
-	m_tags->setItem(row, 2, new QTableWidgetItem(tag.weight != 0 ? strength(tag.weight) : tr("not learned yet")));
+	QString learned = tag.weight != 0 ? strength(tag.weight) : preference == TasteTuning::Neutral ? tr("neutral") : tr("not learned yet");
+	const int hiddenWith = int(std::round(m_feed->hiddenTags().value(tag.name)));
+	if (tag.weight < 0 && preference == 0 && hiddenWith > 0) {
+		learned += ' ' + tr("· %n hidden picture(s) had it", "", hiddenWith);
+	}
+	m_tags->setItem(row, 2, new QTableWidgetItem(learned));
 	m_tags->setItem(row, 3, new QTableWidgetItem(tag.count > 0 ? QString::number(tag.count) : QStringLiteral("—")));
 	const auto feedback = m_feed->feedback().value(tag.name);
 	m_tags->setItem(row, 4, new QTableWidgetItem(feedback.shown >= 1 ? tr("%1 of %2 shown").arg(int(std::round(feedback.rated))).arg(int(std::round(feedback.shown))) : QStringLiteral("—")));
 	auto *choice = new QComboBox(m_tags);
 	choice->addItem(tr("Auto"), 0);
 	choice->addItem(tr("More"), int(TasteTuning::More));
+	choice->addItem(tr("Neutral"), int(TasteTuning::Neutral));
 	choice->addItem(tr("Less"), int(TasteTuning::Less));
 	choice->addItem(tr("Never"), int(TasteTuning::Never));
 	choice->setCurrentIndex(std::max(0, choice->findData(preference)));
 	choice->setAccessibleName(tr("Preference for %1").arg(tag.name));
+	choice->setToolTip(tr("Auto: as learned · More: search and rank it higher · Neutral: neither searched nor held against a picture · "
+		"Less: rank it lower · Never: never show it"));
 	m_tags->setCellWidget(row, 5, choice);
 }
 

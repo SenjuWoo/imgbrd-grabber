@@ -203,6 +203,13 @@ class SearchTab : public QWidget
 		QCheckBox *m_hideRated = nullptr;
 		QList<ImageFingerprint> m_mergedFingerprints;
 		int m_mergedDuplicates = 0;
+		int m_md5Duplicates = 0;
+		int m_lookFiltered = 0;
+		// What earlier pages of this search showed, by page number, so later pages do not repeat it.
+		QString m_seenSearch;
+		QHash<QString, int> m_seenMd5;
+		QList<QPair<ImageFingerprint, int>> m_seenFingerprints;
+		QHash<Image*, int> m_imagePages;
 		QProgressBar *ui_progressMergeResults = nullptr;
 		QStackedWidget *ui_stackedMergeResults = nullptr;
 		QSpinBox *ui_spinPage = nullptr;

@@ -1,8 +1,10 @@
 #include "tabs/image-preview.h"
 #include <QApplication>
 #include <QBuffer>
+#include <QCursor>
 #include <QDir>
 #include <QEvent>
+#include <QHBoxLayout>
 #include <QEventLoop>
 #include <QFile>
 #include <QFileDialog>
@@ -19,6 +21,7 @@
 #include <QUrl>
 #include <QVBoxLayout>
 #include <QWidget>
+#include "discovery-feed.h"
 #include "downloader/download-queue.h"
 #include "downloader/image-downloader.h"
 #include "functions.h"
@@ -26,13 +29,17 @@
 #include "image-context-menu.h"
 #include "image-library-actions.h"
 #include "logger.h"
+#include "main-window.h"
 #include "models/image.h"
+#include "models/library-store.h"
 #include "models/profile.h"
 #include "models/site.h"
 #include "network/network-follow.h"
 #include "network/network-reply.h"
+#include "picture-actions.h"
 #include "thumbnail-loader.h"
 #include "ui/QBouton.h"
+#include "ui/toast.h"
 
 
 namespace
@@ -182,6 +189,32 @@ void ImagePreview::finishedLoading()
 	button->installEventFilter(this);
 
 	m_actions = new ImageLibraryActions(m_profile, m_image, button, 0, true);
+	// The same quick actions as Discover: download the original, and Not interested.
+	auto *row = qobject_cast<QHBoxLayout*>(m_actions->layout());
+	auto addButton = [this, row](const QString &text, const QString &name, const QString &tip) {
+		auto *tool = new QToolButton(m_actions);
+		tool->setObjectName(name);
+		tool->setText(text);
+		tool->setToolTip(tip);
+		tool->setAccessibleName(tip);
+		tool->setAutoRaise(true);
+		tool->setCursor(Qt::PointingHandCursor);
+		tool->setMinimumHeight(28);
+		row->insertWidget(row->count() - 1, tool);
+		return tool;
+	};
+	if (row != nullptr) {
+		connect(addButton(QStringLiteral("⤓"), "previewDownload", tr("Download")), &QToolButton::clicked, this, [this]() {
+			PictureActions::download(m_profile, m_downloadQueue, {m_image}, qobject_cast<QWidget*>(parent()));
+		});
+		if (m_mainWindow != nullptr && m_mainWindow->discoveryFeed() != nullptr) {
+			connect(addButton(QStringLiteral("✕"), "previewNotInterested", tr("Not interested")), &QToolButton::clicked, this, [this]() {
+				QMenu menu(m_container);
+				fillNotInterested(&menu);
+				menu.exec(QCursor::pos());
+			});
+		}
+	}
 	QPalette palette = m_actions->palette();
 	QColor background = palette.color(QPalette::Window);
 	background.setAlpha(230);
@@ -295,6 +328,10 @@ void ImagePreview::customContextMenuRequested()
 	if (m_customContextMenu != nullptr) {
 		m_customContextMenu(menu, m_image);
 	}
+	if (m_mainWindow != nullptr && m_mainWindow->discoveryFeed() != nullptr) {
+		menu->addSeparator();
+		fillNotInterested(menu->addMenu(tr("Not interested")));
+	}
 
 	menu->insertSeparator(first);
 
@@ -369,6 +406,37 @@ void ImagePreview::contextSaveImageProgress(const QSharedPointer<Image> &img, qi
 {
 	Q_UNUSED(img)
 	setDownloadProgress(v1, v2);
+}
+
+void ImagePreview::fillNotInterested(QMenu *menu)
+{
+	PictureActions::fillNotInterested(menu, m_mainWindow->discoveryFeed(), m_image, 1, [this](const QStringList &tags, bool never) { notInterested(tags, never); }, m_container);
+}
+
+void ImagePreview::notInterested(const QStringList &tags, bool never)
+{
+	// Hidden here, from later searches and from Discover; tags teach Discover. Undo takes all of it back.
+	QPointer<DiscoveryFeed> feed = m_mainWindow != nullptr ? m_mainWindow->discoveryFeed() : nullptr;
+	const QString key = LibraryStore::imageKey(*m_image);
+	if (!feed || key.isEmpty()) {
+		return;
+	}
+	const TasteTuning previous = feed->tuning();
+	feed->dismiss(key, tags, never, m_image);
+	QPointer<QWidget> container = m_container;
+	if (container) {
+		container->hide();
+	}
+	auto *page = qobject_cast<QWidget*>(parent());
+	Toast::show(page != nullptr ? page : m_container.data(), PictureActions::notInterestedMessage(tags, never), tr("Undo"), [feed, key, previous, container]() {
+		if (feed) {
+			feed->restore({key});
+			feed->setTuning(previous);
+		}
+		if (container) {
+			container->show();
+		}
+	});
 }
 
 void ImagePreview::setCustomContextMenu(std::function<void (QMenu *, const QSharedPointer<Image> &)> customContextMenu)

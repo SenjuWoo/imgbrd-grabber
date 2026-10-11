@@ -16,6 +16,8 @@ struct TasteTag
 	QString type;
 	double weight = 0;
 	int count = 0;
+	/** For another spelling of a learned tag on some source, the learned tag it stands for. */
+	QString sameAs;
 };
 
 struct DiscoveryQuery
@@ -35,7 +37,8 @@ struct DiscoveryFeedback
 /** What the user told Discover: tags to see more or less of, today's focus and how far to stray from known favorites. */
 struct TasteTuning
 {
-	enum Preference { Never = -2, Less = -1, More = 1 };
+	/** Neutral: neither searched for nor held against a picture, for tags learned by mistake. */
+	enum Preference { Never = -2, Less = -1, More = 1, Neutral = 2 };
 	enum Variety { Familiar = 0, Balanced = 1, Adventurous = 2 };
 
 	QHash<QString, int> tags;
@@ -68,6 +71,12 @@ class TagBackground
 		/** Posts sampled from a source, or the best-sampled source's count without one. */
 		double posts(const QString &website = {}) const;
 
+		/** Share of a source's sampled posts carrying the tag, 0 when unknown. */
+		double share(const QString &website, const QString &tag) const;
+
+		/** Every tag seen on a sampled source. */
+		QSet<QString> vocabulary() const;
+
 		QJsonObject toJson() const;
 		static TagBackground fromJson(const QJsonObject &json);
 
@@ -87,6 +96,8 @@ class TasteProfile
 		static TasteProfile build(const QList<LibraryEntry> &entries, const QHash<QString, double> &dislikedTags = {}, const QDateTime &now = QDateTime::currentDateTimeUtc(), const TagBackground &background = {}, const TasteTuning &tuning = {});
 		static QString normalize(const QString &tag);
 		static bool isMetaTag(const QString &name, const QString &type = {});
+		/** Groups of tags that name the same thing on different sources, such as hidden_sex_toy and stealth_sex_toy. */
+		static const QList<QStringList> &synonymGroups();
 
 		bool isEmpty() const;
 		int likes() const;
@@ -99,6 +110,8 @@ class TasteProfile
 		QStringList matches(const QStringList &tags, int limit) const;
 		/** Whether the tags include one the user never wants to see. */
 		bool blocks(const QStringList &tags) const;
+		/** Other names of this tag seen in ratings or on sampled sources (synonyms and other spellings). */
+		QStringList equivalents(const QString &tag) const;
 		const TasteTuning &tuning() const;
 		/** Searches for new pictures; tags whose earlier results were shown but never rated are picked less often. */
 		QList<DiscoveryQuery> queries(const QStringList &sources, int count, quint32 seed, const QHash<QString, DiscoveryFeedback> &feedback = {}) const;
@@ -114,6 +127,9 @@ class TasteProfile
 
 	private:
 		void applyTuning();
+		void learnSynonyms(const TagBackground &background, const QHash<QString, int> &rated);
+		QStringList group(const QString &name) const;
+		bool representative(const QString &name) const;
 
 		QHash<QString, TasteTag> m_tags;
 		QHash<QString, QHash<QString, double>> m_cooccurrences;
@@ -123,6 +139,10 @@ class TasteProfile
 		TasteTuning m_tuning;
 		QSet<QString> m_pinned;
 		QSet<QString> m_blocked;
+		QHash<QString, int> m_groupOf;
+		QList<QStringList> m_groups;
+		QHash<QString, QHash<QString, double>> m_variantShares;
+		QSet<QString> m_known;
 		double m_norm = 0;
 		int m_likes = 0;
 		int m_favorites = 0;

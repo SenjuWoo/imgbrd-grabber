@@ -3,6 +3,7 @@
 #include <QImageReader>
 #include <QNetworkRequest>
 #include <QTimer>
+#include "logger.h"
 #include "models/image.h"
 #include "models/site.h"
 #include "network/network-follow.h"
@@ -12,7 +13,8 @@
 namespace
 {
 	constexpr qint64 MaxPreviewBytes = 16 * 1024 * 1024;
-	constexpr int MaxPreviewDimension = 8192;
+	// Long comic strips have thumbnails like 270 x 8366; the pixel budget still bounds memory.
+	constexpr int MaxPreviewDimension = 30000;
 	constexpr qint64 MaxPreviewPixels = 16 * 1024 * 1024;
 }
 
@@ -48,6 +50,7 @@ void ThumbnailLoader::reset()
 	}
 	m_redirectsSeen.clear();
 	m_redirectHops = 0;
+	m_retries = 0;
 }
 
 void ThumbnailLoader::retry()
@@ -110,8 +113,12 @@ void ThumbnailLoader::fail(const QString &reason)
 		m_url = m_fallbackUrls.takeFirst();
 		m_redirectsSeen.clear();
 		m_redirectHops = 0;
+		m_retries = 0;
 		load();
 		return;
+	}
+	if (!m_aborted) {
+		log(QStringLiteral("Thumbnail failed for %1: %2").arg(m_image->pageUrl().toString(), reason), Logger::Warning);
 	}
 	finish();
 }
@@ -140,13 +147,12 @@ void ThumbnailLoader::replyFinished()
 		return;
 	}
 	if (m_reply->error() != NetworkReply::NetworkError::NoError) {
-		// One quiet retry for momentary failures, which otherwise left an error tile until reloaded by hand.
-		if (!m_retried && NetworkFollow::isTransient(m_reply->error(), m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())) {
-			m_retried = true;
+		// Quiet retries for momentary failures (1 s, then 4 s), which otherwise left an error tile until reloaded by hand.
+		if (m_retries < 2 && NetworkFollow::isTransient(m_reply->error(), m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt())) {
 			disconnect(m_reply, nullptr, this, nullptr);
 			m_reply->deleteLater();
 			m_reply = nullptr;
-			QTimer::singleShot(1000, this, &ThumbnailLoader::load);
+			QTimer::singleShot(m_retries++ == 0 ? 1000 : 4000, this, &ThumbnailLoader::load);
 			return;
 		}
 		fail(tr("Thumbnail could not load: %1").arg(m_reply->errorString()));

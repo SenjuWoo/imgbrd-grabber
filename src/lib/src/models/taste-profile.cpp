@@ -3,6 +3,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <algorithm>
 #include <array>
 #include <functional>
@@ -84,6 +85,13 @@ namespace
 	{
 		return !name.isEmpty() && name.size() <= 160 && !name.contains(':') && !name.startsWith('-') && !name.startsWith('~')
 			&& std::none_of(name.begin(), name.end(), [](QChar ch) { return ch.isSpace() || ch.category() == QChar::Other_Control; });
+	}
+
+	// Spellings that differ only by separators name one thing ("body_paint", "bodypaint"). Plurals do not ("ball", "balls").
+	QString spellingKey(const QString &name)
+	{
+		QString key = name;
+		return key.remove('_').remove('-');
 	}
 
 	bool crossSiteType(const QString &type)
@@ -226,6 +234,23 @@ QHash<QString, double> TagBackground::common(double minimumShare) const
 	return result;
 }
 
+double TagBackground::share(const QString &website, const QString &tag) const
+{
+	const double posts = m_posts.value(website);
+	return posts > 0 ? m_counts.value(website).value(tag) / posts : 0;
+}
+
+QSet<QString> TagBackground::vocabulary() const
+{
+	QSet<QString> result;
+	for (const auto &counts : m_counts) {
+		for (auto it = counts.constBegin(); it != counts.constEnd(); ++it) {
+			result.insert(it.key());
+		}
+	}
+	return result;
+}
+
 double TagBackground::posts(const QString &website) const
 {
 	if (!website.isEmpty()) {
@@ -294,9 +319,46 @@ bool TasteProfile::isMetaTag(const QString &name, const QString &type)
 	if (name.isEmpty() || type.compare(QLatin1String("meta"), Qt::CaseInsensitive) == 0 || meta.contains(name)) {
 		return true;
 	}
+	static const QRegularExpression ratio(QStringLiteral("^\\d+:\\d+$")); // Aspect ratios such as e621's 3:4.
 	return name.endsWith(QLatin1String("_request")) || name.startsWith(QLatin1String("commentary")) || name.startsWith(QLatin1String("bad_"))
+		|| name.endsWith(QLatin1String("_(artwork)")) || ratio.match(name).hasMatch()
 		|| name.contains(QLatin1String("resolution")) || name.endsWith(QLatin1String("_username")) || name.endsWith(QLatin1String("_id"))
 		|| name.startsWith(QLatin1String("rating:"));
+}
+
+const QList<QStringList> &TasteProfile::synonymGroups()
+{
+	// Names sources give the same theme, each checked to exist on Danbooru, e621 or rule34.xxx (2026-10-11).
+	// Other spellings ("buttplug", "butt_plug") are matched automatically.
+	static const QList<QStringList> groups {
+		{"1girl", "1girls"},
+		{"hidden_sex_toy", "stealth_sex_toy"},
+		{"hidden_vibrator", "discreet_vibrator"},
+		{"stealth_masturbation", "secret_masturbation", "hidden_masturbation", "sneaky_masturbation"},
+		{"stealth_sex", "secret_sex", "hidden_sex", "sneaky_sex"},
+		{"remote_control_vibrator", "remote_controlled_vibrator", "remote_vibrator", "vibrator_remote"},
+		{"vibrator_under_clothes", "vibrator_under_clothing"},
+		{"dildo_under_clothes", "dildo_under_clothing"},
+		{"sex_toy_under_clothes", "sex_toy_under_clothing"},
+		{"public_nudity", "nude_in_public", "naked_in_public"},
+		{"exhibitionism", "exhibitionist"},
+		{"altered_common_sense", "change_in_common_sense"},
+		{"oblivious", "unaware"},
+		{"caught", "caught_in_the_act", "getting_caught"},
+		{"netorare", "ntr", "cuckold", "cuckolding"},
+		{"pretending_to_sleep", "feigning_sleep"},
+		{"painted_clothes", "false_clothes", "fake_clothes"},
+		{"bodypaint", "body_paint", "body_painting"},
+		{"see-through", "see-through_clothes", "translucent_clothing", "transparent_clothing"},
+		{"no_bra", "braless"},
+		{"no_panties", "pantyless"},
+		{"pussy_juice", "vaginal_fluids"},
+		{"female_ejaculation", "pussy_ejaculation", "squirting"},
+		{"anal_plug", "butt_plug", "buttplug"},
+		{"egg_vibrator", "bullet_vibrator", "vibrator_egg"},
+		{"monochrome", "greyscale", "grayscale", "black_and_white"},
+	};
+	return groups;
 }
 
 bool TasteTuning::isNeutral() const
@@ -320,7 +382,7 @@ TasteTuning TasteTuning::fromJson(const QJsonObject &json)
 	for (auto it = preferences.constBegin(); it != preferences.constEnd(); ++it) {
 		const QString name = TasteProfile::normalize(it.key());
 		const int value = it.value().toInt();
-		if (!name.isEmpty() && (value == Never || value == Less || value == More)) {
+		if (!name.isEmpty() && (value == Never || value == Less || value == More || value == Neutral)) {
 			tuning.tags.insert(name, value);
 		}
 	}
@@ -337,21 +399,28 @@ TasteTuning TasteTuning::fromJson(const QJsonObject &json)
 void TasteProfile::applyTuning()
 {
 	for (auto it = m_tuning.tags.constBegin(); it != m_tuning.tags.constEnd(); ++it) {
-		const QString name = normalize(it.key());
-		if (name.isEmpty()) {
+		const QString named = normalize(it.key());
+		if (named.isEmpty()) {
 			continue;
 		}
-		auto &tag = m_tags[name];
-		tag.name = name;
-		if (it.value() == TasteTuning::More) {
-			// Asked-for tags rank with the strongest learned ones and can be searched on every source.
-			tag.weight = std::max(tag.weight, 0.6) + 0.4;
-			m_pinned.insert(name);
-		} else if (it.value() == TasteTuning::Less) {
-			tag.weight = std::max(-1.0, std::min(tag.weight, 0.0) - 0.6);
-		} else if (it.value() == TasteTuning::Never) {
-			tag.weight = -1.0;
-			m_blocked.insert(name);
+		// A preference covers every name of the tag; only the named one is searched.
+		for (const QString &name : group(named)) {
+			auto &tag = m_tags[name];
+			tag.name = name;
+			if (it.value() == TasteTuning::More) {
+				// Asked-for tags rank with the strongest learned ones and can be searched on every source.
+				tag.weight = std::max(tag.weight, 0.6) + 0.4;
+				if (name == named) {
+					m_pinned.insert(name);
+				}
+			} else if (it.value() == TasteTuning::Less) {
+				tag.weight = std::max(-1.0, std::min(tag.weight, 0.0) - 0.6);
+			} else if (it.value() == TasteTuning::Never) {
+				tag.weight = -1.0;
+				m_blocked.insert(name);
+			} else if (it.value() == TasteTuning::Neutral) {
+				tag.weight = 0;
+			}
 		}
 	}
 	for (const QString &focus : m_tuning.focus) {
@@ -368,6 +437,120 @@ void TasteProfile::applyTuning()
 		squares += tag.weight > 0 ? tag.weight * tag.weight : 0;
 	}
 	m_norm = std::sqrt(squares);
+}
+
+void TasteProfile::learnSynonyms(const TagBackground &background, const QHash<QString, int> &rated)
+{
+	// Synonyms and other spellings share what was learned, so a theme matches and is searched under every name.
+	QSet<QString> vocabulary = background.vocabulary();
+	for (auto it = rated.constBegin(); it != rated.constEnd(); ++it) {
+		vocabulary.insert(it.key());
+	}
+	auto join = [this](const QStringList &names) {
+		int target = -1;
+		for (const QString &name : names) {
+			target = target < 0 ? m_groupOf.value(name, -1) : target;
+		}
+		if (target < 0) {
+			target = int(m_groups.size());
+			m_groups.append(QStringList());
+		}
+		for (const QString &name : names) {
+			const int current = m_groupOf.value(name, -1);
+			if (current == target) {
+				continue;
+			}
+			const QStringList moved = current < 0 ? QStringList {name} : m_groups[current];
+			for (const QString &member : moved) {
+				m_groupOf.insert(member, target);
+				m_groups[target].append(member);
+			}
+			if (current >= 0) {
+				m_groups[current].clear();
+			}
+		}
+	};
+	for (const QStringList &names : synonymGroups()) {
+		join(names);
+		for (const QString &name : names) {
+			m_known.insert(name); // Checked to exist on real sources.
+		}
+	}
+	QHash<QString, QStringList> spellings;
+	for (const QString &name : std::as_const(vocabulary)) {
+		if (!isMetaTag(name)) {
+			spellings[spellingKey(name)].append(name);
+		}
+	}
+	for (QStringList names : std::as_const(spellings)) {
+		if (names.size() > 1) {
+			std::sort(names.begin(), names.end());
+			join(names);
+		}
+	}
+	for (const QStringList &members : std::as_const(m_groups)) {
+		QString best;
+		for (const QString &member : members) {
+			if (vocabulary.contains(member)) {
+				m_known.insert(member);
+			}
+			const double weight = m_tags.value(member).weight;
+			if (weight > 0 && (best.isEmpty() || weight > m_tags.value(best).weight || (weight == m_tags.value(best).weight && member < best))) {
+				best = member;
+			}
+		}
+		if (best.isEmpty()) {
+			continue;
+		}
+		const TasteTag learned = m_tags.value(best);
+		for (const QString &member : members) {
+			auto &tag = m_tags[member];
+			if (tag.name.isEmpty()) {
+				tag = {member, learned.type, learned.weight, 0, best};
+			} else {
+				tag.weight = std::max(tag.weight, learned.weight);
+			}
+		}
+	}
+	// Where each liked tag, under any of its names, shows up in sampled posts: it can be searched there too.
+	for (auto it = m_tags.constBegin(); it != m_tags.constEnd(); ++it) {
+		for (const QString &website : m_siteWeights.keys()) {
+			const double share = it->weight > 0 ? background.share(website, it.key()) : 0;
+			if (share > 0) {
+				m_variantShares[it.key()].insert(website, share);
+			}
+		}
+	}
+}
+
+bool TasteProfile::representative(const QString &name) const
+{
+	// One entry per theme: the strongest of its rated names, then the most used.
+	const auto tag = m_tags.value(name);
+	const QStringList names = group(name);
+	return std::none_of(names.begin(), names.end(), [this, &tag, &name](const QString &member) {
+		const auto other = m_tags.value(member);
+		return member != name && other.sameAs.isEmpty()
+		&& (other.weight > tag.weight || (other.weight == tag.weight && (other.count > tag.count || (other.count == tag.count && member < name))));
+	});
+}
+
+QStringList TasteProfile::group(const QString &name) const
+{
+	const int index = m_groupOf.value(name, -1);
+	return index < 0 ? QStringList {name} : m_groups[index];
+}
+
+QStringList TasteProfile::equivalents(const QString &tag) const
+{
+	const QString name = normalize(tag);
+	QStringList result;
+	for (const QString &member : group(name)) {
+		if (member != name && m_known.contains(member)) {
+			result.append(member);
+		}
+	}
+	return result;
 }
 
 TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash<QString, double> &dislikedTags, const QDateTime &now, const TagBackground &background, const TasteTuning &tuning)
@@ -437,7 +620,8 @@ TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash
 			const double base = std::max(frequency, 0.5 / sampled);
 			const double lift = std::clamp(std::log(termWeight.value(name) / totalWeight / base), -2.0, 6.0);
 			const double confidence = 1.0 - std::exp(-documentFrequency.value(name) / 3.0);
-			weight = confidence * lift * (lift > 0 ? typeBoost(type) : 1.0);
+			// Rarer in ratings than on the sites is not dislike ("solo" in a third of them): only hiding and tuning lower a tag.
+			weight = lift > 0 ? confidence * lift * typeBoost(type) : 0;
 		} else {
 			// Ubiquitous liked tags still matter a little; one-off general tags are mostly noise.
 			const bool singleton = documentFrequency.value(name) < 2 && !crossSiteType(type) && termWeight.value(name) < 3.0;
@@ -451,17 +635,6 @@ TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash
 		}
 		profile.m_tags.insert(name, {name, type, weight, documentFrequency.value(name)});
 		strongest = std::max(strongest, weight);
-	}
-	if (contrast) {
-		// Common tags that never show up in ratings are mild signs of disinterest.
-		const auto common = background.common(0.02);
-		for (auto it = common.constBegin(); it != common.constEnd(); ++it) {
-			if (!termWeight.contains(it.key()) && !isMetaTag(it.key())) {
-				const double expected = it.value() * documents;
-				const double lift = std::clamp(std::log(0.5 / documents / it.value()), -2.0, 0.0);
-				profile.m_tags.insert(it.key(), {it.key(), {}, (1.0 - std::exp(-expected / 3.0)) * lift, 0});
-			}
-		}
 	}
 	strongest = strongest > 0 ? strongest : 1.0;
 	for (auto it = profile.m_tags.begin(); it != profile.m_tags.end(); ++it) {
@@ -487,17 +660,23 @@ TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash
 		}
 	}
 
+	profile.learnSynonyms(background, documentFrequency);
+	QSet<QString> ratedSpellings;
+	for (auto it = documentFrequency.constBegin(); it != documentFrequency.constEnd(); ++it) {
+		ratedSpellings.insert(spellingKey(it.key()));
+	}
+
 	for (auto it = dislikedTags.constBegin(); it != dislikedTags.constEnd(); ++it) {
 		const QString name = normalize(it.key());
-		if (name.isEmpty() || it.value() <= 0) {
+		// A plain "hide" says little about any one tag: only tags absent from every rating and shared by several hidden pictures count.
+		const QStringList names = profile.group(name);
+		if (name.isEmpty() || it.value() < 2 || isMetaTag(name) || isGeneric(name) || ratedSpellings.contains(spellingKey(name))
+			|| std::any_of(names.begin(), names.end(), [&documentFrequency](const QString &member) { return documentFrequency.contains(member); })) {
 			continue;
 		}
 		auto &tag = profile.m_tags[name];
 		tag.name = name;
-		// A hidden picture weakly penalizes its tags, except tags that clearly belong to this taste.
-		const double positive = std::max(0.0, tag.weight);
-		tag.weight -= 0.3 * std::log1p(it.value()) * (1.0 - std::min(1.0, positive / 0.3));
-		tag.weight = std::max(-1.0, tag.weight);
+		tag.weight = std::max(-1.0, std::min(tag.weight, 0.0) - 0.3 * std::log1p(it.value()));
 	}
 
 	profile.applyTuning();
@@ -519,7 +698,7 @@ QList<TasteTag> TasteProfile::topTags(int limit, const QSet<QString> &types) con
 {
 	QList<TasteTag> result;
 	for (const auto &tag : m_tags) {
-		if (tag.weight > 0 && (types.isEmpty() || types.contains(tag.type))) {
+		if (tag.weight > 0 && tag.sameAs.isEmpty() && (types.isEmpty() || types.contains(tag.type)) && representative(tag.name)) {
 			result.append(tag);
 		}
 	}
@@ -533,7 +712,8 @@ QList<TasteTag> TasteProfile::avoidedTags(int limit) const
 {
 	QList<TasteTag> result;
 	for (const auto &tag : m_tags) {
-		if (tag.weight < -0.05) {
+		// Unseen other names of an avoided tag would only clutter the list.
+		if (tag.weight < -0.05 && (m_known.contains(tag.name) || !m_groupOf.contains(tag.name) || m_tuning.tags.contains(tag.name))) {
 			result.append(tag);
 		}
 	}
@@ -620,15 +800,36 @@ QList<DiscoveryQuery> TasteProfile::queries(const QStringList &sources, int coun
 	const int poolSize = std::array<int, 3> {12, QueryPool, 80}[variety];
 	const double exponent = std::array<double, 3> {3.0, 2.0, 1.0}[variety];
 	QList<QPair<double, QString>> eligible;
+	// Sources where a tag, under any of its names, was rated, then sources whose posts carry it.
+	auto ratedSites = [this, &selected](const QString &name) {
+		QHash<QString, double> sites;
+		const QStringList names = group(name);
+		for (const QString &member : names) {
+			for (auto it = m_sites.value(member).constBegin(); it != m_sites.value(member).constEnd(); ++it) {
+				if (selected.contains(it.key())) {
+					sites[it.key()] += it.value();
+				}
+			}
+		}
+		for (const QString &member : names) {
+			for (auto it = m_variantShares.value(member).constBegin(); it != m_variantShares.value(member).constEnd(); ++it) {
+				if (selected.contains(it.key()) && !sites.contains(it.key())) {
+					sites.insert(it.key(), 0.5);
+				}
+			}
+		}
+		return sites;
+	};
 	for (const QString &name : sortedKeys(m_tags)) {
 		const auto &tag = m_tags[name];
-		if (tag.weight <= 0.02 || isGeneric(name) || !queryable(name) || m_tuning.focus.contains(name)) {
+		// One search candidate per theme: other names of a learned tag are searched through it.
+		if (tag.weight <= 0.02 || !tag.sameAs.isEmpty() || isGeneric(name) || !queryable(name) || m_tuning.focus.contains(name)) {
 			continue;
 		}
-		bool onSelected = false;
-		for (auto it = m_sites.value(name).constBegin(); it != m_sites.value(name).constEnd(); ++it) {
-			onSelected = onSelected || selected.contains(it.key());
+		if (!representative(name)) {
+			continue;
 		}
+		const bool onSelected = !ratedSites(name).isEmpty();
 		if (!onSelected && !crossSiteType(tag.type) && !m_pinned.contains(name)) {
 			continue;
 		}
@@ -662,25 +863,29 @@ QList<DiscoveryQuery> TasteProfile::queries(const QStringList &sources, int coun
 
 	for (const auto &pick : picks) {
 		const QString &primary = pick.first;
-		const auto &tag = m_tags[primary];
-		QHash<QString, double> sites;
-		for (auto it = m_sites.value(primary).constBegin(); it != m_sites.value(primary).constEnd(); ++it) {
-			if (selected.contains(it.key())) {
-				sites.insert(it.key(), it.value());
-			}
-		}
-		QString website = weightedPick(sites, rng);
+		const auto tag = m_tags.value(primary);
+		QString website = weightedPick(ratedSites(primary), rng);
 		if (website.isEmpty()) {
 			website = available[int(rng.bounded(quint32(available.size())))];
 		}
-		DiscoveryQuery query {website, {primary}, pick.second ? QCoreApplication::translate("TasteProfile", "Today's focus: %1").arg(primary) : QCoreApplication::translate("TasteProfile", "Because you like %1").arg(primary)};
+		// Search the name this source uses: the one rated there, else the one its posts carry most.
+		QString searched = primary;
+		double evidence = 0;
+		for (const QString &member : group(primary)) {
+			const double score = m_sites.value(member).value(website) * 1000 + m_variantShares.value(member).value(website);
+			if (score > evidence && queryable(member) && !m_blocked.contains(member)) {
+				evidence = score;
+				searched = member;
+			}
+		}
+		DiscoveryQuery query {website, {searched}, pick.second ? QCoreApplication::translate("TasteProfile", "Today's focus: %1").arg(primary) : QCoreApplication::translate("TasteProfile", "Because you like %1").arg(primary)};
 		const double pairChance = pick.second ? 0.4 : (crossSiteType(tag.type) ? 0.35 : 0.75);
 		if (rng.generateDouble() < pairChance) {
 			QHash<QString, double> partners;
 			for (auto it = m_cooccurrences.value(primary).constBegin(); it != m_cooccurrences.value(primary).constEnd(); ++it) {
 				const auto partner = m_tags.value(it.key());
 				// Partners must exist on the chosen source so both tags share one vocabulary.
-				if (partner.weight > 0.05 && !isGeneric(partner.name) && queryable(partner.name) && m_sites.value(partner.name).contains(website)
+				if (partner.weight > 0.05 && partner.name != searched && !isGeneric(partner.name) && queryable(partner.name) && m_sites.value(partner.name).contains(website)
 					&& !(tag.type == QLatin1String("artist") && partner.type == QLatin1String("artist"))) {
 					partners.insert(partner.name, it.value() * partner.weight * feedbackBoost(feedback, partner.name));
 				}

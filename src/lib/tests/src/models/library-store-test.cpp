@@ -413,6 +413,7 @@ TEST_CASE("Library joins copies of a picture instead of duplicating it", "[libra
 		copy.setPreviewImage(paintedPicture(320, 240, QColor(240, 220, 120)));
 		const auto print = ImageFingerprint::fromImage(copy.previewImage().toImage(), copy.size());
 		REQUIRE(store.sameImageKey(copy, print) == key);
+		REQUIRE(store.matchingKey(copy) == key); // Shown as the liked picture before it is saved.
 		REQUIRE(store.saveImage(copy) == key);
 		REQUIRE(store.entries().size() == 1);
 		REQUIRE(store.isKnown(copy)); // Linked now, even without its preview.
@@ -424,6 +425,7 @@ TEST_CASE("Library joins copies of a picture instead of duplicating it", "[libra
 		Image variant(&other, {{ "id", "902" }, { "md5", "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee" }, { "file_url", "https://mirror.test/c.jpg" }}, profile.data());
 		variant.setPreviewImage(paintedPicture(160, 120, QColor(200, 40, 160)));
 		REQUIRE(store.sameImageKey(variant, ImageFingerprint::fromImage(variant.previewImage().toImage())).isEmpty());
+		REQUIRE(store.matchingKey(variant) == store.keyForImage(variant));
 		REQUIRE(store.saveImage(variant) != key);
 		REQUIRE(store.entries().size() == 2);
 	}

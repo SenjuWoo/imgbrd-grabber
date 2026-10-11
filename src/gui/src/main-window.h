@@ -22,6 +22,7 @@ namespace Ui
 class SearchTab;
 class FavoritesTab;
 class LibraryTab;
+class DiscoveryFeed;
 class HomeTab;
 class Profile;
 class DownloadQueue;
@@ -49,6 +50,8 @@ class MainWindow : public QMainWindow
 		~MainWindow() override;
 		Ui::MainWindow *ui;
 		Site *getSelectedSiteOrDefault();
+		/** Discover's feed, shared with searches for Not interested and the tag adapter; null before Discover exists. */
+		DiscoveryFeed *discoveryFeed() const;
 
 	public slots:
 		// Menus
@@ -134,7 +137,7 @@ class MainWindow : public QMainWindow
 		QList<Site*> m_selectedSites;
 		FavoritesTab *m_favoritesTab;
 		LibraryTab *m_libraryTab;
-		HomeTab *m_homeTab;
+		HomeTab *m_homeTab = nullptr;
 		DownloadsTab *m_downloadsTab;
 		MonitorsTab *m_monitorsTab;
 		LogTab *m_logTab;

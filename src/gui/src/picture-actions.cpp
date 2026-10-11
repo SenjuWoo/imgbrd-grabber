@@ -1,12 +1,15 @@
 #include "picture-actions.h"
 #include <QCheckBox>
 #include <QDir>
+#include <QInputDialog>
+#include <QMenu>
 #include <QMessageBox>
 #include <QPointer>
 #include <QPushButton>
 #include <QSettings>
 #include <QWidget>
 #include <memory>
+#include "discovery-feed.h"
 #include "downloader/download-queue.h"
 #include "downloader/image-downloader.h"
 #include "downloader/image-save-result.h"
@@ -125,4 +128,52 @@ void PictureActions::offerRemoval(Profile *profile, const QStringList &keys, QWi
 		}
 	});
 	box->open();
+}
+
+void PictureActions::fillNotInterested(QMenu *menu, DiscoveryFeed *feed, const QSharedPointer<Image> &image, int count, const std::function<void(const QStringList &, bool)> &act, QWidget *parent)
+{
+	menu->addAction(count == 1 ? QObject::tr("Hide this picture") : QObject::tr("Hide these %n pictures", "", count), menu, [act]() { act({}, false); });
+	if (!image || feed == nullptr) {
+		return;
+	}
+	// The tags that match this taste, then who drew it and what it shows.
+	QStringList choices = feed->taste().matches(image->tagsString(), 6);
+	for (const auto &tag : image->tags()) {
+		const QString type = tag.type().name();
+		const QString name = TasteProfile::normalize(tag.text());
+		if ((type == QLatin1String("artist") || type == QLatin1String("character") || type == QLatin1String("copyright")) && !choices.contains(name) && choices.size() < 9) {
+			choices.append(name);
+		}
+	}
+	QStringList all;
+	for (const QString &tag : image->tagsString()) {
+		const QString name = TasteProfile::normalize(tag);
+		if (!name.isEmpty() && !TasteProfile::isMetaTag(name)) {
+			all.append(name);
+		}
+	}
+	if (choices.isEmpty()) {
+		choices = all.mid(0, 6);
+	}
+	menu->addSection(QObject::tr("Show less of…"));
+	for (const QString &tag : choices) {
+		menu->addAction(QString(tag).replace('_', ' '), menu, [act, tag]() { act({tag}, false); });
+	}
+	auto *never = menu->addMenu(QObject::tr("Never show…"));
+	for (const QString &tag : choices) {
+		never->addAction(QString(tag).replace('_', ' '), never, [act, tag]() { act({tag}, true); });
+	}
+	menu->addAction(QObject::tr("Another tag…"), menu, [act, all, parent = QPointer<QWidget>(parent)]() {
+		bool ok = false;
+		const QString tag = QInputDialog::getItem(parent, QObject::tr("Not interested"), QObject::tr("Show less of this tag:"), all, 0, true, &ok).trimmed();
+		if (ok && !tag.isEmpty()) {
+			act({tag}, false);
+		}
+	});
+}
+
+QString PictureActions::notInterestedMessage(const QStringList &tags, bool never)
+{
+	return tags.isEmpty() ? QObject::tr("Hidden. You'll see fewer pictures like this.")
+		: never ? QObject::tr("Hidden. You won't see %1 again.").arg(tags.join(", ")) : QObject::tr("Hidden. You'll see less %1.").arg(tags.join(", "));
 }

@@ -7,6 +7,7 @@
 #include <QUrlQuery>
 #include "custom-network-access-manager.h"
 #include "models/api/javascript-api.h"
+#include "models/image.h"
 #include "models/page.h"
 #include "models/page-api.h"
 #include "models/profile.h"
@@ -187,5 +188,37 @@ TEST_CASE("PageApi pagination uses response evidence and the effective API limit
 		REQUIRE(forced.pageImageCount() == 2);
 		REQUIRE(forced.pagesCount(false) == 2);
 		REQUIRE(forced.hasNext());
+	}
+	SECTION("Fixed-size source pages are joined to fill the requested page")
+	{
+		source.property("apis").property("json").setProperty("forcedLimit", 3);
+		PageApi joined(&parentPage, profile.data(), site, &api, QStringList{"forest"}, 2, 5);
+		REQUIRE(joined.imagesPerPage() == 5);
+		REQUIRE(QUrlQuery(joined.url()).queryItemValue("page") == "2");
+		REQUIRE(QUrlQuery(joined.url()).queryItemValue("limit") == "3");
+		// Items 5-9 of the search live on source pages 2-4 (items 3-11); the last one is short, so the search ends there.
+		QList<QTemporaryFile*> files;
+		for (const auto &ids : QList<QList<int>> {{3, 4, 5}, {6, 7, 8}, {9}}) {
+			QStringList posts;
+			for (const int id : ids) {
+				posts.append(QStringLiteral(R"({"id":%1,"md5":"%2","file_url":"https://example.com/%1.png","tags":"forest"})").arg(id).arg(id, 32, 16, QChar('0')));
+			}
+			auto *file = new QTemporaryFile(&joined);
+			REQUIRE(file->open());
+			file->write("{\"images\":[" + posts.join(',').toUtf8() + "]}");
+			file->flush();
+			CustomNetworkAccessManager::NextFiles.enqueue(file->fileName());
+		}
+		QSignalSpy finished(&joined, &PageApi::finishedLoading);
+		joined.load();
+		REQUIRE(finished.wait());
+		REQUIRE(finished.size() == 1);
+		REQUIRE(QUrlQuery(joined.url()).queryItemValue("page") == "4");
+		QList<qulonglong> ids;
+		for (const auto &image : joined.images()) {
+			ids.append(image->id());
+		}
+		REQUIRE(ids == QList<qulonglong> {5, 6, 7, 8, 9});
+		REQUIRE_FALSE(joined.hasNext());
 	}
 }

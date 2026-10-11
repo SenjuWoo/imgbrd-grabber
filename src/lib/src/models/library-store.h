@@ -75,9 +75,13 @@ class LibraryStore : public QObject
 		/**
 		 * Library picture that shows the same image: a linked source, the same file, or with a valid fingerprint
 		 * the same picture by appearance (a re-encoded copy from another source). Empty when there is none.
-		 * With `variants`, pictures that only differ in colors or small edits count as the same.
 		 */
-		QString sameImageKey(const Image &image, const ImageFingerprint &fingerprint = {}, bool variants = false);
+		QString sameImageKey(const Image &image, const ImageFingerprint &fingerprint = {});
+		/**
+		 * The Library picture this one is saved as: its own entry, a linked source, the same file, or a copy that looks
+		 * identical of a picture from a website (local imports link only after review). Falls back to keyForImage().
+		 */
+		QString matchingKey(const Image &image);
 		/** Starts computing the visual index in the background so the first visual check does not stall. */
 		void prepareVisualIndex();
 		/** Moves ratings, notes, collections, local files and source links of `from` onto `into`, then removes `from`. */

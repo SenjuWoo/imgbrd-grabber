@@ -31,6 +31,13 @@ PageApi::PageApi(Page *parentPage, Profile *profile, Site *site, Api *api, Searc
 	m_format = m_api->getName();
 	if (m_api->forcedLimit() > 0) {
 		m_imagesPerPage = m_api->forcedLimit();
+		// Plain tag searches on fixed-size sources (42 per HTML page) request enough of them to fill the asked-for page.
+		if (m_requestedImagesPerPage > m_imagesPerPage && !m_smart && m_query.gallery.isNull() && m_query.endpoint.isEmpty() && m_query.urls.isEmpty()
+			&& !(m_query.tags.count() == 1 && isUrl(m_query.tags.first()))) {
+			m_siteLimit = m_imagesPerPage;
+			m_imagesPerPage = m_requestedImagesPerPage;
+			m_sitePage = (m_page - 1) * m_imagesPerPage / m_siteLimit + 1;
+		}
 	} else if (m_api->maxLimit() > 0) {
 		m_imagesPerPage = qMin(m_imagesPerPage, m_api->maxLimit());
 	}
@@ -61,7 +68,10 @@ void PageApi::setLastPage(const PageInformation& info)
 	m_lastPageInformation = info;
 	m_url.clear();
 
-	if (!info.nextPage.isEmpty() && info.page == m_page - 1) {
+	// Cursors point at the source's own pages, which joined pages do not line up with.
+	if (m_siteLimit > 0) {
+		m_lastPageInformation = {};
+	} else if (!info.nextPage.isEmpty() && info.page == m_page - 1) {
 		m_url = info.nextPage;
 	} else if (!info.previousPage.isEmpty() && info.page == m_page + 1) {
 		m_url = info.previousPage;
@@ -91,7 +101,9 @@ void PageApi::updateUrls()
 		} else if (!m_query.gallery.isNull()) {
 			ret = m_api->galleryUrl(m_query.gallery, m_page, m_imagesPerPage, m_site);
 		} else {
-			ret = m_api->pageUrl(m_query.tags.join(' '), m_page, m_imagesPerPage, m_lastPageInformation, m_site);
+			ret = m_siteLimit > 0
+				? m_api->pageUrl(m_query.tags.join(' '), m_sitePage, m_siteLimit, {}, m_site)
+				: m_api->pageUrl(m_query.tags.join(' '), m_page, m_imagesPerPage, m_lastPageInformation, m_site);
 		}
 
 		if (!ret.error.isEmpty()) {
@@ -138,6 +150,14 @@ void PageApi::load(bool rateLimit, bool force)
 		m_redirectsSeen.clear();
 		m_redirectHops = 0;
 		m_rateLimitRetries = 0;
+		if (m_siteLimit > 0) {
+			m_sitePage = (m_page - 1) * m_imagesPerPage / m_siteLimit + 1;
+			m_joined.clear();
+			m_joinedTags.clear();
+			m_joinedExhausted = false;
+			m_url.clear();
+			updateUrls();
+		}
 	}
 
 	if (m_url.isEmpty() && !m_errors.isEmpty()) {
@@ -268,51 +288,85 @@ void PageApi::parseActual()
 	const bool isGallery = !m_query.gallery.isNull();
 	const bool parseErrors = endpoint ? endpoint->parseErrors() : (isGallery ? m_api->parseGalleryErrors() : m_api->parsePageErrors());
 	const int statusCode = m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
-	const int offset = (m_page - 1) * m_imagesPerPage;
+	const int offset = m_siteLimit > 0 ? (m_sitePage - 1) * m_siteLimit : (m_page - 1) * m_imagesPerPage;
+	// A failed follow-up request of a joined page keeps the pictures the earlier requests found.
+	const bool keepJoined = m_siteLimit > 0 && !m_joined.isEmpty();
+	auto fail = [this]() {
+		setReply(nullptr);
+		m_loaded = true;
+		m_loading = false;
+		emit finishedLoading(this, LoadResult::Error);
+	};
+	ParsedPage page;
+	bool failedFollowUp = false;
 
 	// Detect Cloudflare
 	if ((statusCode == 403 || statusCode == 429 || statusCode == 503) && m_reply->rawHeader("server") == "cloudflare") {
-		m_errors.append("Cloudflare wall");
 		log(QStringLiteral("[%1][%2] Cloudflare wall for '%3'").arg(m_site->url(), m_format, m_reply->url().toString()), Logger::Error);
-		setReply(nullptr);
-		m_loaded = true;
-		m_loading = false;
-		emit finishedLoading(this, LoadResult::Error);
-		return;
-	}
-
-	// Try to read the reply
-	m_source = m_reply->readAll();
-	if (m_source.isEmpty() || (m_reply->error() != NetworkReply::NetworkError::NoError && !parseErrors)) {
-		if (m_reply->error() != NetworkReply::NetworkError::OperationCanceledError) {
-			log(QStringLiteral("[%1][%2] Loading error: %3 (%4)").arg(m_site->url(), m_format, m_reply->errorString()).arg(m_reply->error()), Logger::Error);
+		if (!keepJoined) {
+			m_errors.append("Cloudflare wall");
+			fail();
+			return;
 		}
-		setReply(nullptr);
-		m_loaded = true;
-		m_loading = false;
-		emit finishedLoading(this, LoadResult::Error);
-		return;
-	}
-
-	// Parse source
-	ParsedPage page;
-	if (endpoint) {
-		page = endpoint->parse(m_parentPage, m_source, statusCode, offset);
-	} else if (isGallery) {
-		page = m_api->parseGallery(m_parentPage, m_source, statusCode, offset);
+		failedFollowUp = true;
 	} else {
-		page = m_api->parsePage(m_parentPage, m_source, statusCode, offset);
+		// Try to read the reply
+		m_source = m_reply->readAll();
+		if (m_source.isEmpty() || (m_reply->error() != NetworkReply::NetworkError::NoError && !parseErrors)) {
+			if (m_reply->error() != NetworkReply::NetworkError::OperationCanceledError) {
+				log(QStringLiteral("[%1][%2] Loading error: %3 (%4)").arg(m_site->url(), m_format, m_reply->errorString()).arg(m_reply->error()), Logger::Error);
+			}
+			if (!keepJoined) {
+				fail();
+				return;
+			}
+			failedFollowUp = true;
+		} else {
+			// Parse source
+			if (endpoint) {
+				page = endpoint->parse(m_parentPage, m_source, statusCode, offset);
+			} else if (isGallery) {
+				page = m_api->parseGallery(m_parentPage, m_source, statusCode, offset);
+			} else {
+				page = m_api->parsePage(m_parentPage, m_source, statusCode, offset);
+			}
+
+			// Handle errors
+			if (!page.error.isEmpty()) {
+				log(QStringLiteral("[%1][%2] %3").arg(m_site->url(), m_format, page.error), Logger::Warning);
+				if (!keepJoined) {
+					m_errors.append(page.error);
+					fail();
+					return;
+				}
+				page = ParsedPage();
+				failedFollowUp = true;
+			}
+		}
 	}
 
-	// Handle errors
-	if (!page.error.isEmpty()) {
-		m_errors.append(page.error);
-		log(QStringLiteral("[%1][%2] %3").arg(m_site->url(), m_format, page.error), Logger::Warning);
-		setReply(nullptr);
-		m_loaded = true;
-		m_loading = false;
-		emit finishedLoading(this, LoadResult::Error);
-		return;
+	if (m_siteLimit > 0) {
+		m_joined.append(page.images);
+		if (m_joinedTags.isEmpty()) {
+			m_joinedTags = page.tags;
+		}
+		const int first = (m_page - 1) * m_imagesPerPage;
+		const int lastSitePage = (first + m_imagesPerPage - 1) / m_siteLimit + 1;
+		if (page.images.size() >= m_siteLimit && m_sitePage < lastSitePage) {
+			++m_sitePage;
+			m_url.clear();
+			updateUrls();
+			load(false, true);
+			return;
+		}
+		m_joinedExhausted = !failedFollowUp && page.images.size() < m_siteLimit && first % m_siteLimit + m_imagesPerPage >= m_joined.size();
+		page.images = m_joined.mid(first % m_siteLimit, m_imagesPerPage);
+		page.tags = m_joinedTags;
+		if (page.pageCount >= 0) {
+			page.pageCount = qCeil(static_cast<qreal>(page.pageCount) * m_siteLimit / m_imagesPerPage);
+		}
+		page.urlNextPage = QUrl();
+		page.urlPrevPage = QUrl();
 	}
 
 	// Fill data from parsing result
@@ -474,7 +528,7 @@ bool PageApi::hasNext() const
 	if (!m_urlNextPage.isEmpty() && m_urlNextPage.isValid()) {
 		return m_site->fixUrl(m_urlNextPage.toString(), m_url) != m_url;
 	}
-	if (m_pageImageCount <= 0) {
+	if (m_pageImageCount <= 0 || m_joinedExhausted) {
 		return false;
 	}
 	if (m_pagesCountSafe && m_pagesCount >= m_page) {

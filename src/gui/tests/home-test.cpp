@@ -389,18 +389,34 @@ TEST_CASE("Discover never shows Library pictures, even copies from other sources
 	CustomNetworkAccessManager::NextFiles.enqueue(writePosts(directory, "posts.json", {
 		post(901, QString(32, '1'), "forest river"),
 		post(902, QString(32, '2'), "forest lake"),
+		post(903, QString(32, '3'), "forest edit"),
 	}));
 	CustomNetworkAccessManager::NextFiles.enqueue(writeArt(directory, "copy.jpg", liked.scaled(120, 150, Qt::IgnoreAspectRatio, Qt::SmoothTransformation)));
 	CustomNetworkAccessManager::NextFiles.enqueue(writeArt(directory, "other.png", paintedArt(Qt::blue).mirrored(true, false)));
+	// An edit of the liked picture (a caption added) is another picture: it shows up.
+	QImage edit = liked;
+	QPainter painter(&edit);
+	painter.fillRect(QRect(20, 20, 140, 120), Qt::black);
+	painter.end();
+	CustomNetworkAccessManager::NextFiles.enqueue(writeArt(directory, "edit.png", edit));
 
 	HomeTab home(profile.data(), nullptr);
 	home.resize(1100, 800);
 	home.show();
 	auto *model = home.grid()->gridModel();
 	REQUIRE(QTest::qWaitFor([&home, model]() { return !home.feed()->isBusy() && model->rowCount() > 0; }, 8000));
-	REQUIRE(model->rowCount() == 1);
-	REQUIRE(home.feed()->image(model->item(0).key)->id() == 902);
-	REQUIRE(model->item(0).tooltip.contains("Matches your taste: forest"));
+	REQUIRE(model->rowCount() == 2);
+	QList<qulonglong> shown;
+	for (int row = 0; row < model->rowCount(); ++row) {
+		shown.append(home.feed()->image(model->item(row).key)->id());
+	}
+	REQUIRE(shown.contains(902));
+	REQUIRE(shown.contains(903));
+	for (int row = 0; row < model->rowCount(); ++row) {
+		if (home.feed()->image(model->item(row).key)->id() == 902) {
+			REQUIRE(model->item(row).tooltip.contains("Matches your taste: forest"));
+		}
+	}
 }
 
 TEST_CASE("Discover lets users say what is not interesting, undo it and restore hidden pictures", "[library][home][discovery]")
@@ -468,8 +484,20 @@ TEST_CASE("Discover lets users say what is not interesting, undo it and restore 
 	REQUIRE(feed->dismissedCount() == 0);
 	REQUIRE(feed->hiddenPictures().isEmpty());
 
+	// A search hides pictures Discover never showed, and Never applies to searches too.
+	auto searched = QSharedPointer<Image>::create(site, QMap<QString, QString> {{"id", "950"}, {"md5", QString(32, 'e')}, {"file_url", "https://test.invalid/950.png"}, {"tags", "forest spiders"}}, profile.data());
+	const QString searchedKey = LibraryStore::imageKey(*searched);
+	feed->dismiss(searchedKey, {"spiders"}, true, searched);
+	REQUIRE(feed->isHidden(searchedKey));
+	REQUIRE(feed->neverShown({"forest", "Spiders"}) == "Spiders");
+	REQUIRE(feed->hiddenPictures().first().image->id() == 950);
+	feed->restore({searchedKey});
+	feed->setTuning({});
+	REQUIRE_FALSE(feed->isHidden(searchedKey));
+	REQUIRE(feed->neverShown({"spiders"}).isEmpty());
+
 	// Hidden pictures and tuning survive a restart.
-	feed->dismiss(lakeKey, {}, false);
+	feed->dismiss(lakeKey, {"lake"}, false);
 	DiscoveryFeed reloaded(profile.data(), nullptr);
 	REQUIRE(reloaded.dismissedCount() == 1);
 	REQUIRE(reloaded.hiddenPictures().size() == 1);
@@ -496,6 +524,13 @@ TEST_CASE("The taste dialog explains Discover and edits focus, variety and tag p
 	}
 	REQUIRE(forest >= 0);
 	REQUIRE(table->item(forest, 3)->text() == "2");
+	REQUIRE(dialog.findChild<QPushButton*>("discoverShowHidden")->text().contains("Hidden pictures (0)"));
+	for (int row = 0; row < table->rowCount(); ++row) {
+		if (table->item(row, 0)->data(Qt::UserRole).toString() == "river") {
+			auto *river = static_cast<QComboBox*>(table->cellWidget(row, 5));
+			river->setCurrentIndex(river->findData(int(TasteTuning::Neutral)));
+		}
+	}
 	auto *choice = static_cast<QComboBox*>(table->cellWidget(forest, 5));
 	choice->setCurrentIndex(choice->findData(int(TasteTuning::Never)));
 	dialog.findChild<QLineEdit*>("discoverFocus")->setText("Umbrella, beach");
@@ -514,10 +549,32 @@ TEST_CASE("The taste dialog explains Discover and edits focus, variety and tag p
 	REQUIRE(tuning.variety == TasteTuning::Adventurous);
 	REQUIRE(tuning.tags.value("forest") == TasteTuning::Never);
 	REQUIRE(tuning.tags.value("rainy_day") == TasteTuning::More);
+	REQUIRE(tuning.tags.value("river") == TasteTuning::Neutral);
 	feed.setTuning(tuning);
 	REQUIRE(feed.taste().blocks({"forest"}));
+	REQUIRE(feed.taste().weight("river") == 0);
 	REQUIRE(feed.taste().queries({site->url()}, 5, 3).first().reason.contains("focus"));
 
 	QTest::mouseClick(dialog.findChild<QPushButton*>("discoverResetTuning"), Qt::LeftButton);
 	REQUIRE(dialog.tuning().isNeutral());
+}
+
+// Developer aid: GRABBER_DIAG_PROFILE=<copy of a full profile folder> GRABBER_TASTE_SCREENSHOT=<png> gui-tests "[tastediag]".
+TEST_CASE("Taste dialog screenshot for a profile copy", "[.][tastediag]")
+{
+	const QString directory = qEnvironmentVariable("GRABBER_DIAG_PROFILE");
+	const QString screenshot = qEnvironmentVariable("GRABBER_TASTE_SCREENSHOT");
+	REQUIRE((!directory.isEmpty() && !screenshot.isEmpty()));
+	Profile profile(directory);
+	DiscoveryFeed feed(&profile, nullptr);
+	DiscoverTasteDialog dialog(&feed);
+	dialog.resize(1100, 900);
+	dialog.show();
+	QApplication::processEvents();
+	REQUIRE(dialog.grab().save(screenshot));
+	auto *table = dialog.findChild<QTableWidget*>("discoverTasteTags");
+	REQUIRE(table->grab().save(QString(screenshot).replace(".png", "-table.png")));
+	table->scrollToBottom();
+	QApplication::processEvents();
+	REQUIRE(table->grab().save(QString(screenshot).replace(".png", "-bottom.png")));
 }

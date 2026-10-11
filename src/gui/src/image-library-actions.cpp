@@ -55,7 +55,7 @@ ImageLibraryActions::ImageLibraryActions(Profile *profile, const QSharedPointer<
 		button->setCursor(Qt::PointingHandCursor);
 		button->setMinimumHeight(28);
 	}
-	setStyleSheet("QToolButton { padding: 4px 7px; border-radius: 5px; } "
+	setStyleSheet(QStringLiteral("QToolButton { padding: %1; border-radius: 5px; } ").arg(compact ? "3px 4px" : "4px 7px") +
 		"#libraryLike:checked { color: #e75f91; background: rgba(231,95,145,30); } "
 		"#libraryFavorite:checked { color: #e4ad43; background: rgba(228,173,67,30); }");
 	connect(m_like, &QAction::triggered, this, [this](bool checked) {
@@ -98,7 +98,7 @@ ImageLibraryActions::ImageLibraryActions(Profile *profile, const QSharedPointer<
 
 void ImageLibraryActions::setImage(const QSharedPointer<Image> &image, qint64 collection)
 {
-	setSelection({ image }, { image ? m_store->keyForImage(*image) : QString() }, collection);
+	setSelection({ image }, { image ? m_store->matchingKey(*image) : QString() }, collection);
 }
 
 void ImageLibraryActions::setSelection(const QList<QSharedPointer<Image>> &images, const QStringList &keys, qint64 collection)
@@ -161,11 +161,11 @@ void ImageLibraryActions::showError()
 
 void ImageLibraryActions::refresh()
 {
-	// An explicit source link can merge a source entry while its viewer is open.
+	// An explicit source link can merge a source entry while its viewer is open; a copy of a Library picture shows its rating.
 	if (m_images.size() == m_keys.size()) {
 		for (int i = 0; i < m_images.size(); ++i) {
 			if (m_images[i]) {
-				m_keys[i] = m_store->keyForImage(*m_images[i]);
+				m_keys[i] = m_store->matchingKey(*m_images[i]);
 			}
 		}
 	}

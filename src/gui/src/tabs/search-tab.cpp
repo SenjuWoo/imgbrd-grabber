@@ -18,6 +18,7 @@
 #include "helpers.h"
 #include "image-context-menu.h"
 #include "logger.h"
+#include "discovery-feed.h"
 #include "main-window.h"
 #include "models/api/api.h"
 #include "models/favorite.h"
@@ -377,6 +378,9 @@ void SearchTab::clear()
 	m_images.clear();
 	m_mergedFingerprints.clear();
 	m_mergedDuplicates = 0;
+	m_md5Duplicates = 0;
+	m_lookFiltered = 0;
+	m_imagePages.clear();
 
 	m_selectedImagesPtrs.clear();
 	m_selectedImages.clear();
@@ -630,9 +634,12 @@ void SearchTab::finishedLoadingPreview()
 		return;
 	}
 
+	const auto fingerprint = img->previewImage().isNull() ? ImageFingerprint() : ImageFingerprint::fromImage(img->previewImage().toImage(), img->size());
+	const bool merged = ui_checkMergeResults != nullptr && ui_checkMergeResults->isChecked();
+
 	// Hide liked also hides re-encoded copies of liked pictures, which only their looks give away.
-	if (m_settings->value("hideLibraryRated", false).toBool() && !img->previewImage().isNull() && preview->container() != nullptr) {
-		const QString known = m_profile->library()->sameImageKey(*img, ImageFingerprint::fromImage(img->previewImage().toImage(), img->size()));
+	if (m_settings->value("hideLibraryRated", false).toBool() && fingerprint.valid && preview->container() != nullptr) {
+		const QString known = m_profile->library()->sameImageKey(*img, fingerprint);
 		const auto entry = known.isEmpty() ? LibraryEntry() : m_profile->library()->entry(known);
 		if (entry.liked || entry.favorite) {
 			preview->container()->hide();
@@ -640,13 +647,33 @@ void SearchTab::finishedLoadingPreview()
 		}
 	}
 
+	// Untagged black and white pictures or sketches still match a blacklisted "monochrome" or "sketch".
+	if (m_settings->value("hideblacklisted", false).toBool() && fingerprint.valid && preview->container() != nullptr) {
+		const QString look = fingerprint.lookTag([this](const QString &tag) { return m_profile->getBlacklist().contains(tag); });
+		if (!look.isEmpty()) {
+			log(QStringLiteral("Image %1 ignored. Reason: looks like \"%2\".").arg(img->pageUrl().toString(), look));
+			preview->container()->hide();
+			++m_lookFiltered;
+			if (merged && m_siteLabels.contains(nullptr)) {
+				setMergedLabelText(m_siteLabels[nullptr], m_images);
+			}
+			return;
+		}
+	}
+
 	// Merged results: the same picture re-uploaded elsewhere often has another checksum; compare appearance.
-	if (ui_checkMergeResults != nullptr && ui_checkMergeResults->isChecked() && !img->previewImage().isNull()) {
-		const auto fingerprint = ImageFingerprint::fromImage(img->previewImage().toImage(), img->size());
+	if (merged && fingerprint.valid) {
+		const int page = m_imagePages.value(img.data());
 		bool duplicate = false;
 		for (const auto &known : qAsConst(m_mergedFingerprints)) {
 			// Strict thresholds keep edits apart, so reposts on one site merge too.
 			duplicate = duplicate || fingerprint.sameImage(known);
+		}
+		bool seen = false;
+		for (const auto &known : qAsConst(m_seenFingerprints)) {
+			// Shown on an earlier page of this search already.
+			duplicate = duplicate || (known.second < page && fingerprint.sameImage(known.first));
+			seen = seen || (known.second <= page && fingerprint.sameImage(known.first));
 		}
 		if (duplicate && preview->container() != nullptr) {
 			preview->container()->hide();
@@ -656,8 +683,9 @@ void SearchTab::finishedLoadingPreview()
 			}
 			return;
 		}
-		if (fingerprint.valid) {
-			m_mergedFingerprints.append(fingerprint);
+		m_mergedFingerprints.append(fingerprint);
+		if (!seen) {
+			m_seenFingerprints.append({fingerprint, page});
 		}
 	}
 
@@ -690,11 +718,10 @@ void SearchTab::finishedLoadingPreview()
 
 QList<QSharedPointer<Image>> SearchTab::mergeResults(int page, const QList<QSharedPointer<Image>> &results)
 {
-	Q_UNUSED(page)
-	// Only exact checksums or identical full file URLs collapse. Conflicting
+	// Only exact checksums or identical full file URLs collapse, also against earlier pages of this search. Conflicting
 	// checksums at one URL retain edits; no visual-similarity deduplication.
 	static const QRegularExpression checksum("^[0-9a-fA-F]{32}$");
-	QSet<QString> hashes;
+	QHash<QString, Site*> hashes;
 	QHash<QString, QSet<QString>> urls;
 	auto hash = [](const QSharedPointer<Image> &image) {
 		const QString md5 = image->md5().trimmed();
@@ -702,20 +729,26 @@ QList<QSharedPointer<Image>> SearchTab::mergeResults(int page, const QList<QShar
 	};
 	auto remember = [&hashes, &urls, &hash](const QSharedPointer<Image> &image) {
 		const QString md5 = hash(image);
-		if (!md5.isEmpty()) { hashes.insert(md5); }
+		if (!md5.isEmpty()) { hashes.insert(md5, image->parentSite()); }
 		if (!image->url().isEmpty()) { urls[image->url().toString(QUrl::FullyEncoded)].insert(md5); }
 	};
 	for (const auto &image : m_images) { remember(image); }
 	QList<QSharedPointer<Image>> unique;
 	for (const auto &image : results) {
 		const QString md5 = hash(image);
-		bool duplicate = !md5.isEmpty() && hashes.contains(md5);
+		bool duplicate = !md5.isEmpty() && (hashes.contains(md5) || m_seenMd5.value(md5, page) < page);
 		const QString url = image->url().toString(QUrl::FullyEncoded);
 		if (!duplicate && !url.isEmpty() && urls.contains(url)) {
 			const auto known = urls.value(url);
 			duplicate = md5.isEmpty() && known.size() == 1 && known.contains(QString());
 		}
-		if (!duplicate) { unique.append(image); remember(image); }
+		if (!duplicate) {
+			unique.append(image);
+			remember(image);
+			if (!md5.isEmpty() && !m_seenMd5.contains(md5)) { m_seenMd5.insert(md5, page); }
+		} else if (hashes.value(md5) != image->parentSite()) {
+			++m_md5Duplicates; // The same post found again through the tag adapter is no duplicate worth reporting.
+		}
 	}
 	return unique;
 }
@@ -760,15 +793,22 @@ void SearchTab::setMergedLabelText(QLabel *txt, const QList<QSharedPointer<Image
 		const auto &latest = pages.last();
 		for (const auto &page : pages) { firstPage = qMin(firstPage, page->page()); lastPage = qMax(lastPage, page->page()); }
 		const QString name = latest->site()->name().toHtmlEscaped();
-		links.append(QStringLiteral("<a href=\"%1\">%2</a>").arg(latest->url().toString().toHtmlEscaped(), name));
-		if (m_failedPages.contains(latest.data())) { failures.append(tr("%1 failed; reload to retry").arg(name)); }
+		// Tag adapter searches of a source share its link.
+		const QString link = QStringLiteral("<a href=\"%1\">%2</a>").arg(latest->url().toString().toHtmlEscaped(), name);
+		if (!links.join(QString()).contains(">" + name + "<")) { links.append(link); }
+		if (m_failedPages.contains(latest.data()) && !failures.contains(tr("%1 failed; reload to retry").arg(name))) { failures.append(tr("%1 failed; reload to retry").arg(name)); }
 		const int count = latest->imagesCount();
 		if (count < 0 || (latest->hasNext() && latest->pagesCount(false) >= 0 && latest->pagesCount(false) <= latest->page()) || !latest->isValid() || m_failedPages.contains(latest.data())) { known = false; }
 		else { sourceTotal += count; estimated = estimated || latest->imagesCount(false) < 0; }
 	}
 	const QString page = firstPage != lastPage ? QStringLiteral("%1–%2").arg(firstPage).arg(lastPage) : QString::number(lastPage);
 	QString label = links.join(", ") + " · " + tr("Page %1 · %2 unique images shown").arg(page).arg(images.size() - m_mergedDuplicates);
-	if (m_mergedDuplicates > 0) { label += " · " + tr("%n duplicate(s) merged", "", m_mergedDuplicates); }
+	if (m_mergedDuplicates + m_md5Duplicates > 0) { label += " · " + tr("%n duplicate(s) merged", "", m_mergedDuplicates + m_md5Duplicates); }
+	int filtered = m_lookFiltered;
+	for (const int count : m_filteredImages) { filtered += count; }
+	if (filtered > 0 && m_settings->value("showFilteredImagesCount", true).toBool()) {
+		label += " · " + tr("%n hidden by blacklist, Hide liked or Not interested", "", filtered);
+	}
 	if (known) { label += " · " + tr("%1 source results before merging").arg((estimated ? "~" : QString()) + QString::number(sourceTotal)); }
 	else { label += " · " + tr("Total unknown"); }
 	if (!failures.isEmpty()) { label += "<br/>" + failures.join("<br/>"); }
@@ -941,6 +981,7 @@ void SearchTab::addResultsImage(const QSharedPointer<Image> &img, Page *page, bo
 
 	auto *widget = createImageThumbnail();
 
+	m_imagePages.insert(img.data(), page != nullptr ? page->page() : 0);
 	auto *preview = new ImagePreview(img, widget, m_profile, m_downloadQueue, m_parent, this);
 	preview->setCustomContextMenu([this](QMenu *menu, const QSharedPointer<Image> &img) { this->thumbnailContextMenu(menu, img); });
 	m_boutons.insert(img.data(), preview);
@@ -1297,6 +1338,18 @@ void SearchTab::loadTags(SearchQuery query)
 
 	clear();
 
+	// A new search forgets what its pages showed; another page of the same search keeps it to skip repeats.
+	QStringList sources;
+	for (Site *site : loadSites()) {
+		sources.append(site->url());
+	}
+	const QString search = query.tags.join(' ') + '|' + sources.join(',') + '|' + QString::number(ui_spinImagesPerPage->value());
+	if (search != m_seenSearch) {
+		m_seenSearch = search;
+		m_seenMd5.clear();
+		m_seenFingerprints.clear();
+	}
+
 	// Disable download buttons
 	ui_buttonGetAll->setEnabled(false);
 	ui_buttonGetPage->setEnabled(false);
@@ -1363,26 +1416,52 @@ void SearchTab::loadPage()
 	ui_buttonLastPage->setEnabled(false);
 	m_page = 0;
 	m_stop = false;
+	// Tag adapter: a tag sources name differently ("hidden_sex_toy", "stealth_sex_toy") is also searched under its other
+	// names, and merged results combine them. Only names Discover saw in ratings or sampled posts, at most three searches more.
+	QList<SearchQuery> queries {m_lastQuery};
+	DiscoveryFeed *feed = m_parent != nullptr ? m_parent->discoveryFeed() : nullptr;
+	if (merged && feed != nullptr && m_lastQuery.gallery.isNull() && m_lastQuery.urls.isEmpty()) {
+		const auto &taste = feed->taste();
+		for (int i = 0; i < m_lastQuery.tags.size(); ++i) {
+			const QString &tag = m_lastQuery.tags[i];
+			if (tag.startsWith('-') || tag.startsWith('~') || tag.contains(':')) {
+				continue;
+			}
+			for (const QString &other : taste.equivalents(tag)) {
+				SearchQuery variant = m_lastQuery;
+				variant.tags[i] = other;
+				if (queries.size() < 4 && !variant.tags.contains(tag)) {
+					queries.append(variant);
+				}
+			}
+		}
+	}
 	QList<QSharedPointer<Page>> batch;
 	for (Site *site : loadSites()) {
-		QSharedPointer<Page> previous = m_pages.value(site->url()).isEmpty() ? m_lastPages.value(site->url()) : m_pages.value(site->url()).last();
-		if (previous && !m_pages.value(site->url()).isEmpty() && !m_failedPages.contains(previous.data()) && previous->isValid() && !previous->hasNext()) { continue; }
-		if (previous && previous->page() + 1 != currentPage) { previous.clear(); }
-		SearchQuery query = m_lastQuery;
-		if (m_lastUrls.contains(site->url())) { query.urls = m_lastUrls.take(site->url()); }
-		auto page = QSharedPointer<Page>::create(m_profile, site, m_sites.values(), query, currentPage, perPage, postFilter(true), false, this);
-		if (previous) { page->setLastPage(previous->pageInformation()); }
-		connect(page.data(), &Page::finishedLoading, this, &SearchTab::finishedLoading);
-		connect(page.data(), &Page::failedLoading, this, &SearchTab::failedLoading);
-		connect(page.data(), &Page::httpsRedirect, this, &SearchTab::httpsRedirect);
-		m_pages[site->url()].append(page);
-		m_pendingPages.insert(page.data());
-		batch.append(page);
-		if (!merged) {
-			auto *pageLayout = createImagesLayout(m_settings);
-			m_layouts.insert(page.data(), pageLayout);
-			if (!m_siteLayouts.contains(site)) { m_siteLayouts.insert(site, new QVBoxLayout()); }
-			m_siteLayouts[site]->addLayout(pageLayout);
+		for (int v = 0; v < queries.size(); ++v) {
+			const QString key = v == 0 ? site->url() : site->url() + QChar(0x1F) + queries[v].tags.join(' ');
+			QSharedPointer<Page> previous = m_pages.value(key).isEmpty() ? m_lastPages.value(key) : m_pages.value(key).last();
+			if (previous && !m_pages.value(key).isEmpty() && !m_failedPages.contains(previous.data()) && previous->isValid() && !previous->hasNext()) { continue; }
+			if (previous && previous->page() + 1 != currentPage) { previous.clear(); }
+			SearchQuery query = queries[v];
+			if (v == 0 && m_lastUrls.contains(site->url())) { query.urls = m_lastUrls.take(site->url()); }
+			auto page = QSharedPointer<Page>::create(m_profile, site, m_sites.values(), query, currentPage, perPage, postFilter(true), false, this);
+			if (previous) { page->setLastPage(previous->pageInformation()); }
+			connect(page.data(), &Page::finishedLoading, this, &SearchTab::finishedLoading);
+			connect(page.data(), &Page::failedLoading, this, &SearchTab::failedLoading);
+			connect(page.data(), &Page::httpsRedirect, this, &SearchTab::httpsRedirect);
+			m_pages[key].append(page);
+			m_pendingPages.insert(page.data());
+			batch.append(page);
+			if (v > 0) {
+				continue;
+			}
+			if (!merged) {
+				auto *pageLayout = createImagesLayout(m_settings);
+				m_layouts.insert(page.data(), pageLayout);
+				if (!m_siteLayouts.contains(site)) { m_siteLayouts.insert(site, new QVBoxLayout()); }
+				m_siteLayouts[site]->addLayout(pageLayout);
+			}
 		}
 	}
 	if (merged && m_layouts.contains(nullptr) && m_layouts.value(nullptr)->parentWidget() == nullptr) { addLayout(m_layouts.value(nullptr), 1, 0); }
@@ -1394,7 +1473,7 @@ void SearchTab::loadPage()
 	// Register the complete batch before requests can deliver cached callbacks.
 	for (const auto &page : batch) {
 		if (!page->isValid()) { failedLoading(page.data()); continue; }
-		if (m_settings->value("useregexfortags", true).toBool()) {
+		if (m_settings->value("useregexfortags", true).toBool() && m_pages.value(page->website()).contains(page)) {
 			connect(page.data(), &Page::finishedLoadingTags, this, &SearchTab::finishedLoadingTags);
 			page->loadTags();
 		}
@@ -1436,6 +1515,18 @@ bool SearchTab::validateImage(const QSharedPointer<Image> &img, QString &error)
 	if (m_settings->value("hideLibraryRated", false).toBool() && m_profile->library()->isRated(*img)) {
 		error = QStringLiteral("Image #%1 hidden: already liked or favorited.").arg(img->id());
 		return false;
+	}
+	// Not interested works the same in searches and Discover.
+	if (const DiscoveryFeed *feed = m_parent != nullptr ? m_parent->discoveryFeed() : nullptr) {
+		const QString never = feed->neverShown(img->tagsString());
+		if (!never.isEmpty()) {
+			error = QStringLiteral("Image #%1 hidden: never show %2.").arg(img->id()).arg(never);
+			return false;
+		}
+		if (feed->isHidden(LibraryStore::imageKey(*img))) {
+			error = QStringLiteral("Image #%1 hidden: marked Not interested.").arg(img->id());
+			return false;
+		}
 	}
 
 	return true;

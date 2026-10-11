@@ -870,6 +870,11 @@ void MainWindow::pruneSources()
 }
 
 
+DiscoveryFeed *MainWindow::discoveryFeed() const
+{
+	return m_homeTab != nullptr ? m_homeTab->feed() : nullptr;
+}
+
 Site *MainWindow::getSelectedSiteOrDefault()
 {
 	if (m_selectedSites.isEmpty()) {

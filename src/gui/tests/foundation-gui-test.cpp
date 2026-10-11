@@ -133,7 +133,7 @@ TEST_CASE("Remote previews use real alternate URLs and reject oversized or undec
 	}
 	SECTION("A declared image dimension is rejected before decoding pixels")
 	{
-		QImage pixels(8193, 1, QImage::Format_RGB32);
+		QImage pixels(30001, 1, QImage::Format_RGB32);
 		pixels.fill(Qt::red);
 		REQUIRE(pixels.save(path, "PNG"));
 	}
@@ -189,6 +189,28 @@ TEST_CASE("Remote previews use real alternate URLs and reject oversized or undec
 		REQUIRE(image->previewImage().isNull());
 		REQUIRE((button->toolTip().contains("limit") || button->toolTip().contains("dimensions") || button->toolTip().contains("decoded")));
 	}
+}
+
+TEST_CASE("Remote previews accept the long thumbnails of comic strips", "[foundation][image-preview]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	profile->getSettings()->setValue("thumbnailSmartSize", false);
+	const QString path = directory.filePath("strip.png");
+	QImage pixels(270, 8366, QImage::Format_RGB32); // A real rule34.us thumbnail size.
+	pixels.fill(Qt::blue);
+	REQUIRE(pixels.save(path, "PNG"));
+	CustomNetworkAccessManager::NextFiles.enqueue(path);
+	auto image = QSharedPointer<Image>::create(site, QMap<QString, QString> {{"id", "104"}, {"preview_url", "https://test.invalid/strip.png"}}, profile.data());
+	QWidget container;
+	ImagePreview preview(image, &container, profile.data(), nullptr, nullptr);
+	QSignalSpy finished(&preview, &ImagePreview::finished);
+	preview.load();
+	REQUIRE(QTest::qWaitFor([&]() { return finished.count() == 1; }, 5000));
+	REQUIRE(image->previewImage().height() == 8366);
 }
 
 TEST_CASE("Remote previews retry a momentary server error once", "[foundation][image-preview]")

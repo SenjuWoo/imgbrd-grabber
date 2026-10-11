@@ -112,6 +112,13 @@ class PageApi : public QObject
 		QSet<QString> m_redirectsSeen;
 		int m_redirectHops = 0;
 		int m_rateLimitRetries = 0;
+
+		// Sources with a fixed page size join several of their pages to fill a larger requested one.
+		int m_siteLimit = 0;
+		int m_sitePage = 0;
+		QList<QSharedPointer<Image>> m_joined;
+		QList<Tag> m_joinedTags;
+		bool m_joinedExhausted = false;
 };
 
 Q_DECLARE_METATYPE(PageApi::LoadResult)

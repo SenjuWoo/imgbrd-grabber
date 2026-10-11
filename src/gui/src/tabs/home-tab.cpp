@@ -624,45 +624,7 @@ void HomeTab::showMenu(const QStringList &keys, const QPoint &position)
 
 void HomeTab::fillNotInterested(QMenu *menu, const QStringList &keys)
 {
-	menu->addAction(keys.size() == 1 ? tr("Hide this picture") : tr("Hide these %n pictures", "", int(keys.size())), this, [this, keys]() { notInterested(keys, {}, false); });
-	const auto image = m_feed->image(keys.value(0));
-	if (!image) {
-		return;
-	}
-	// The tags that made Discover pick it, then who drew it and what it shows.
-	QStringList choices = m_feed->taste().matches(image->tagsString(), 6);
-	for (const auto &tag : image->tags()) {
-		const QString type = tag.type().name();
-		const QString name = TasteProfile::normalize(tag.text());
-		if ((type == QLatin1String("artist") || type == QLatin1String("character") || type == QLatin1String("copyright")) && !choices.contains(name) && choices.size() < 9) {
-			choices.append(name);
-		}
-	}
-	QStringList all;
-	for (const QString &tag : image->tagsString()) {
-		const QString name = TasteProfile::normalize(tag);
-		if (!name.isEmpty() && !TasteProfile::isMetaTag(name)) {
-			all.append(name);
-		}
-	}
-	if (choices.isEmpty()) {
-		choices = all.mid(0, 6);
-	}
-	menu->addSection(tr("Show less of…"));
-	for (const QString &tag : choices) {
-		menu->addAction(QString(tag).replace('_', ' '), this, [this, keys, tag]() { notInterested(keys, {tag}, false); });
-	}
-	auto *never = menu->addMenu(tr("Never show…"));
-	for (const QString &tag : choices) {
-		never->addAction(QString(tag).replace('_', ' '), this, [this, keys, tag]() { notInterested(keys, {tag}, true); });
-	}
-	menu->addAction(tr("Another tag…"), this, [this, keys, all]() {
-		bool ok = false;
-		const QString tag = QInputDialog::getItem(this, tr("Not interested"), tr("Show less of this tag:"), all, 0, true, &ok).trimmed();
-		if (ok && !tag.isEmpty()) {
-			notInterested(keys, {tag}, false);
-		}
-	});
+	PictureActions::fillNotInterested(menu, m_feed, m_feed->image(keys.value(0)), int(keys.size()), [this, keys](const QStringList &tags, bool never) { notInterested(keys, tags, never); }, this);
 }
 
 void HomeTab::notInterested(const QStringList &keys, const QStringList &tags, bool never)
@@ -677,9 +639,7 @@ void HomeTab::notInterested(const QStringList &keys, const QStringList &tags, bo
 		m_feed->dismiss(key, tags, never);
 		m_grid->gridModel()->remove(key);
 	}
-	const QString what = tags.isEmpty() ? tr("Hidden. You'll see fewer pictures like this.")
-		: never ? tr("Hidden. You won't see %1 again.").arg(tags.join(", ")) : tr("Hidden. You'll see less %1.").arg(tags.join(", "));
-	Toast::show(this, what, tr("Undo"), [this, keys, removed, previous]() {
+	Toast::show(this, PictureActions::notInterestedMessage(tags, never), tr("Undo"), [this, keys, removed, previous]() {
 		m_feed->restore(keys);
 		m_feed->setTuning(previous);
 		for (const auto &entry : removed) {

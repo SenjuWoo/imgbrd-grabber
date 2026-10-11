@@ -32,7 +32,8 @@ namespace
 	constexpr int MaxHidden = 5000;
 	constexpr int MaxFeedback = 3000;
 	// Newest posts sampled per batch to learn how common tags are on each source; only the few that fit the taste are shown.
-	constexpr int SampleLimit = 100;
+	// One full page everywhere: fixed-size sources (42 per page) would need several requests for more.
+	constexpr int SampleLimit = 42;
 	constexpr int SampleShown = 6;
 	constexpr double WellSampled = 200;
 	// Hidden pictures remembered with enough detail to show them again.
@@ -249,7 +250,22 @@ QSharedPointer<Image> DiscoveryFeed::image(const QString &key) const
 	return m_shown.value(key);
 }
 
-void DiscoveryFeed::dismiss(const QString &key, const QStringList &tags, bool never)
+bool DiscoveryFeed::isHidden(const QString &key) const
+{
+	return m_hiddenSet.contains(key);
+}
+
+QString DiscoveryFeed::neverShown(const QStringList &tags) const
+{
+	for (const QString &tag : tags) {
+		if (m_tuning.tags.value(TasteProfile::normalize(tag)) == TasteTuning::Never) {
+			return tag;
+		}
+	}
+	return {};
+}
+
+void DiscoveryFeed::dismiss(const QString &key, const QStringList &tags, bool never, const QSharedPointer<Image> &picture)
 {
 	if (!m_hiddenSet.contains(key)) {
 		m_hidden.append(key);
@@ -262,7 +278,7 @@ void DiscoveryFeed::dismiss(const QString &key, const QStringList &tags, bool ne
 	}
 	HiddenRecord record;
 	record.at = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
-	if (const auto image = m_shown.value(key)) {
+	if (const auto image = picture ? picture : m_shown.value(key)) {
 		image->write(record.image);
 		if (tags.isEmpty()) {
 			for (const QString &tag : image->tagsString()) {
@@ -614,15 +630,21 @@ void DiscoveryFeed::previewFinished(ThumbnailLoader *loader, const QString &key)
 		bool duplicate = preview.isNull();
 		if (!duplicate) {
 			candidate.fingerprint = ImageFingerprint::fromImage(preview.toImage(), candidate.item.image->size());
-			// A feed shows one picture of a set of variants (recolors, small edits), and none the Library already has.
+			// Exact copies only (other sources, re-encodes): edits and variants are different pictures.
 			for (const auto &shown : m_shownFingerprints) {
-				duplicate = duplicate || candidate.fingerprint.similarImage(shown);
+				duplicate = duplicate || candidate.fingerprint.sameImage(shown);
 			}
 			for (auto it = m_candidates.constBegin(); it != m_candidates.constEnd() && !duplicate; ++it) {
-				duplicate = it.key() != key && it->fingerprint.valid && candidate.fingerprint.similarImage(it->fingerprint);
+				duplicate = it.key() != key && it->fingerprint.valid && candidate.fingerprint.sameImage(it->fingerprint);
 			}
-			if (!duplicate && !m_profile->library()->sameImageKey(*candidate.item.image, candidate.fingerprint, true).isEmpty()) {
+			if (!duplicate && !m_profile->library()->sameImageKey(*candidate.item.image, candidate.fingerprint).isEmpty()) {
 				log(QStringLiteral("Discover: skipped %1, already in Library").arg(candidate.item.image->pageUrl().toString()), Logger::Debug);
+				duplicate = true;
+			}
+			// Untagged black and white pictures or sketches still match a blacklisted "monochrome" or "sketch".
+			const QString look = duplicate ? QString() : candidate.fingerprint.lookTag([this](const QString &tag) { return m_profile->getBlacklist().contains(tag); });
+			if (!look.isEmpty()) {
+				log(QStringLiteral("Discover: skipped %1, looks like blacklisted %2").arg(candidate.item.image->pageUrl().toString(), look), Logger::Debug);
 				duplicate = true;
 			}
 		}
@@ -729,7 +751,7 @@ void DiscoveryFeed::emitGroup(int group, bool force)
 	for (const auto &candidate : ready) {
 		bool duplicate = false;
 		for (const auto &shown : m_shownFingerprints) {
-			duplicate = duplicate || candidate.fingerprint.similarImage(shown); // Another source may have streamed it meanwhile.
+			duplicate = duplicate || candidate.fingerprint.sameImage(shown); // Another source may have streamed it meanwhile.
 		}
 		if (duplicate) {
 			continue;

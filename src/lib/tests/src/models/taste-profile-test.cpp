@@ -55,11 +55,15 @@ TEST_CASE("Taste profile turns hidden pictures into weak penalties", "[discover]
 		rated("b", "gelbooru.com", {{"forest", "general"}, {"lake", "general"}}),
 	};
 	const auto neutral = TasteProfile::build(entries, {}, Now);
-	const auto disliked = TasteProfile::build(entries, {{"spiders", 3}, {"forest", 3}}, Now);
+	const auto disliked = TasteProfile::build(entries, {{"spiders", 3}, {"forest", 3}, {"once", 1}, {"la_ke", 4}, {"solo", 5}}, Now);
 	REQUIRE(disliked.weight("spiders") < 0);
-	// A clear preference survives a few hidden pictures that also had it.
+	// Tags of rated pictures (also under another spelling), generic ones and one-offs are not held against anything.
 	REQUIRE(disliked.weight("forest") == neutral.weight("forest"));
+	REQUIRE(disliked.weight("la_ke") == 0);
+	REQUIRE(disliked.weight("once") == 0);
+	REQUIRE(disliked.weight("solo") == 0);
 	REQUIRE(disliked.score({"forest", "spiders"}) < neutral.score({"forest", "spiders"}));
+	REQUIRE(disliked.avoidedTags(10).size() == 1);
 }
 
 TEST_CASE("Taste profile builds searches only from real, safe tags on selected sources", "[discover]")
@@ -136,8 +140,10 @@ TEST_CASE("Taste profile weighs tags by how much more often they appear in ratin
 	REQUIRE(profile.topTags(1).first().name == "vibrator");
 	REQUIRE(profile.weight("vibrator") == 1.0);
 	REQUIRE(profile.weight("breasts") < 0.2);
-	REQUIRE(profile.weight("male") < 0); // Rated far less often than it appears.
-	REQUIRE(profile.weight("anthro") < 0); // Common, never rated.
+	// Rarer in ratings than on the source, or never rated: neither is a dislike.
+	REQUIRE(profile.weight("male") == 0);
+	REQUIRE(profile.weight("anthro") == 0);
+	REQUIRE(profile.avoidedTags(10).isEmpty());
 	REQUIRE(profile.weight("site_vocabulary") == 0);
 	REQUIRE(profile.score({"vibrator", "breasts"}) > profile.score({"breasts", "1girl"}));
 	REQUIRE(profile.score({"breasts", "anthro"}) < profile.score({"breasts"}));
@@ -150,6 +156,53 @@ TEST_CASE("Taste profile weighs tags by how much more often they appear in ratin
 		}
 	}
 	REQUIRE(vibrator > 40);
+}
+
+TEST_CASE("Taste profile treats synonyms and other spellings as one taste", "[discover]")
+{
+	TagBackground background;
+	for (int i = 0; i < 100; ++i) {
+		background.add("danbooru.donmai.us", {"1girl", i % 10 == 0 ? "stealth_sex_toy" : i % 10 == 1 ? "body_paint" : i % 10 == 2 ? "smiles" : "smile"});
+		background.add("rule34.xxx", {"1girls", i % 20 == 0 ? "hidden_sex_toy" : i % 20 == 1 ? "bodypaint" : "smile"});
+	}
+	QList<LibraryEntry> entries;
+	for (int i = 0; i < 6; ++i) {
+		entries.append(rated(QString::number(i), "rule34.xxx", {{"hidden_sex_toy", "general"}, {"bodypaint", "general"}, {"1girls", "general"}}));
+	}
+	entries.append(rated("d", "danbooru.donmai.us", {{"1girl", "general"}}));
+	const auto profile = TasteProfile::build(entries, {}, Now, background);
+	REQUIRE(profile.weight("hidden_sex_toy") > 0);
+	REQUIRE(profile.weight("stealth_sex_toy") == profile.weight("hidden_sex_toy"));
+	REQUIRE(profile.weight("body_paint") == profile.weight("bodypaint"));
+	REQUIRE(profile.equivalents("hidden_sex_toy") == QStringList {"stealth_sex_toy"});
+	REQUIRE(profile.equivalents("bodypaint").contains("body_paint"));
+	REQUIRE(profile.equivalents("smiles").isEmpty()); // Plurals are other tags ("ball", "balls").
+	REQUIRE(profile.equivalents("1girls").contains("1girl"));
+	for (const auto &tag : profile.topTags(20)) {
+		REQUIRE(tag.name != "stealth_sex_toy"); // Listed once, under the learned name.
+	}
+	REQUIRE(profile.score({"stealth_sex_toy"}) > 0);
+	// Danbooru is searched with its own name for the theme.
+	bool searchedThere = false;
+	for (quint32 seed = 0; seed < 40; ++seed) {
+		for (const auto &query : profile.queries({"danbooru.donmai.us"}, 2, seed)) {
+			REQUIRE_FALSE(query.tags.contains("hidden_sex_toy"));
+			REQUIRE_FALSE(query.tags.contains("bodypaint"));
+			searchedThere = searchedThere || query.tags.contains("stealth_sex_toy") || query.tags.contains("body_paint");
+		}
+	}
+	REQUIRE(searchedThere);
+
+	TasteTuning tuning;
+	tuning.tags.insert("stealth_sex_toy", TasteTuning::Never);
+	tuning.tags.insert("bodypaint", TasteTuning::Neutral);
+	const auto tuned = TasteProfile::build(entries, {}, Now, background, tuning);
+	REQUIRE(tuned.blocks({"hidden_sex_toy"}));
+	REQUIRE(tuned.weight("body_paint") == 0);
+	REQUIRE(tuned.avoidedTags(10).size() == 2); // hidden_sex_toy and stealth_sex_toy; Neutral is not avoided.
+	REQUIRE(TasteTuning::fromJson(tuning.toJson()).tags == tuning.tags);
+	REQUIRE(TasteProfile::isMetaTag("3:4"));
+	REQUIRE(TasteProfile::isMetaTag("2d_(artwork)"));
 }
 
 TEST_CASE("Taste profile searches tags whose pictures were rated more than ignored ones", "[discover]")
@@ -338,9 +391,18 @@ TEST_CASE("Taste profile diagnostics for a profile copy", "[.][diag]")
 	for (auto it = saved.constBegin(); it != saved.constEnd(); ++it) {
 		feedback.insert(it.key(), {it.value().toArray().at(0).toDouble(), it.value().toArray().at(1).toDouble()});
 	}
-	const auto taste = TasteProfile::build(store.entries(), {}, QDateTime::currentDateTimeUtc(), background);
+	QHash<QString, double> disliked;
+	const auto hidden = root.value("disliked").toObject();
+	for (auto it = hidden.constBegin(); it != hidden.constEnd(); ++it) {
+		disliked.insert(it.key(), it.value().toDouble());
+	}
+	const auto taste = TasteProfile::build(store.entries(), disliked, QDateTime::currentDateTimeUtc(), background, TasteTuning::fromJson(root.value("tuning").toObject()));
 	std::cout << "sampled posts: " << background.posts() << "\n";
-	for (const auto &tag : taste.topTags(30)) {
+	for (const auto &tag : taste.topTags(60)) {
+		std::cout << "  " << tag.weight << "  " << tag.name.toStdString() << " (" << tag.count << ")\n";
+	}
+	std::cout << "avoided:\n";
+	for (const auto &tag : taste.avoidedTags(60)) {
 		std::cout << "  " << tag.weight << "  " << tag.name.toStdString() << " (" << tag.count << ")\n";
 	}
 	QHash<QString, int> searches;
