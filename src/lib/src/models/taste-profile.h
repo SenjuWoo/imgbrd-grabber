@@ -112,6 +112,12 @@ class TasteProfile
 		bool blocks(const QStringList &tags) const;
 		/** Other names of this tag seen in ratings or on sampled sources (synonyms and other spellings). */
 		QStringList equivalents(const QString &tag) const;
+		/**
+		 * One search term matching any of the names, in the source's own OR syntax; empty when the source has none.
+		 * @param engine Source engine name ("Gelbooru (0.2)", "E621", ...).
+		 * @param terms  Search terms counting the group as one.
+		 */
+		static QString anyOf(const QString &engine, const QString &host, const QStringList &names, int terms);
 		const TasteTuning &tuning() const;
 		/** Searches for new pictures; tags whose earlier results were shown but never rated are picked less often. */
 		QList<DiscoveryQuery> queries(const QStringList &sources, int count, quint32 seed, const QHash<QString, DiscoveryFeedback> &feedback = {}) const;

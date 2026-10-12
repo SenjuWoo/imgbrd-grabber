@@ -201,10 +201,15 @@ class SearchTab : public QWidget
 		TextEdit *m_postFiltering = nullptr;
 		QCheckBox *ui_checkMergeResults = nullptr;
 		QCheckBox *m_hideRated = nullptr;
-		QList<ImageFingerprint> m_mergedFingerprints;
+		struct MergedCopy
+		{
+			ImageFingerprint fingerprint;
+			QPointer<ImagePreview> preview;
+			int tags;
+		};
+		QList<MergedCopy> m_mergedFingerprints;
 		int m_mergedDuplicates = 0;
 		int m_md5Duplicates = 0;
-		int m_lookFiltered = 0;
 		// What earlier pages of this search showed, by page number, so later pages do not repeat it.
 		QString m_seenSearch;
 		QHash<QString, int> m_seenMd5;

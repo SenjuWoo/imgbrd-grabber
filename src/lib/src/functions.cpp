@@ -427,8 +427,9 @@ QString savePath(const QString &file, bool exists, bool writable)
 		}
 	#endif
 
-	// Install directory and portable mode
-	if (validSavePath(qApp->applicationDirPath() + "/" + check, writable)) {
+	// Install directory and portable mode. Packages mark portable mode with an empty "portable" file rather than a blank
+	// settings.ini, which would wipe the settings of an install it is extracted over.
+	if (validSavePath(qApp->applicationDirPath() + "/" + check, writable) || (!exists && validSavePath(qApp->applicationDirPath() + "/portable", writable))) {
 		return QDir::toNativeSeparators(qApp->applicationDirPath() + "/" + file);
 	}
 	#if defined(Q_OS_ANDROID)

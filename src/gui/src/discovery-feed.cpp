@@ -341,6 +341,17 @@ QList<HiddenPicture> DiscoveryFeed::hiddenPictures() const
 	return result;
 }
 
+QStringList DiscoveryFeed::legacyHidden() const
+{
+	QStringList result;
+	for (const QString &key : m_hidden) {
+		if (!m_hiddenRecords.contains(key)) {
+			result.append(key);
+		}
+	}
+	return result;
+}
+
 void DiscoveryFeed::restore(const QStringList &keys)
 {
 	for (const QString &key : keys) {
@@ -403,6 +414,14 @@ void DiscoveryFeed::cancel()
 	setBusy(false);
 }
 
+void DiscoveryFeed::setPaused(bool paused)
+{
+	m_paused = paused;
+	if (paused && m_busy) {
+		finishBatch(); // Shows what is ready and aborts the rest, so searches do not queue behind Discover.
+	}
+}
+
 void DiscoveryFeed::restart()
 {
 	cancel();
@@ -423,7 +442,7 @@ void DiscoveryFeed::restart()
 
 void DiscoveryFeed::fetchMore()
 {
-	if (m_busy) {
+	if (m_busy || m_paused) {
 		return;
 	}
 	if (m_tasteDirty) {
@@ -466,6 +485,7 @@ void DiscoveryFeed::fetchMore()
 	m_groups.clear();
 	m_previewQueue.clear();
 	m_batchEmitted = 0;
+	m_batchVisual = 0;
 	QList<DiscoveryQuery> queries;
 	// Sources with the most ratings and the fewest samples first.
 	std::sort(sampleSources.begin(), sampleSources.end(), [this](const QString &left, const QString &right) {
@@ -545,9 +565,9 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 			}
 		}
 		auto *store = m_profile->library();
-		QSet<QString> batchMd5;
+		QHash<QString, QString> batchMd5;
 		for (const auto &candidate : m_candidates) {
-			batchMd5.insert(candidate.item.image->md5().toLower());
+			batchMd5.insert(candidate.item.image->md5().toLower(), candidate.item.key);
 		}
 		for (const auto &source : images) {
 			if (!source || !source->isValid() || source->isGallery() || m_taste.blocks(source->tagsString())
@@ -564,11 +584,19 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 			const QString key = LibraryStore::imageKey(*image);
 			const QString md5 = image->md5().toLower();
 			if (key.isEmpty() || m_seenSet.contains(key) || m_hiddenSet.contains(key) || m_shown.contains(key) || m_candidates.contains(key)
-				|| (!md5.isEmpty() && (m_shownMd5.contains(md5) || batchMd5.contains(md5))) || store->isKnown(*image)) {
+				|| (!md5.isEmpty() && m_shownMd5.contains(md5)) || store->isKnown(*image)) {
 				continue;
 			}
+			if (!md5.isEmpty() && batchMd5.contains(md5)) {
+				// The same file from another source: the better tagged copy is the one shown and saved.
+				auto other = m_candidates.find(batchMd5.value(md5));
+				if (other == m_candidates.end() || other->dropped || other->item.image->tags().size() >= image->tags().size()) {
+					continue;
+				}
+				other->dropped = true;
+			}
 			if (!md5.isEmpty()) {
-				batchMd5.insert(md5);
+				batchMd5.insert(md5, key);
 			}
 			Candidate candidate;
 			candidate.item = {key, image, m_queryReasons.value(signature), 0, false};
@@ -627,24 +655,25 @@ void DiscoveryFeed::previewFinished(ThumbnailLoader *loader, const QString &key)
 	if (m_candidates.contains(key)) {
 		auto &candidate = m_candidates[key];
 		const QPixmap preview = candidate.item.image->previewImage();
-		bool duplicate = preview.isNull();
+		bool duplicate = preview.isNull() || candidate.dropped;
 		if (!duplicate) {
 			candidate.fingerprint = ImageFingerprint::fromImage(preview.toImage(), candidate.item.image->size());
 			// Exact copies only (other sources, re-encodes): edits and variants are different pictures.
 			for (const auto &shown : m_shownFingerprints) {
 				duplicate = duplicate || candidate.fingerprint.sameImage(shown);
 			}
-			for (auto it = m_candidates.constBegin(); it != m_candidates.constEnd() && !duplicate; ++it) {
-				duplicate = it.key() != key && it->fingerprint.valid && candidate.fingerprint.sameImage(it->fingerprint);
+			for (auto it = m_candidates.begin(); it != m_candidates.end() && !duplicate; ++it) {
+				if (it.key() == key || it->dropped || !it->fingerprint.valid || !candidate.fingerprint.sameImage(it->fingerprint)) {
+					continue;
+				}
+				// Re-encoded copy from another source: keep the better tagged one.
+				duplicate = it->item.image->tags().size() >= candidate.item.image->tags().size();
+				if (!duplicate) {
+					it->dropped = true;
+				}
 			}
 			if (!duplicate && !m_profile->library()->sameImageKey(*candidate.item.image, candidate.fingerprint).isEmpty()) {
 				log(QStringLiteral("Discover: skipped %1, already in Library").arg(candidate.item.image->pageUrl().toString()), Logger::Debug);
-				duplicate = true;
-			}
-			// Untagged black and white pictures or sketches still match a blacklisted "monochrome" or "sketch".
-			const QString look = duplicate ? QString() : candidate.fingerprint.lookTag([this](const QString &tag) { return m_profile->getBlacklist().contains(tag); });
-			if (!look.isEmpty()) {
-				log(QStringLiteral("Discover: skipped %1, looks like blacklisted %2").arg(candidate.item.image->pageUrl().toString(), look), Logger::Debug);
 				duplicate = true;
 			}
 		}
@@ -711,7 +740,7 @@ void DiscoveryFeed::emitGroup(int group, bool force)
 	QList<Candidate> ready;
 	for (const auto &key : m_groups.take(group)) {
 		const Candidate candidate = m_candidates.take(key);
-		if ((candidate.done || force) && candidate.fingerprint.valid && !candidate.item.image->previewImage().isNull()) {
+		if ((candidate.done || force) && !candidate.dropped && candidate.fingerprint.valid && !candidate.item.image->previewImage().isNull()) {
 			ready.append(candidate);
 		}
 	}
@@ -757,6 +786,7 @@ void DiscoveryFeed::emitGroup(int group, bool force)
 			continue;
 		}
 		items.append(candidate.item);
+		m_batchVisual += candidate.item.visual ? 1 : 0;
 		items.last().matches = m_taste.matches(candidate.item.image->tagsString(), 3);
 		m_shown.insert(candidate.item.key, candidate.item.image);
 		m_shownQueries.insert(candidate.item.key, candidate.query);
@@ -819,6 +849,8 @@ void DiscoveryFeed::finishBatch()
 	}
 	saveState();
 
+	const QString visual = m_encoder == nullptr ? QStringLiteral("off") : (m_visualSeeds.isEmpty() ? QStringLiteral("on, but no rated Library picture is indexed") : QStringLiteral("on, %1 rated Library pictures").arg(m_visualSeeds.size()));
+	log(QStringLiteral("Discover: batch %1 showed %2 pictures, %3 ranked by look too (local AI %4)").arg(m_batch).arg(m_batchEmitted).arg(m_batchVisual).arg(visual), Logger::Info);
 	QString status = m_batchEmitted == 0 ? tr("No new pictures in this batch.") : QString();
 	if (!m_failedSources.isEmpty()) {
 		status += (status.isEmpty() ? QString() : QStringLiteral(" ")) + tr("%1 did not respond.").arg(m_failedSources.join(", "));

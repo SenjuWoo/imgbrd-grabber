@@ -45,6 +45,7 @@ class HomeTab : public QWidget
 
 	protected:
 		void showEvent(QShowEvent *event) override;
+		void hideEvent(QHideEvent *event) override;
 
 	private:
 		void addItems(const QList<DiscoveryItem> &items);

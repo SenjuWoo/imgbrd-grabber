@@ -5,6 +5,7 @@
 #include "models/image.h"
 #include "models/profile.h"
 #include "models/site.h"
+#include "tags/tag.h"
 #include "tabs/tag-tab.h"
 #include "catch.h"
 #include "source-helpers.h"
@@ -48,4 +49,17 @@ TEST_CASE("Merged search keeps edits and stable image bindings", "[search][merge
 	search.clear();
 	REQUIRE(search.mergeResults(2, {same}).isEmpty()); // Page 1 of this search showed it already.
 	REQUIRE(search.mergeResults(3, {picture("5", b.toUpper(), "https://test.invalid/5.png")}).isEmpty());
+
+	// Of two copies of one file, the better tagged one is shown and saved.
+	const QString c = "2123456789abcdef0123456789abcdef";
+	auto sparse = picture("6", c, "https://test.invalid/6.png");
+	const QList<Tag> tags {Tag("solo"), Tag("smile"), Tag("outdoors")};
+	auto rich = QSharedPointer<Image>::create(site, QMap<QString, QString>{{"id", "7"}, {"md5", c}, {"file_url", "https://mirror.invalid/6.png"}}, QVariantMap {{"id", 7}}, QVariantMap {{"tags", QVariant::fromValue(tags)}}, profile.data());
+	search.clear();
+	REQUIRE(search.mergeResults(1, {sparse, rich}) == QList<QSharedPointer<Image>>{rich});
+	search.clear();
+	REQUIRE(search.mergeResults(1, {rich, sparse}) == QList<QSharedPointer<Image>>{rich});
+	search.clear();
+	search.m_images = {sparse};
+	REQUIRE(search.mergeResults(1, {rich}) == QList<QSharedPointer<Image>>{rich}); // Replaces the tile already shown.
 }

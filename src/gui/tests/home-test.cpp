@@ -502,6 +502,29 @@ TEST_CASE("Discover lets users say what is not interesting, undo it and restore 
 	REQUIRE(reloaded.dismissedCount() == 1);
 	REQUIRE(reloaded.hiddenPictures().size() == 1);
 	REQUIRE(reloaded.tuning().tags.value("lake") == TasteTuning::Less);
+
+	// Pictures hidden before previews were kept still get a row and can be restored one by one.
+	QFile state(DiscoveryFeed::statePath(profile->getPath()));
+	REQUIRE(state.open(QIODevice::ReadOnly));
+	QJsonObject json = QJsonDocument::fromJson(state.readAll()).object();
+	state.close();
+	QJsonArray hidden = json.value("hidden").toArray();
+	hidden.prepend(QString(64, 'f'));
+	json.insert("hidden", hidden);
+	REQUIRE(state.open(QIODevice::WriteOnly | QIODevice::Truncate));
+	state.write(QJsonDocument(json).toJson());
+	state.close();
+	DiscoveryFeed legacy(profile.data(), nullptr);
+	REQUIRE(legacy.legacyHidden() == QStringList {QString(64, 'f')});
+	CustomNetworkAccessManager::NextFiles.enqueue(writePreview(directory, "d.png", Qt::blue));
+	DiscoverHiddenDialog dialog(&legacy, &home);
+	auto *list = dialog.findChild<QListWidget*>("discoverHiddenList");
+	REQUIRE(list->count() == 2);
+	REQUIRE(list->item(1)->text().contains("No preview kept"));
+	list->item(1)->setSelected(true);
+	QTest::mouseClick(dialog.findChild<QPushButton*>("discoverRestoreSelected"), Qt::LeftButton);
+	REQUIRE(legacy.legacyHidden().isEmpty());
+	REQUIRE(legacy.dismissedCount() == 1);
 }
 
 TEST_CASE("The taste dialog explains Discover and edits focus, variety and tag preferences", "[library][home][discovery]")

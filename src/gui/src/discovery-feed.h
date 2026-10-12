@@ -62,6 +62,8 @@ class DiscoveryFeed : public QObject
 		void restart();
 		void fetchMore();
 		void cancel();
+		/** While paused (Discover not on screen) no new batch starts and the running one stops, freeing source rate limits. */
+		void setPaused(bool paused);
 		bool isBusy() const;
 		bool lastBatchProductive() const { return m_batchEmitted > 0; }
 		const TasteProfile &taste();
@@ -83,6 +85,8 @@ class DiscoveryFeed : public QObject
 		int dismissedCount() const;
 		/** Hidden pictures that can be shown again, newest first. */
 		QList<HiddenPicture> hiddenPictures() const;
+		/** Pictures hidden before 7.19, which kept only their key: no preview or tags to show. */
+		QStringList legacyHidden() const;
 		/** Shows hidden pictures again and takes back the penalties hiding them added. */
 		void restore(const QStringList &keys);
 		const TasteTuning &tuning() const;
@@ -109,6 +113,7 @@ class DiscoveryFeed : public QObject
 			double visualScore = -1;
 			ImageFingerprint fingerprint;
 			bool done = false;
+			bool dropped = false; // A better tagged copy of the same picture replaced it.
 			int group = 0;
 		};
 
@@ -150,6 +155,8 @@ class DiscoveryFeed : public QObject
 		QHash<int, QStringList> m_groups;
 		int m_nextGroup = 0;
 		int m_batchEmitted = 0;
+		int m_batchVisual = 0;
+		bool m_paused = false;
 		QList<QString> m_previewQueue;
 		QList<QPointer<ThumbnailLoader>> m_loaders;
 

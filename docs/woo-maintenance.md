@@ -73,8 +73,8 @@ package directory. App updates also refresh these app-local libraries. See
 - SQLite schema version 1 and cached thumbnails live in library.sqlite. Restore
   corrupt databases from a backup; do not delete them to make startup succeed.
 - Catalog removal never deletes originals or changes the download MD5 index.
-- The portable package includes a blank settings.ini but excludes it from runtime hashes;
-  a real profile replaces it. The SQLite driver is checked during packaging.
+- The portable package marks portable mode with an empty `portable` file and ships no
+  settings.ini, so extracting it over an install keeps the profile's settings. The SQLite driver is checked during packaging.
 
 Implementation scope and verification are in [library-milestone.md](library-milestone.md).
 

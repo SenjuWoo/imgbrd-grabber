@@ -39,51 +39,8 @@ ImageFingerprint ImageFingerprint::fromImage(const QImage &image, const QSize &f
 			result.colors[cell + 2] = quint8(qBlue(pixels[column]));
 		}
 	}
-	// Calibrated on Danbooru previews: catches most monochrome and line art, no colored pictures.
-	const QImage look = image.convertToFormat(QImage::Format_RGB32).scaled(32, 32, Qt::IgnoreAspectRatio, Qt::SmoothTransformation);
-	int colored = 0, chroma = 0, white = 0;
-	for (int row = 0; row < 32; ++row) {
-		const auto *pixels = reinterpret_cast<const QRgb *>(look.constScanLine(row));
-		for (int column = 0; column < 32; ++column) {
-			const int red = qRed(pixels[column]), green = qGreen(pixels[column]), blue = qBlue(pixels[column]);
-			const int spread = std::max({red, green, blue}) - std::min({red, green, blue});
-			colored += spread > 32 ? 1 : 0;
-			chroma += spread;
-			white += std::min({red, green, blue}) > 215 ? 1 : 0;
-		}
-	}
-	result.colored = float(colored) / 1024;
-	result.chroma = float(chroma) / 1024;
-	result.white = float(white) / 1024;
 	result.valid = true;
 	return result;
-}
-
-bool ImageFingerprint::looksMonochrome() const
-{
-	return valid && colored < 0.01f && chroma < 6;
-}
-
-bool ImageFingerprint::looksLikeSketch() const
-{
-	return valid && colored < 0.10f && white > 0.5f;
-}
-
-QString ImageFingerprint::lookTag(const std::function<bool(const QString &)> &listed) const
-{
-	static const QStringList monochrome {"monochrome", "greyscale", "grayscale", "black_and_white"};
-	static const QStringList sketch {"sketch", "rough_sketch", "lineart", "line_art", "draft", "unfinished", "wip", "work_in_progress"};
-	for (const QString &tag : monochrome) {
-		if (looksMonochrome() && listed(tag)) {
-			return tag;
-		}
-	}
-	for (const QString &tag : sketch) {
-		if (looksLikeSketch() && listed(tag)) {
-			return tag;
-		}
-	}
-	return {};
 }
 
 int ImageFingerprint::structureDistance(const ImageFingerprint &other) const

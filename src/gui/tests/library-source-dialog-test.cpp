@@ -14,6 +14,7 @@
 #include <QMessageBox>
 #include <QPixmap>
 #include <QPushButton>
+#include <QSettings>
 #include <QScopedPointer>
 #include <QTemporaryDir>
 #include <QTest>
@@ -131,6 +132,15 @@ TEST_CASE("Source linking validates metadata URLs and keeps candidates explicit"
 		}
 		REQUIRE(results->item(0)->text().contains("Exact MD5 match"));
 		REQUIRE(results->item(0)->icon().isNull()); // Imported pixels are not passed off as source pixels.
+
+		// The default asks each of the selected sources in turn.
+		profile->getSettings()->setValue("sites", QStringList { "missing.invalid", site->url() });
+		source->setCurrentIndex(0);
+		REQUIRE(source->currentData().toString() == "*");
+		CustomNetworkAccessManager::NextFiles.enqueue(responsePath);
+		QTest::mouseClick(lookup, Qt::LeftButton);
+		REQUIRE(QTest::qWaitFor([&]() { return lookup->text() == "Find exact match"; }, 5000));
+		REQUIRE(results->count() == 1);
 	}
 }
 

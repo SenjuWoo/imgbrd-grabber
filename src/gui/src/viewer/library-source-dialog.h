@@ -40,6 +40,7 @@ class LibrarySourceDialog : public QDialog
 		void exactLookup();
 		void cancelLookup();
 		void showExactResults(Page *page, const QString &hash);
+		void lookupNext(const QString &hash);
 		void findSimilar();
 		void clearCandidates();
 		void addCandidate(const QSharedPointer<Image> &image, const QByteArray &thumbnail, const QString &label, const QString &evidence);
@@ -67,6 +68,8 @@ class LibrarySourceDialog : public QDialog
 		QListWidget *m_results;
 		QTimer *m_timeout;
 		QPointer<Page> m_page;
+		QStringList m_lookupSites;
+		int m_lookupTotal = 0;
 		QList<Candidate> m_candidates;
 		std::shared_ptr<std::atomic_bool> m_cancelVisual;
 		int m_visualGeneration = 0;

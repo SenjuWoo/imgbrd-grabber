@@ -69,7 +69,8 @@ if ($env:MYSQL_DRIVER_DIR) {
     Copy-Item -LiteralPath (Join-Path $env:MYSQL_DRIVER_DIR 'libmysql.dll') -Destination $stage
 }
 & (Join-Path $PSScriptRoot 'install-ai-runtime.ps1') -Target $stage
-[IO.File]::WriteAllText((Join-Path $stage 'settings.ini'),'')
+# Portable mode marker. Never ship settings.ini: extracting the package over an install would replace the user's settings.
+[IO.File]::WriteAllText((Join-Path $stage 'portable'),'')
 $translations = @(Get-ChildItem -LiteralPath (Join-Path $stage 'languages') -File -Filter '*.qm')
 $expectedTranslations = @(Get-ChildItem -LiteralPath (Join-Path $repo 'src\languages') -File -Filter '*.ts' | Where-Object Name -ne 'YourLanguage.ts')
 if ($translations.Count -ne $expectedTranslations.Count) { throw 'Missing compiled translations.' }
@@ -81,7 +82,7 @@ foreach ($source in Get-ChildItem -LiteralPath (Join-Path $stage 'sites') -Direc
 foreach ($required in @('platforms\qwindows.dll','tls\qopensslbackend.dll','sites\helper.js','Qt6Core.dll','sqldrivers\qsqlite.dll')) {
     if (!(Test-Path -LiteralPath (Join-Path $stage $required))) { throw "Missing runtime file: $required" }
 }
-$files = @(Get-ChildItem -LiteralPath $stage -File -Recurse | Where-Object { $_.FullName -ne (Join-Path $stage 'settings.ini') } | ForEach-Object {
+$files = @(Get-ChildItem -LiteralPath $stage -File -Recurse | ForEach-Object {
     @{path=$_.FullName.Substring($stage.Length+1).Replace('\','/'); sha256=(Get-FileHash -LiteralPath $_.FullName -Algorithm SHA256).Hash.ToLowerInvariant()}
 })
 $manifest = @{commit=(& git.exe -C $repo rev-parse HEAD); files=$files}

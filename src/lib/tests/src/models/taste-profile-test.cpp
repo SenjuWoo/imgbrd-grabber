@@ -205,6 +205,20 @@ TEST_CASE("Taste profile treats synonyms and other spellings as one taste", "[di
 	REQUIRE(TasteProfile::isMetaTag("2d_(artwork)"));
 }
 
+TEST_CASE("Tag adapter writes each source's own OR syntax", "[discover]")
+{
+	const QStringList names {"hidden_sex_toy", "stealth_sex_toy"};
+	REQUIRE(TasteProfile::anyOf("Gelbooru (0.2)", "api.rule34.xxx", names, 2) == "( hidden_sex_toy ~ stealth_sex_toy )");
+	REQUIRE(TasteProfile::anyOf("Gelbooru (0.2)", "gelbooru.com", names, 2) == "{hidden_sex_toy ~ stealth_sex_toy}");
+	REQUIRE(TasteProfile::anyOf("Modified Gelbooru (0.1)", "rule34.us", names, 2) == "{hidden_sex_toy ~ stealth_sex_toy}");
+	REQUIRE(TasteProfile::anyOf("E621", "e621.net", names, 2) == "~hidden_sex_toy ~stealth_sex_toy");
+	REQUIRE(TasteProfile::anyOf("Danbooru (2.0)", "danbooru.donmai.us", names, 1) == "~hidden_sex_toy ~stealth_sex_toy");
+	REQUIRE(TasteProfile::anyOf("Danbooru (2.0)", "danbooru.donmai.us", names, 2).isEmpty()); // Anonymous two-tag limit.
+	REQUIRE(TasteProfile::anyOf("Gelbooru (0.2)", "unknown.example", names, 1).isEmpty()); // Unverified hosts get the plain search.
+	REQUIRE(TasteProfile::anyOf("Shimmie", "rule34.paheal.net", names, 1).isEmpty());
+	REQUIRE(TasteProfile::anyOf("E621", "e621.net", {"solo"}, 1).isEmpty());
+}
+
 TEST_CASE("Taste profile searches tags whose pictures were rated more than ignored ones", "[discover]")
 {
 	const QList<LibraryEntry> entries {

@@ -9,7 +9,7 @@ foreach ($name in $crtNames) {
     if (!(Test-Path -LiteralPath (Join-Path $Root $name))) { throw "Missing portable Microsoft C++ runtime: $name" }
 }
 $settingsPath = Join-Path $Root 'settings.ini'
-$originalSettings = [IO.File]::ReadAllBytes($settingsPath)
+$originalSettings = if (Test-Path -LiteralPath $settingsPath) { [IO.File]::ReadAllBytes($settingsPath) } else { [byte[]]@() }
 $environment = @{}
 foreach ($key in @('PATH','QT_PLUGIN_PATH','QT_QPA_PLATFORM')) { $environment[$key] = [Environment]::GetEnvironmentVariable($key,'Process') }
 $process = $null
@@ -84,6 +84,6 @@ try {
         }
     }
     if ($fixture -and (Test-Path -LiteralPath $fixture)) { Remove-Item -LiteralPath $fixture -Force }
-    [IO.File]::WriteAllBytes($settingsPath,$originalSettings)
+    if ($originalSettings.Length -gt 0) { [IO.File]::WriteAllBytes($settingsPath,$originalSettings) } else { Remove-Item -LiteralPath $settingsPath -Force -ErrorAction SilentlyContinue }
     foreach ($key in $environment.Keys) { [Environment]::SetEnvironmentVariable($key,$environment[$key],'Process') }
 }

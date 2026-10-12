@@ -291,6 +291,11 @@ DiscoverHiddenDialog::DiscoverHiddenDialog(DiscoveryFeed *feed, QWidget *parent)
 		m_images.insert(hidden.key, hidden.image);
 		m_pending.append(hidden.key);
 	}
+	for (const QString &key : feed->legacyHidden()) {
+		auto *item = new QListWidgetItem(QIcon(placeholder), tr("No preview kept\n(hidden before 7.19)"), m_list);
+		item->setData(Qt::UserRole, key);
+		item->setToolTip(tr("Only a fingerprint of this picture was stored, so it cannot be shown. Restoring it lets it appear again."));
+	}
 
 	m_summary = new QLabel(this);
 	m_summary->setWordWrap(true);
@@ -355,10 +360,10 @@ void DiscoverHiddenDialog::restoreKeys(const QStringList &keys)
 
 void DiscoverHiddenDialog::updateSummary()
 {
-	const int older = m_feed->dismissedCount() - m_list->count();
+	const int older = int(m_feed->legacyHidden().size());
 	QString text = tr("%n hidden picture(s).", "", m_feed->dismissedCount());
 	if (older > 0) {
-		text += ' ' + tr("%n were hidden before previews were kept; Restore all brings them back too.", "", older);
+		text += ' ' + tr("%n of them were hidden before previews were kept and show as gray tiles.", "", older);
 	}
 	m_summary->setText(text);
 	m_restoreAll->setEnabled(m_feed->dismissedCount() > 0);

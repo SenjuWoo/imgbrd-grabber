@@ -290,9 +290,19 @@ HomeTab::~HomeTab()
 ImageGridView *HomeTab::grid() const { return m_grid; }
 DiscoveryFeed *HomeTab::feed() const { return m_feed; }
 
+void HomeTab::hideEvent(QHideEvent *event)
+{
+	QWidget::hideEvent(event);
+	m_feed->setPaused(true);
+}
+
 void HomeTab::showEvent(QShowEvent *event)
 {
 	QWidget::showEvent(event);
+	m_feed->setPaused(false);
+	if (m_started) {
+		QTimer::singleShot(0, m_grid, &ImageGridView::checkNearEnd); // Continue where a pause stopped.
+	}
 	m_grid->setDensity(m_profile->getSettings()->value("Gallery/density", 1).toInt());
 	if (!m_started) {
 		m_started = true;

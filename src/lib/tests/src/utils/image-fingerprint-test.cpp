@@ -71,29 +71,6 @@ TEST_CASE("Fingerprints keep edits of one picture apart", "[merge]")
 	REQUIRE_FALSE(original.sameImage(ImageFingerprint::fromImage(scene(300, 420, QColor(200, 90, 70)))));
 }
 
-TEST_CASE("Fingerprints recognize monochrome pictures and sketches by their look")
-{
-	const auto colored = ImageFingerprint::fromImage(scene(300, 420));
-	REQUIRE_FALSE(colored.looksMonochrome());
-	REQUIRE_FALSE(colored.looksLikeSketch());
-	const auto grey = ImageFingerprint::fromImage(jpeg(scene(300, 420).convertToFormat(QImage::Format_Grayscale8), 80));
-	REQUIRE(grey.looksMonochrome());
-	REQUIRE_FALSE(grey.looksLikeSketch());
-
-	QImage lines(300, 420, QImage::Format_RGB32);
-	lines.fill(Qt::white);
-	QPainter painter(&lines);
-	painter.setPen(QPen(Qt::black, 3));
-	painter.drawEllipse(QRect(60, 80, 160, 220));
-	painter.drawLine(40, 380, 260, 330);
-	painter.end();
-	const auto sketch = ImageFingerprint::fromImage(lines);
-	REQUIRE(sketch.looksLikeSketch());
-	REQUIRE(sketch.lookTag([](const QString &tag) { return tag == QLatin1String("lineart"); }) == "lineart");
-	REQUIRE(sketch.lookTag([](const QString &tag) { return tag == QLatin1String("monochrome"); }) == "monochrome");
-	REQUIRE(colored.lookTag([](const QString &) { return true; }).isEmpty());
-}
-
 TEST_CASE("Fingerprints use the full picture size when previews are padded", "[merge]")
 {
 	const auto preview = ImageFingerprint::fromImage(scene(150, 210), QSize(1500, 2100));

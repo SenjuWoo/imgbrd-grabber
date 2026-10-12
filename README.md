@@ -12,16 +12,18 @@ An all-in-one image searcher, downloader and personal picture Library. Search do
 
 ## What's new in 7.20
 
-- **Only exact duplicates are hidden.** Discover and merged searches drop the same picture from another site or re-encoded, and nothing else: edits, recolors, alternate versions and variants show up again. Pictures already in your Library are matched the same strict way.
+- **Only exact duplicates are hidden.** Discover and merged searches drop the same picture from another site or re-encoded, and nothing else: edits, recolors, alternate versions and variants show up again. Of two copies, the one with **more tags** is the one shown and saved. Pictures already in your Library are matched the same strict way.
 - **No repeats across pages.** Merged search remembers what earlier pages of the same search showed, so a copy from another site on page 3 no longer repeats a picture from page 1.
 - **Copies of liked pictures show as liked** in search tiles and the viewer, not only once you like them again.
-- **Tag adapter.** Names sources give the same theme (hidden_sex_toy and stealth_sex_toy, stealth_masturbation and secret_masturbation, netorare, ntr and cuckold, …) and other spellings (bodypaint, body_paint) count as one tag. Merged searches also search the other names and combine the results; Discover searches each source under the name it uses.
+- **Tag adapter.** Names sources give the same theme (hidden_sex_toy and stealth_sex_toy, stealth_masturbation and secret_masturbation, netorare, ntr and cuckold, …) and other spellings (bodypaint, body_paint) count as one tag. Merged searches ask each source for all names in **one request** with its own OR syntax (rule34.xxx, rule34.us, gelbooru, safebooru, e621, konachan, yande.re); Discover searches each source under the name it uses.
 - **No more guessed dislikes.** Discover no longer marks tags as avoided because they are rarer in your likes than on the site (solo, 1girl, looking_at_viewer, dialogue and the like). A tag is only avoided when you say so, or when several hidden pictures share it and none of your ratings has it.
 - **Tune taste, clearer.** A **Neutral** choice drops a tag learned by mistake, each avoided tag says why, synonyms are listed once with their other names, the visual matching status is shown and **Hidden pictures** opens from the dialog.
-- **Discover and search see what blacklisted pictures look like.** Untagged black and white pictures and sketches count as a blacklisted monochrome, greyscale, sketch, lineart, draft or unfinished.
+- **Faster searches, no more rate-limit stalls.** Discover stops loading while you are on another page, so a search never waits behind it, and synonym searches no longer multiply requests.
 - **Search tiles act like Discover.** Next to ♥, ★ and + there are ⤓ Download and ✕ Not interested (hide, see less of a tag, never see a tag, with Undo), also in the right-click menu. Hidden pictures and never-show tags apply to searches too.
 - **62 per page everywhere.** rule34.xxx, rule34.us and gelbooru HTML pages hold 42 pictures; Grabber now loads two of them to fill a page.
 - **Thumbnails.** Long comic-strip thumbnails load instead of showing a broken tile, failed thumbnails retry twice, and failures are logged. Merged results say how many pictures your blacklist, Hide liked or Not interested hid.
+- **Find source asks all your sources.** Find exact match checks every selected source in turn instead of one. **Hidden pictures** also lists pictures hidden before 7.19 (as gray tiles) so each can be restored.
+- **Safe updates.** The package marks portable mode with an empty `portable` file instead of a blank `settings.ini`, so extracting a new version over an install keeps your settings.
 
 ## What's new in 7.19
 
@@ -52,13 +54,12 @@ Open **Discover** (it is also where Grabber starts). Like ♥ or favorite ★ an
 - Each source's results are filtered (blacklist, already rated, already shown, hidden), de-duplicated by checksum and by appearance, ranked, and streamed in. Only the best share reaches the screen.
 - Pictures already in your Library never show up: not the same post, not the same file from another site and not the same picture re-encoded. Edits and variants are different pictures and do show up.
 - Synonyms and other spellings of a tag count as one taste, searched under the name each source uses. Nothing is avoided by guesswork: only tags you turned down, or that several hidden pictures share while none of your ratings has them.
-- Untagged black and white pictures and sketches count as blacklisted when your blacklist has monochrome, greyscale, sketch, lineart, draft or unfinished.
 - **Not interested** (✕) asks what is wrong: hide only this picture, show less of one of its tags, or never show a tag. **X** hides at once; the toast has **Undo**, and *⋯ → Hidden pictures* restores any hidden picture later.
 - **Tune taste** shows what Discover learned, how strongly, why a tag is avoided and how well each search worked. Set tags to More, Neutral, Less or Never, add today's focus tags, and choose Familiar, Balanced or Adventurous. Hover a picture to see which of your tastes it matches. Search tiles have the same ✕ Not interested.
 - Choose **Everything I love** or a single collection's taste. Collections keep their own likes and favorites.
 - With no ratings yet, Discover shows fresh posts from your sources until you rate a few.
 
-Turn on **Smart visual matching** from the banner or *⋯*. The model is verified by size and SHA-256, the image index updates in the background, and Discover blends tag and visual similarity. Status and coverage are shown in the menu.
+Turn on **Smart visual matching** from the banner or *⋯*. The model is verified by size and SHA-256, the image index updates in the background, and Discover blends tag and visual similarity. Status and coverage are shown in the menu, and the log notes for every batch how many pictures were ranked by look.
 
 ## Library
 
@@ -134,8 +135,9 @@ npm test -- --runInBand
 
 - Discover, merged search and Library matching hide exact duplicates only (same post, checksum or strict look); the 7.19 variant matching is removed. Merged search remembers checksums and looks per page of a search and drops repeats on later pages. Library actions show the rating of a matching Library picture for re-encoded copies.
 - Taste profile: no negative weights from lower-than-background frequency or from absence; plain hides only count for tags absent from every rating and shared by two or more hidden pictures; aspect-ratio and `_(artwork)` tags are meta. Verified synonym groups plus separator-only spellings share weights, are listed once, and are searched under each source's own name; Discover may search a tag on sources whose samples carry it. New **Neutral** preference.
-- Merged search runs up to three extra queries with other names of a typed tag (tag adapter). Search tiles get Download and Not interested; Not interested and never-show tags apply to searches.
-- Thumbnail fingerprints measure colorfulness; pictures that look monochrome or like sketches match those blacklisted tags in Discover and search.
+- Merged search sends the other names of one typed tag in the same request with the source's OR syntax (`( a ~ b )` rule34.xxx/safebooru, `{a ~ b}` gelbooru/rule34.us, `~a ~b` e621/Moebooru, Danbooru only within its two-tag limit); other sources get the search as typed (tag adapter). Of duplicate copies the better tagged one stays. Search tiles get Download and Not interested; Not interested and never-show tags apply to searches.
+- Discover pauses while hidden and aborts its running batch, so searches do not queue behind it on rate-limited sources; each batch logs how many pictures the local model ranked. Hidden pictures lists legacy entries without previews. Find source checks all selected sources in turn.
+- Portable packages ship an empty `portable` marker instead of a blank `settings.ini`.
 - Fixed-size sources (`forcedLimit`) join consecutive source pages to fill larger pages; a failed follow-up request keeps the pictures already found. rule34.us pages hold 42 pictures. Discover samples 42 newest posts per request.
 - Thumbnails up to 30000 px tall load; transient failures retry after 1 s and 4 s; final failures are logged.
 

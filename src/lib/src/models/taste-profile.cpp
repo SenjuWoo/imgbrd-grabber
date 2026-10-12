@@ -553,6 +553,25 @@ QStringList TasteProfile::equivalents(const QString &tag) const
 	return result;
 }
 
+QString TasteProfile::anyOf(const QString &engine, const QString &host, const QStringList &names, int terms)
+{
+	// Each syntax was checked against the live sites (2026-10-11); a wrong guess would return nothing at all.
+	if (names.size() < 2) {
+		return {};
+	}
+	if (engine == QLatin1String("Modified Gelbooru (0.1)") || (engine == QLatin1String("Gelbooru (0.2)") && host == QLatin1String("gelbooru.com"))) {
+		return "{" + names.join(" ~ ") + "}";
+	}
+	if (engine == QLatin1String("Gelbooru (0.2)") && (host.endsWith(QLatin1String("rule34.xxx")) || host == QLatin1String("safebooru.org"))) {
+		return "( " + names.join(" ~ ") + " )";
+	}
+	// Danbooru counts every "~" term against its two-tag limit for anonymous searches.
+	if (engine == QLatin1String("E621") || engine == QLatin1String("Moebooru") || (engine == QLatin1String("Danbooru (2.0)") && terms - 1 + names.size() <= 2)) {
+		return "~" + names.join(" ~");
+	}
+	return {};
+}
+
 TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash<QString, double> &dislikedTags, const QDateTime &now, const TagBackground &background, const TasteTuning &tuning)
 {
 	TasteProfile profile;

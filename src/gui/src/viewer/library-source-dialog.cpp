@@ -25,6 +25,7 @@
 #include "models/library-importer.h"
 #include "models/library-store.h"
 #include "models/page.h"
+#include "logger.h"
 #include "models/profile.h"
 #include "models/search-query/search-query.h"
 #include "models/site.h"
@@ -84,6 +85,7 @@ LibrarySourceDialog::LibrarySourceDialog(Profile *profile, const QString &key, Q
 	m_source = new QComboBox(this);
 	m_source->setObjectName("librarySourceSite");
 	m_source->setAccessibleName(tr("Source for exact hash lookup"));
+	m_source->addItem(tr("All my sources (one after another)"), QStringLiteral("*"));
 	for (auto *site : profile->getSites()) {
 		if (!site->getApis().isEmpty()) {
 			m_source->addItem(site->name() + " (" + site->url() + ")", site->url());
@@ -159,7 +161,12 @@ LibrarySourceDialog::LibrarySourceDialog(Profile *profile, const QString &key, Q
 	layout->addWidget(buttons);
 	m_timeout = new QTimer(this);
 	m_timeout->setSingleShot(true);
-	connect(m_timeout, &QTimer::timeout, this, [this]() { cancelLookup(); m_status->setText(tr("The lookup timed out. Try another source or use cached visual candidates.")); });
+	connect(m_timeout, &QTimer::timeout, this, [this]() {
+		if (!m_page.isNull()) {
+			log(QStringLiteral("Source lookup on %1 timed out").arg(m_page->site()->url()), Logger::Warning);
+			lookupNext(m_hash->currentData().toString()); // A slow source does not hold up the others.
+		}
+	});
 }
 
 LibrarySourceDialog::~LibrarySourceDialog()
@@ -198,9 +205,23 @@ void LibrarySourceDialog::exactLookup()
 		m_status->setText(tr("Lookup canceled."));
 		return;
 	}
-	Site *site = m_profile->getSites().value(m_source->currentData().toString());
 	const QString hash = m_hash->currentData().toString();
-	if (site == nullptr || hash.isEmpty()) {
+	if (hash.isEmpty()) {
+		return;
+	}
+	// Grabber most likely saved the file from one of the selected sources: ask each of them in turn.
+	QStringList sites;
+	const auto &known = m_profile->getSites();
+	const QStringList wanted = m_source->currentData().toString() == QLatin1String("*")
+		? m_profile->getSettings()->value("sites").toStringList()
+		: QStringList { m_source->currentData().toString() };
+	for (const QString &url : wanted) {
+		if (known.contains(url) && !known.value(url)->getApis().isEmpty()) {
+			sites.append(url);
+		}
+	}
+	if (sites.isEmpty()) {
+		m_status->setText(tr("Choose image sources in a search tab first."));
 		return;
 	}
 	cancelLookup();
@@ -208,13 +229,32 @@ void LibrarySourceDialog::exactLookup()
 	m_source->setEnabled(false);
 	m_hash->setEnabled(false);
 	m_lookup->setText(tr("Cancel lookup"));
-	m_status->setText(tr("Checking the selected source for an exact MD5 match…"));
+	m_lookupSites = sites;
+	m_lookupTotal = int(sites.size());
+	lookupNext(hash);
+}
+
+void LibrarySourceDialog::lookupNext(const QString &hash)
+{
+	if (!m_page.isNull()) {
+		disconnect(m_page, nullptr, this, nullptr);
+		m_page->abort();
+		m_page->deleteLater();
+		m_page.clear();
+	}
+	if (m_lookupSites.isEmpty()) {
+		cancelLookup();
+		m_status->setText(!m_candidates.isEmpty() ? tr("The source reports this exact MD5. Double-click a candidate to review its post, then confirm the link.")
+			: tr("None of %n source(s) has a picture with this MD5: it was deleted there or came from another site. A reverse image search (SauceNAO, IQDB) can still find it.", "", m_lookupTotal));
+		return;
+	}
+	Site *site = m_profile->getSites().value(m_lookupSites.takeFirst());
+	m_status->setText(tr("Checking %1 for an exact MD5 match (%2 of %3)…").arg(site->name()).arg(m_lookupTotal - m_lookupSites.size()).arg(m_lookupTotal));
 	m_page = new Page(m_profile, site, { site }, SearchQuery(QStringList { "md5:" + hash }), 1, 20, {}, false, this);
 	connect(m_page, &Page::finishedLoading, this, [this, hash](Page *page) { showExactResults(page, hash); });
-	connect(m_page, &Page::failedLoading, this, [this](Page *page) {
-		const QString reason = page->errors().join("\n");
-		cancelLookup();
-		m_status->setText(reason.isEmpty() ? tr("Exact lookup failed. Try another source.") : reason);
+	connect(m_page, &Page::failedLoading, this, [this, hash](Page *page) {
+		log(QStringLiteral("Source lookup on %1 failed: %2").arg(page->site()->url(), page->errors().join("; ")), Logger::Warning);
+		lookupNext(hash);
 	});
 	m_timeout->start(30000);
 	m_page->load();
@@ -223,6 +263,7 @@ void LibrarySourceDialog::exactLookup()
 void LibrarySourceDialog::cancelLookup()
 {
 	m_timeout->stop();
+	m_lookupSites.clear();
 	if (m_pixivReply) {
 		disconnect(m_pixivReply, nullptr, this, nullptr);
 		m_pixivReply->abort();
@@ -264,8 +305,7 @@ void LibrarySourceDialog::showExactResults(Page *page, const QString &hash)
 			}
 		}
 	}
-	cancelLookup();
-	m_status->setText(m_candidates.isEmpty() ? tr("No returned picture had the selected MD5. No source was linked.") : tr("The source reports this exact MD5. Double-click a candidate to review its post, then confirm the link."));
+	lookupNext(hash);
 }
 
 void LibrarySourceDialog::findSimilar()
