@@ -9,7 +9,9 @@ foreach ($name in $crtNames) {
     if (!(Test-Path -LiteralPath (Join-Path $Root $name))) { throw "Missing portable Microsoft C++ runtime: $name" }
 }
 $settingsPath = Join-Path $Root 'settings.ini'
-$originalSettings = if (Test-Path -LiteralPath $settingsPath) { [IO.File]::ReadAllBytes($settingsPath) } else { [byte[]]@() }
+# Not an if-expression: PowerShell unrolls an empty array to $null.
+$originalSettings = [byte[]]@()
+if (Test-Path -LiteralPath $settingsPath) { $originalSettings = [IO.File]::ReadAllBytes($settingsPath) }
 $environment = @{}
 foreach ($key in @('PATH','QT_PLUGIN_PATH','QT_QPA_PLATFORM')) { $environment[$key] = [Environment]::GetEnvironmentVariable($key,'Process') }
 $process = $null
