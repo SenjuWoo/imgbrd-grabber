@@ -10,6 +10,7 @@
 #include <QInputDialog>
 #include <QLabel>
 #include <QMenu>
+#include <QMessageBox>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSettings>
@@ -403,6 +404,33 @@ void HomeTab::updateChips()
 	}
 	m_chipsLayout->addStretch();
 	m_chips->show();
+	fitChips();
+}
+
+void HomeTab::resizeEvent(QResizeEvent *event)
+{
+	QWidget::resizeEvent(event);
+	fitChips();
+}
+
+// A chip that would be cut off at the window edge is hidden instead; the strongest picks come first.
+void HomeTab::fitChips()
+{
+	int used = 0;
+	bool full = false;
+	const int spacing = m_chipsLayout->spacing();
+	for (int i = 0; i < m_chipsLayout->count(); ++i) {
+		auto *widget = m_chipsLayout->itemAt(i)->widget();
+		if (widget == nullptr) { continue; }
+		const int width = widget->sizeHint().width() + spacing;
+		if (i > 0 && (full || used + width > m_chips->width())) {
+			full = true;
+			widget->hide();
+			continue;
+		}
+		widget->show();
+		used += width;
+	}
 }
 
 void HomeTab::updateAi()
@@ -446,6 +474,9 @@ void HomeTab::addItems(const QList<DiscoveryItem> &items)
 	QList<ImageGridItem> tiles;
 	const qint64 now = QDateTime::currentMSecsSinceEpoch();
 	for (const auto &item : items) {
+		auto light = item; // the feed owns the picture; the tile only needs why it was picked
+		light.image.reset();
+		m_items.insert(item.key, light);
 		ImageGridItem tile;
 		tile.key = item.key;
 		tile.pixmap = item.image->previewImage();
@@ -604,6 +635,7 @@ void HomeTab::showMenu(const QStringList &keys, const QPoint &position)
 	menu.addAction(tr("Download"), this, [this, keys]() { triggerAction(ImageGridView::Download, keys); });
 	if (keys.size() == 1 && image) {
 		menu.addSeparator();
+		menu.addAction(tr("Why this picture?"), this, [this, key]() { explain(key); })->setEnabled(m_items.contains(key));
 		QStringList best;
 		const auto &taste = m_feed->taste();
 		QStringList tags = image->tagsString();
@@ -630,6 +662,37 @@ void HomeTab::showMenu(const QStringList &keys, const QPoint &position)
 	menu.addSeparator();
 	fillNotInterested(menu.addMenu(tr("Not interested")), keys);
 	menu.exec(position);
+}
+
+void HomeTab::explain(const QString &key)
+{
+	const auto item = m_items.value(key);
+	const auto image = m_feed->image(key);
+	if (!image) {
+		return;
+	}
+	const auto &taste = m_feed->taste();
+	QStringList lines;
+	lines.append(tr("<b>Found by:</b> %1").arg(item.reason.toHtmlEscaped()));
+	const QStringList matches = taste.matches(image->tagsString(), 6);
+	if (matches.isEmpty()) {
+		lines.append(tr("<b>Tags:</b> none of its tags is a strong part of your taste yet."));
+	} else {
+		QStringList parts;
+		for (const QString &name : matches) {
+			const auto tag = taste.info(name);
+			parts.append(tr("%1 (in %n of your pictures)", "", tag.count).arg(QString(name).replace('_', ' ').toHtmlEscaped()));
+		}
+		lines.append(tr("<b>Matches your taste:</b> %1").arg(parts.join(", ")));
+	}
+	if (item.visual) {
+		lines.append(tr("<b>Looks like</b> pictures you love (local AI)."));
+	}
+	lines.append(tr("<b>Score:</b> %1 (higher is a better match)").arg(item.score, 0, 'f', 2));
+	lines.append(tr("Change this with <i>Tune taste</i>, or hide it with <i>Not interested</i>."));
+	QMessageBox box(QMessageBox::Information, tr("Why this picture?"), lines.join("<br/>"), QMessageBox::Close, this);
+	box.setTextFormat(Qt::RichText);
+	box.exec();
 }
 
 void HomeTab::fillNotInterested(QMenu *menu, const QStringList &keys)

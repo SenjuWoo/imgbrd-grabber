@@ -39,7 +39,8 @@ class LibraryTab : public QWidget
 		void reload();
 		void showView(qint64 collection = 0, int smartFilter = 0);
 		void openPicture(const QString &key, const QStringList &keys, qint64 collection = 0);
-		void importPaths(const QStringList &paths, bool copy = false, const QString &expectedKey = {});
+		/** `loved` also likes every imported picture, so Discover learns from their tags. */
+		void importPaths(const QStringList &paths, bool copy = false, const QString &expectedKey = {}, bool loved = false);
 		bool importing() const { return m_importing; }
 		ImageGridView *grid() const { return m_grid; }
 		QStringList viewKeys() const { return m_viewKeys; }
@@ -100,12 +101,12 @@ class LibraryTab : public QWidget
 		QProgressDialog *m_progress = nullptr;
 		QPushButton *m_importButton;
 		std::shared_ptr<std::atomic_bool> m_cancel;
-		QStringList m_importFiles, m_importErrors;
+		QStringList m_importFiles, m_importErrors, m_importKeys;
 		QSet<QString> m_knownKeys;
 		QString m_managedDirectory, m_expectedKey;
 		qint64 m_importCollection = 0;
 		int m_importIndex = 0, m_added = 0, m_duplicates = 0, m_failed = 0;
-		bool m_importing = false, m_copyImports = false;
+		bool m_importing = false, m_copyImports = false, m_importLoved = false;
 };
 
 #endif // LIBRARY_TAB_H

@@ -3,6 +3,7 @@
 #include <QCryptographicHash>
 #include <QDateTime>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QFileInfo>
 #include <QFile>
 #include "utils/file-utils.h"
@@ -18,6 +19,7 @@
 #include <functional>
 #include <numeric>
 #include <tuple>
+#include "logger.h"
 #include "models/image.h"
 #include "models/library-importer.h"
 #include "models/site.h"
@@ -82,10 +84,13 @@ LibraryStore::LibraryStore(const QString &path, QObject *parent)
 		return;
 	}
 	QSqlQuery check(m_database);
+	QElapsedTimer checkTimer;
+	checkTimer.start();
 	if (!check.exec("PRAGMA quick_check") || !check.next() || check.value(0).toString() != "ok") {
 		m_error = tr("The Library database is damaged. Restore a backup before continuing.");
 		return;
 	}
+	log(QStringLiteral("Library opened: integrity check %1 ms").arg(checkTimer.elapsed()), Logger::Info);
 	if (!execute("PRAGMA foreign_keys = ON") || !check.exec("PRAGMA user_version") || !check.next()) {
 		m_error = m_database.lastError().text();
 		return;

@@ -6,7 +6,11 @@
 #include <QDialogButtonBox>
 #include <QFutureWatcher>
 #include <QHBoxLayout>
+#include <QClipboard>
+#include <QGuiApplication>
 #include <QImage>
+#include <QImageReader>
+#include <QMenu>
 #include <QJsonArray>
 #include <QLabel>
 #include <QListWidget>
@@ -135,6 +139,30 @@ LibrarySourceDialog::LibrarySourceDialog(Profile *profile, const QString &key, Q
 	m_pixiv->setEnabled(m_store->isReady() && !entry.key.isEmpty());
 	layout->addWidget(m_pixiv);
 	connect(m_pixiv, &QPushButton::clicked, this, &LibrarySourceDialog::findOnPixiv);
+	// Reverse image sites block automated clients, so the app never uploads: it copies the picture and opens the site in the browser.
+	for (const QString &path : entry.localPaths) {
+		if (QFileInfo::exists(path)) {
+			m_localFile = path;
+			break;
+		}
+	}
+	m_reverse = new QPushButton(tr("Reverse image search…"), this);
+	m_reverse->setObjectName("librarySourceReverse");
+	m_reverse->setToolTip(tr("For pictures no booru has by MD5. Copies the picture to the clipboard and opens the site in your browser: press Ctrl+V there. You choose what to upload; Grabber sends nothing."));
+	m_reverse->setEnabled(!m_localFile.isEmpty());
+	auto *reverseMenu = new QMenu(m_reverse);
+	const QList<QPair<QString, QString>> engines {
+		{ QStringLiteral("SauceNAO"), QStringLiteral("https://saucenao.com/") }, { QStringLiteral("IQDB"), QStringLiteral("https://iqdb.org/") },
+		{ QStringLiteral("Google Lens"), QStringLiteral("https://lens.google.com/") }, { QStringLiteral("Yandex Images"), QStringLiteral("https://yandex.com/images/") },
+		{ QStringLiteral("TinEye"), QStringLiteral("https://tineye.com/") },
+	};
+	for (const auto &engine : engines) {
+		reverseMenu->addAction(engine.first, this, [this, url = QUrl(engine.second)]() { reverseSearch(url); });
+	}
+	reverseMenu->addSeparator();
+	reverseMenu->addAction(tr("Show the file in its folder"), this, [this]() { QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(m_localFile).absolutePath())); });
+	m_reverse->setMenu(reverseMenu);
+	layout->addWidget(m_reverse);
 	m_status = new QLabel(tr("Exact lookup sends only the selected MD5 hash to the selected source. Similarity search stays on this PC."), this);
 	m_status->setObjectName("librarySourceStatus");
 	m_status->setTextFormat(Qt::PlainText);
@@ -380,6 +408,20 @@ void LibrarySourceDialog::findSimilar()
 		}
 		return matches;
 	}));
+}
+
+void LibrarySourceDialog::reverseSearch(const QUrl &site)
+{
+	QImageReader reader(m_localFile);
+	reader.setAutoTransform(true);
+	const QImage image = reader.read();
+	if (image.isNull()) {
+		m_status->setText(tr("Could not read %1 to copy it: %2").arg(QFileInfo(m_localFile).fileName(), reader.errorString()));
+		return;
+	}
+	QGuiApplication::clipboard()->setImage(image);
+	QDesktopServices::openUrl(site);
+	m_status->setText(tr("Picture copied. On %1 press Ctrl+V, or drag %2 onto the page. Found the post? Search its number here or add the site as a source.").arg(site.host(), QFileInfo(m_localFile).fileName()));
 }
 
 void LibrarySourceDialog::findOnPixiv()

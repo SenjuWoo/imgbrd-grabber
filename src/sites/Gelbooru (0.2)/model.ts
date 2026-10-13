@@ -112,7 +112,11 @@ export const source: ISource = {
                     // Some sites (e.g. api.rule34.xxx) return an <error> document, notably when unauthenticated
                     if ("error" in parsed) {
                         const error = parsed["error"];
-                        return { error: typeof error === "string" ? error : String(error["#text"] || "Unknown API error") };
+                        const message = typeof error === "string" ? error : String(error["#text"] || "Unknown API error");
+                        if (/^Missing authentication/i.test(message)) {
+                            return { error: message + ". Enter your API user ID and key (rule34.xxx > Account > Options) in Options > Sources > this site > Login, type URL." };
+                        }
+                        return { error: message };
                     }
 
                     // Validate the shape of the response

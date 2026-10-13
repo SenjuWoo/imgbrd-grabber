@@ -52,6 +52,7 @@ namespace
 		};)") > 0);
 		model.close();
 		auto *profile = new Profile(path);
+		profile->getSettings()->setValue("skipMirrors", false); // the fixture needs two sources of one engine
 		profile->getSettings()->setValue("useregexfortags", false);
 		profile->getSettings()->setValue("thumbnailSmartSize", false);
 		profile->getSettings()->setValue("infiniteScroll", "button");

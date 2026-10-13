@@ -1,6 +1,7 @@
 #include "tabs/search-tab.h"
 #include <QBoxLayout>
 #include <QCompleter>
+#include <QDateTime>
 #include <QEventLoop>
 #include <QMenu>
 #include <QMessageBox>
@@ -26,6 +27,7 @@
 #include "models/filtering/post-filter.h"
 #include "models/page.h"
 #include "models/profile.h"
+#include "models/site-mirrors.h"
 #include "models/site.h"
 #include "models/source-engine.h"
 #include "sources/sources-window.h"
@@ -33,6 +35,7 @@
 #include "ui/fixed-size-grid-layout.h"
 #include "ui/QBouton.h"
 #include "ui/text-edit.h"
+#include "ui/toast.h"
 #include "ui/verticalscrollarea.h"
 #include "viewer/viewer-window.h"
 
@@ -472,6 +475,15 @@ void SearchTab::failedLoading(Page *page)
 	const bool merged = ui_checkMergeResults != nullptr && ui_checkMergeResults->isChecked();
 	addResultsPage(page, {}, merged, 0, tr("Source failed. Reload to retry."));
 	postLoading(page, {});
+}
+
+void SearchTab::siteRateLimited(Site *site, int seconds)
+{
+	// One toast per site and retry window, so a slow search reads as waiting instead of hung.
+	const qint64 now = QDateTime::currentMSecsSinceEpoch();
+	if (m_stop || now - m_rateNotices.value(site, 0) < qMax(seconds, 5) * 1000) { return; }
+	m_rateNotices.insert(site, now);
+	Toast::show(this, tr("%1 is rate-limiting this search. Retrying in %n second(s).", "", seconds).arg(site->url()), 8000);
 }
 
 void SearchTab::httpsRedirect(Page *page)
@@ -1325,6 +1337,13 @@ void SearchTab::saveSources(const QList<Site*> &sel, bool canLoad)
 	m_settings->setValue("sites", sav);
 	setSources(sel);
 
+	QStringList mirrors;
+	SiteMirrors::unique(sav, &mirrors);
+	if (!mirrors.isEmpty() && m_settings->value("skipMirrors", true).toBool()) {
+		log(QStringLiteral("Mirrors of an already selected source are skipped: %1").arg(mirrors.join(", ")), Logger::Info);
+		Toast::show(this, tr("%1 is the same server as another selected source and is searched only once.").arg(mirrors.join(", ")), 6000);
+	}
+
 	// Log into new sources
 	for (Site *site : sel) {
 		site->login();
@@ -1475,6 +1494,7 @@ void SearchTab::loadPage()
 		connect(page.data(), &Page::finishedLoading, this, &SearchTab::finishedLoading);
 		connect(page.data(), &Page::failedLoading, this, &SearchTab::failedLoading);
 		connect(page.data(), &Page::httpsRedirect, this, &SearchTab::httpsRedirect);
+		connect(site, &Site::rateLimited, this, &SearchTab::siteRateLimited, Qt::UniqueConnection);
 		m_pages[key].append(page);
 		m_pendingPages.insert(page.data());
 		batch.append(page);
@@ -1554,7 +1574,18 @@ bool SearchTab::validateImage(const QSharedPointer<Image> &img, QString &error)
 }
 
 QList<Site*> SearchTab::loadSites() const
-{ return m_selectedSources; }
+{
+	// Mirrors of one server are searched once; the rest would only repeat every request.
+	if (!m_settings->value("skipMirrors", true).toBool()) { return m_selectedSources; }
+	QSet<QString> groups;
+	QList<Site*> sites;
+	for (Site *site : m_selectedSources) {
+		if (groups.contains(SiteMirrors::group(site->url()))) { continue; }
+		groups.insert(SiteMirrors::group(site->url()));
+		sites.append(site);
+	}
+	return sites;
+}
 
 
 void SearchTab::setSources(const QList<Site*> &sources)

@@ -1,5 +1,6 @@
 #include "main-window.h"
 #include <QCloseEvent>
+#include <QDateTime>
 #include <QCompleter>
 #include <QDesktopServices>
 #include <QDir>
@@ -27,6 +28,7 @@
 #include <ui_main-window.h>
 #include "about-window.h"
 #include "analytics.h"
+#include "backup.h"
 #include "danbooru-downloader-importer.h"
 #include "docks/favorites-dock.h"
 #include "docks/keep-for-later-dock.h"
@@ -214,6 +216,25 @@ void MainWindow::init(const QStringList &args, const QMap<QString, QString> &par
 
 	connect(ui->actionQuit, &QAction::triggered, this, &QMainWindow::close);
 	connect(ui->actionAboutQt, &QAction::triggered, qApp, &QApplication::aboutQt);
+
+	// One click, no dialog: a dated ZIP of the whole profile next to it; the ten newest are kept.
+	auto *backupNow = new QAction(tr("Back up profile now"), this);
+	backupNow->setObjectName("actionBackupNow");
+	backupNow->setToolTip(tr("Saves settings, Library, Discover state and favorites into a ZIP in the profile's backups folder"));
+	ui->menuOutils->insertAction(ui->actionOptions, backupNow);
+	connect(backupNow, &QAction::triggered, this, [this]() {
+		const QDir folder(m_profile->getPath() + "/backups");
+		const QString path = folder.filePath("backup-" + QDateTime::currentDateTime().toString("yyyy.MM.dd-hh.mm.ss") + ".zip");
+		if (!QDir().mkpath(folder.path()) || !saveBackup(m_profile, path)) {
+			QMessageBox::warning(this, tr("Backup"), tr("The backup could not be saved. See the log tab for the reason."));
+			return;
+		}
+		const auto old = folder.entryInfoList({"backup-*.zip"}, QDir::Files, QDir::Name | QDir::Reversed);
+		for (int i = 10; i < old.size(); ++i) {
+			QFile::remove(old[i].absoluteFilePath());
+		}
+		QMessageBox::information(this, tr("Backup"), tr("Saved %1 (%2 MB).").arg(QDir::toNativeSeparators(path)).arg(QFileInfo(path).size() / 1048576.0, 0, 'f', 1));
+	});
 
 	// "Settings" dock
 	m_settingsDock = new SettingsDock(m_profile, this);

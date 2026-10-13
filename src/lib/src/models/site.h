@@ -80,6 +80,8 @@ class Site : public QObject
 		QUrl fixUrl(const QString &url, const QUrl &old = QUrl()) const;
 		void setRequestHeaders(QNetworkRequest &request) const;
 		Profile *getProfile() { return m_profile; }
+		/** Tells listeners this site answered 429/503 and the request retries after `seconds`. */
+		void notifyRateLimited(int seconds) { emit rateLimited(this, seconds); }
 
 		// Api
 		const QList<Api*> &getApis() const;
@@ -107,6 +109,7 @@ class Site : public QObject
 		void loggedIn(Site *site, Site::LoginResult result);
 		void finishedLoadingTags(const QList<Tag> &tags);
 		void removed();
+		void rateLimited(Site *site, int seconds);
 
 	private:
 		Profile *m_profile;

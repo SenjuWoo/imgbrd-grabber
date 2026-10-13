@@ -28,6 +28,7 @@
 #include <QTimer>
 #include <QDir>
 #include <QEventLoop>
+#include <QImageReader>
 #include <QMap>
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
@@ -77,6 +78,7 @@ int main(int argc, char *argv[])
 	app.setOrganizationDomain("bionus.fr.cr");
 	app.setDesktopFileName("org.bionus.Grabber");
 	QSettings::setDefaultFormat(QSettings::IniFormat);
+	QImageReader::setAllocationLimit(1024); // Qt's 256 MB default rejects big originals (huge PNGs) in the viewer
 
 	Logger::getInstance().initialize();
 

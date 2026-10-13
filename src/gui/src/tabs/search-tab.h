@@ -124,6 +124,7 @@ class SearchTab : public QWidget
 		// Loading
 		void finishedLoading(Page *page);
 		void failedLoading(Page *page);
+		void siteRateLimited(Site *site, int seconds);
 		void httpsRedirect(Page *page);
 		void postLoading(Page *page, const QList<QSharedPointer<Image>> &images);
 		void finishedLoadingTags(Page *page);
@@ -210,6 +211,7 @@ class SearchTab : public QWidget
 		QList<MergedCopy> m_mergedFingerprints;
 		int m_mergedDuplicates = 0;
 		int m_md5Duplicates = 0;
+		QMap<Site*, qint64> m_rateNotices; // when each site's rate-limit toast last showed (ms since epoch)
 		// What earlier pages of this search showed, by page number, so later pages do not repeat it.
 		QString m_seenSearch;
 		QHash<QString, int> m_seenMd5;

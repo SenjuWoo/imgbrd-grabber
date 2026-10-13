@@ -103,6 +103,8 @@ class TasteProfile
 		int likes() const;
 		int favorites() const;
 		double weight(const QString &tag) const;
+		/** What was learned about a tag: strength and how many of the user's rated pictures carry it. Empty name when unknown. */
+		TasteTag info(const QString &tag) const;
 		QList<TasteTag> topTags(int limit, const QSet<QString> &types = {}) const;
 		/** Tags Discover learned to avoid, most avoided first. */
 		QList<TasteTag> avoidedTags(int limit) const;

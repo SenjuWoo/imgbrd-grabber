@@ -46,6 +46,7 @@ class LibrarySourceDialog : public QDialog
 		void addCandidate(const QSharedPointer<Image> &image, const QByteArray &thumbnail, const QString &label, const QString &evidence);
 		void linkSelected();
 		void findOnPixiv();
+		void reverseSearch(const QUrl &site);
 		void pixivDetailsLoaded(NetworkReply *reply);
 		void tryPixivFile();
 		void addPixivCandidate(const QUrl &file, const QString &md5, bool exact);
@@ -59,6 +60,8 @@ class LibrarySourceDialog : public QDialog
 		QPushButton *m_lookup;
 		QPushButton *m_similar;
 		QPushButton *m_pixiv;
+		QPushButton *m_reverse;
+		QString m_localFile; // first of the picture's files that still exists, for reverse image search
 		QPair<QString, int> m_pixivId;
 		PixivArtwork m_artwork;
 		QList<QUrl> m_pixivFiles;

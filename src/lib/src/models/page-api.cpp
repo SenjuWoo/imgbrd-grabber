@@ -274,6 +274,7 @@ void PageApi::parse()
 			return;
 		}
 		log(QStringLiteral("[%1][%2] Limit reached (%3). New try.").arg(m_site->url(), m_format, QString::number(statusCode)), Logger::Warning);
+		m_site->notifyRateLimited(m_site->setting("download/throttle_retry", 60).toInt());
 		load(true, true);
 		return;
 	}

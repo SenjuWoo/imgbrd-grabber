@@ -713,6 +713,11 @@ double TasteProfile::weight(const QString &tag) const
 	return m_tags.value(normalize(tag)).weight;
 }
 
+TasteTag TasteProfile::info(const QString &tag) const
+{
+	return m_tags.value(normalize(tag));
+}
+
 QList<TasteTag> TasteProfile::topTags(int limit, const QSet<QString> &types) const
 {
 	QList<TasteTag> result;

@@ -4,6 +4,7 @@
 #include <QHash>
 #include <QSharedPointer>
 #include <QWidget>
+#include "discovery-feed.h"
 #include "ui/image-grid.h"
 
 class DiscoveryFeed;
@@ -22,7 +23,7 @@ class QProgressBar;
 class QPushButton;
 class QStackedWidget;
 class QToolButton;
-struct DiscoveryItem;
+
 
 /**
  * Discover: an endless feed of new pictures from the selected sources, learned from likes and
@@ -45,6 +46,7 @@ class HomeTab : public QWidget
 
 	protected:
 		void showEvent(QShowEvent *event) override;
+		void resizeEvent(QResizeEvent *event) override;
 		void hideEvent(QHideEvent *event) override;
 
 	private:
@@ -60,6 +62,8 @@ class HomeTab : public QWidget
 		void showHidden();
 		void updateHeader();
 		void updateChips();
+		void fitChips();
+		void explain(const QString &key);
 		void updateAi();
 		void updateScopes();
 		void enableAi();
@@ -81,6 +85,7 @@ class HomeTab : public QWidget
 		QLabel *m_aiText;
 		QPushButton *m_aiEnable;
 		QProgressBar *m_aiProgress;
+		QHash<QString, DiscoveryItem> m_items; // what each tile was picked for, to explain it
 		QWidget *m_chips;
 		QHBoxLayout *m_chipsLayout;
 		QProgressBar *m_busy;

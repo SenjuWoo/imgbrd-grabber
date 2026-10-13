@@ -43,6 +43,8 @@
 #include "picture-actions.h"
 #include "ui/toast.h"
 #include "utils/image-fingerprint.h"
+#include "viewer/library-batch-source-dialog.h"
+#include "viewer/library-health-dialog.h"
 #include "viewer/library-image-dialog.h"
 #include "viewer/library-source-dialog.h"
 #include "viewer/viewer-window.h"
@@ -147,7 +149,18 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent, DownloadQueue *down
 	m_importButton->setObjectName("libraryImport");
 	m_importButton->setEnabled(m_store->isReady());
 	m_importButton->setToolTip(tr("Add pictures from your PC, or drop them anywhere on Library."));
-	for (auto *button : {m_selectAll, m_downloadAll, m_importButton}) {
+	auto *healthButton = new QPushButton(tr("Health…"), content);
+	healthButton->setObjectName("libraryHealth");
+	healthButton->setToolTip(tr("Check the Library for missing files, pictures without tags, duplicates and more."));
+	healthButton->setEnabled(m_store->isReady());
+	connect(healthButton, &QPushButton::clicked, this, [this]() {
+		auto *dialog = new LibraryHealthDialog(m_profile, this);
+		dialog->setAttribute(Qt::WA_DeleteOnClose);
+		connect(dialog, &LibraryHealthDialog::libraryChanged, this, &LibraryTab::reload);
+		connect(dialog, &LibraryHealthDialog::pictureRequested, this, [this](const QString &key, const QStringList &keys) { openPicture(key, keys); });
+		dialog->show();
+	});
+	for (auto *button : {m_selectAll, m_downloadAll, m_importButton, healthButton}) {
 		titleRow->addWidget(button, 0, Qt::AlignVCenter);
 	}
 	contentLayout->addLayout(titleRow);
@@ -167,6 +180,17 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent, DownloadQueue *down
 		const auto folder = QFileDialog::getExistingDirectory(this, tr("Import folder and subfolders"));
 		if (!folder.isEmpty()) {
 			importPaths({folder}, m_copyImports);
+		}
+	});
+	importMenu->addAction(tr("Choose folder of favorites (mark all ♥ Loved)…"), this, [this]() {
+		const auto folder = QFileDialog::getExistingDirectory(this, tr("Import a folder of pictures you love"));
+		if (folder.isEmpty()) {
+			return;
+		}
+		const int count = int(LibraryImporter::imageFiles({folder}).size());
+		const QString text = tr("%n picture(s) found in %1.\n\nImport them and mark every one ♥ Loved? Discover learns from the tags of loved pictures. Pictures without tags teach nothing until you find their source. You can undo right after.", "", count).arg(QDir::toNativeSeparators(folder));
+		if (count > 0 && QMessageBox::question(this, tr("Import as loved"), text, QMessageBox::Yes | QMessageBox::Cancel, QMessageBox::Cancel) == QMessageBox::Yes) {
+			importPaths({folder}, m_copyImports, {}, true);
 		}
 	});
 	importMenu->addSeparator();
@@ -189,6 +213,12 @@ LibraryTab::LibraryTab(Profile *profile, MainWindow *parent, DownloadQueue *down
 		}
 		paths.removeDuplicates();
 		importPaths(paths);
+	});
+	importMenu->addAction(tr("Find sources for pictures without tags…"), this, [this]() {
+		auto *dialog = new LibraryBatchSourceDialog(m_profile, this);
+		dialog->setAttribute(Qt::WA_DeleteOnClose);
+		connect(dialog, &QDialog::finished, this, &LibraryTab::reload);
+		dialog->show();
 	});
 	importMenu->addSeparator();
 	auto *copyAction = importMenu->addAction(tr("Copy into portable Library"));
@@ -941,7 +971,7 @@ void LibraryTab::findSource(const QString &key)
 	dialog->show();
 }
 
-void LibraryTab::importPaths(const QStringList &paths, bool copy, const QString &expectedKey)
+void LibraryTab::importPaths(const QStringList &paths, bool copy, const QString &expectedKey, bool loved)
 {
 	if (m_importing || paths.isEmpty() || !m_store->isReady()) {
 		return;
@@ -950,6 +980,8 @@ void LibraryTab::importPaths(const QStringList &paths, bool copy, const QString 
 	m_added = m_duplicates = m_failed = m_importIndex = 0;
 	m_importErrors.clear();
 	m_importFiles.clear();
+	m_importKeys.clear();
+	m_importLoved = loved;
 	m_knownKeys.clear();
 	for (const auto &entry : m_store->entries()) {
 		m_knownKeys.insert(entry.key);
@@ -991,6 +1023,9 @@ void LibraryTab::importNext()
 		watcher->deleteLater();
 		if (!m_cancel->load() || data.error.isEmpty()) {
 			const QString key = data.error.isEmpty() ? m_store->saveLocalImage(data, m_importCollection, m_expectedKey) : QString();
+			if (!key.isEmpty()) {
+				m_importKeys.append(key);
+			}
 			if (key.isEmpty()) {
 				++m_failed;
 				if (m_importErrors.size() < 50) {
@@ -1016,8 +1051,29 @@ void LibraryTab::finishImport()
 	m_progress = nullptr;
 	m_importing = false;
 	m_importButton->setEnabled(m_store->isReady());
+	// Loved import: like what the folder brought, keep a list so one click can take it back.
+	QStringList lovedKeys;
+	if (m_importLoved) {
+		for (const QString &key : qAsConst(m_importKeys)) {
+			const auto entry = m_store->entry(key);
+			if (!entry.liked && !entry.favorite && m_store->setLiked(key, true)) {
+				lovedKeys.append(key);
+			}
+		}
+	}
 	reload();
 	QString summary = tr("Import: %1 added · %2 duplicates · %3 failed").arg(m_added).arg(m_duplicates).arg(m_failed);
+	if (m_importLoved) {
+		summary += tr(" · %n marked ♥ Loved", "", int(lovedKeys.size()));
+		if (!lovedKeys.isEmpty()) {
+			Toast::show(this, tr("%n picture(s) marked ♥ Loved.", "", int(lovedKeys.size())), tr("Undo"), [this, lovedKeys]() {
+				for (const QString &key : lovedKeys) {
+					m_store->setLiked(key, false);
+				}
+				reload();
+			}, 15000);
+		}
+	}
 	if (cancelled) {
 		summary += tr(" · Cancelled; completed pictures were kept.");
 	} else if (m_importFiles.isEmpty()) {

@@ -16,6 +16,7 @@
 #include "models/library-store.h"
 #include "models/page.h"
 #include "models/profile.h"
+#include "models/site-mirrors.h"
 #include "models/site.h"
 #include "models/visual-encoder.h"
 #include "logger.h"
@@ -450,7 +451,7 @@ void DiscoveryFeed::fetchMore()
 	}
 	QStringList sources;
 	const auto &sites = m_profile->getSites();
-	for (const QString &source : m_profile->getSettings()->value("sites").toStringList()) {
+	for (const QString &source : SiteMirrors::unique(m_profile->getSettings()->value("sites").toStringList())) {
 		if (sites.contains(source)) {
 			sources.append(source);
 		}

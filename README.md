@@ -10,6 +10,19 @@ An all-in-one image searcher, downloader and personal picture Library. Search do
 
 *Discover with generated demo artwork. Pictures stay clean until you select one; then ♥ Like, ★ Favorite, Download and Not interested appear on it.*
 
+## What's new in 7.21
+
+- **Import a folder you love.** Library ▸ Import… ▸ *Choose folder of favorites* imports a folder and marks every picture ♥ Loved after you confirm the count, with **Undo**. Pictures that were already liked or favorited keep their rating.
+- **Find sources for pictures without tags.** Import… ▸ *Find sources for pictures without tags* asks every source for the exact MD5 of each untagged import and lists the matches. Nothing is linked until you check a match and press **Link checked**, so Discover can finally learn from those pictures.
+- **Reverse image search.** Find source has a **Reverse image search…** menu (SauceNAO, IQDB, Google Lens, Yandex, TinEye): it copies the picture to the clipboard and opens the site in your browser; you paste it there. Those sites block automated clients, so Grabber uploads nothing.
+- **Mirrors are searched once.** danbooru.donmai.us, hijiribe, sonohara and shima are one server; having them all selected no longer sends every request three times. New profiles start with one of them. (Turn off with `skipMirrors=false` in settings.ini.)
+- **Why this picture?** Right-click a Discover tile to see which search found it, which of your tastes it matches and how many of your pictures carry each tag.
+- **Library health.** The **Health…** button lists missing files, pictures without a thumbnail, without tags, from a source you no longer use, duplicates and leftovers, and opens or removes the catalog entries.
+- **Rate limits explained.** A 429 on any source shows "rule34.xxx is rate-limiting this search. Retrying in N seconds" instead of a bar that looks stuck.
+- **rule34.xxx needs an API key now.** The error says where to get your user ID and key and where to enter them (Options ▸ Sources ▸ rule34.xxx ▸ Login, type URL).
+- **Back up profile now** (Tools menu) saves a dated ZIP in the profile's `backups` folder and keeps the ten newest. Backups now include Discover's state (`discover.json`).
+- **Fewer glitches.** Huge originals open in the viewer instead of being rejected at 256 MB. Discover's top-pick chips that do not fit are hidden instead of cut off.
+
 ## What's new in 7.20
 
 - **Only exact duplicates are hidden.** Discover and merged searches drop the same picture from another site or re-encoded, and nothing else: edits, recolors, alternate versions and variants show up again. Of two copies, the one with **more tags** is the one shown and saved. Pictures already in your Library are matched the same strict way.
@@ -130,6 +143,15 @@ npm test -- --runInBand
 ```
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
+
+## Changes in 7.21.0
+
+- Library: import a folder as ♥ Loved (confirmed count, Undo); batch exact-MD5 source lookup for untagged imports with review before linking; **Health…** report (missing files, no thumbnail, no tags, unknown source, metadata errors, duplicates, not rated) with open and catalog-only removal; Find source gets a reverse-image-search menu that copies the picture and opens the site in the browser (no upload by Grabber).
+- Sources that serve one database (danbooru, hijiribe, sonohara, shima) are searched once in Search and Discover; the defaults list only danbooru.donmai.us.
+- Discover: **Why this picture?** explains the search, matching tastes and tag counts of a tile. Top-pick chips that do not fit are hidden.
+- A 429/503 shows a rate-limit notice with the retry delay. Gelbooru-style "Missing authentication" (rule34.xxx API) says where to enter the API key. Qt's 256 MB image allocation limit raised to 1 GB.
+- Backups include `discover.json`; **Tools ▸ Back up profile now** keeps the ten newest dated ZIPs.
+- The Library open logs how long its integrity check took (45 ms for a 100 MB Library: startup time is elsewhere).
 
 ## Changes in 7.20.0
 
