@@ -161,6 +161,7 @@ void ImagePreview::finishedLoading()
 	button->setFlat(true);
 	button->setChecked(m_checked);
 	button->setInvertToggle(settings->value("invertToggle", false).toBool());
+	button->setOpenOnDoubleClick(true);
 	QString tooltip = m_image->tooltip();
 	if (!m_previewError.isEmpty()) {
 		tooltip += QStringLiteral("<br><br>%1").arg(m_previewError.toHtmlEscaped());

@@ -24,6 +24,8 @@ class QBouton : public QPushButton
 		void setId(const QVariant &id);
 		void setProgress(qint64 current, qint64 max);
 		void setInvertToggle(bool invertToggle);
+		/** A plain click only focuses the button; opening (appui) needs a double click, as in Discover and the Library. */
+		void setOpenOnDoubleClick(bool openOnDoubleClick);
 		void setCounter(const QString &counter);
 		void scale(const QPixmap &image, QSize bounds);
 		void paintEvent(QPaintEvent *event) override;
@@ -42,6 +44,9 @@ class QBouton : public QPushButton
 		void toggled(int id, bool toggle, bool range);
 		void toggled(const QString &id, bool toggle, bool range);
 
+	protected:
+		void mouseDoubleClickEvent(QMouseEvent *event) override;
+
 	private:
 		QVariant m_id;
 		bool m_resizeInsteadOfCropping;
@@ -52,6 +57,8 @@ class QBouton : public QPushButton
 		qint64 m_progress;
 		qint64 m_progressMax;
 		bool m_invertToggle;
+		bool m_openOnDoubleClick = false;
+		bool m_doubleClick = false;
 		QString m_counter;
 };
 

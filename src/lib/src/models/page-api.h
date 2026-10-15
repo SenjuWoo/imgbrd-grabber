@@ -112,6 +112,7 @@ class PageApi : public QObject
 		QSet<QString> m_redirectsSeen;
 		int m_redirectHops = 0;
 		int m_rateLimitRetries = 0;
+		QTimer *m_retryTimer = nullptr; // Waits before asking again after a rate limit, outside the shared request queue.
 
 		// Sources with a fixed page size join several of their pages to fill a larger requested one.
 		int m_siteLimit = 0;

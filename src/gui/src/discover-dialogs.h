@@ -16,6 +16,7 @@ class QLabel;
 class QLineEdit;
 class QListWidget;
 class QPushButton;
+class QSpinBox;
 class QTableWidget;
 class ThumbnailLoader;
 
@@ -37,6 +38,7 @@ class DiscoverTasteDialog : public QDialog
 		DiscoveryFeed *m_feed;
 		QLineEdit *m_focus;
 		QComboBox *m_variety;
+		QSpinBox *m_seenHours;
 		QLabel *m_varietyHint;
 		QTableWidget *m_tags;
 		QLineEdit *m_newTag;

@@ -1,9 +1,11 @@
+#include <QElapsedTimer>
 #include <QJSEngine>
 #include <QMutex>
 #include <QScopedPointer>
 #include <QSettings>
 #include <QSignalSpy>
 #include <QTemporaryFile>
+#include <QTest>
 #include <QUrlQuery>
 #include "custom-network-access-manager.h"
 #include "models/api/javascript-api.h"
@@ -72,6 +74,42 @@ TEST_CASE("PageApi")
 		pageApi.setLastPage(prevPage.pageInformation());
 
 		REQUIRE(pageApi.url().toString() == QString("https://danbooru.donmai.us/posts.xml?limit=25&page=b0&tags=test tag&login=user&api_key=test-api-key"));
+	}
+
+	SECTION("RateLimitRetriesWaitInThePage")
+	{
+		// A 429 retries from the page itself (not behind the site's shared 60 s Retry queue) and gives up after the retry limit.
+		Site *site = sites.first();
+		site->setSetting("download/throttle_retry", 0, 60);
+		CustomNetworkAccessManager::NextFiles.clear();
+		for (int i = 0; i < 3; ++i) {
+			CustomNetworkAccessManager::NextFiles.enqueue("429");
+		}
+
+		QStringList tags = QStringList() << "test";
+		Page page(profile, site, sites, tags);
+		PageApi pageApi(&page, profile, site, site->getApis().first(), tags);
+		QSignalSpy spy(&pageApi, &PageApi::finishedLoading);
+		QElapsedTimer clock;
+		clock.start();
+		pageApi.load();
+		REQUIRE(spy.wait(5000));
+		REQUIRE(clock.elapsed() < 3000);
+		REQUIRE(CustomNetworkAccessManager::NextFiles.isEmpty());
+
+		// Aborting during the wait cancels the retry.
+		site->setSetting("download/throttle_retry", 3600, 60);
+		CustomNetworkAccessManager::NextFiles.clear();
+		for (int i = 0; i < 2; ++i) {
+			CustomNetworkAccessManager::NextFiles.enqueue("429");
+		}
+		spy.clear();
+		pageApi.load();
+		QTest::qWait(2000);
+		pageApi.abort();
+		REQUIRE_FALSE(spy.wait(500));
+		REQUIRE(CustomNetworkAccessManager::NextFiles.size() == 1);
+		CustomNetworkAccessManager::NextFiles.clear();
 	}
 }
 

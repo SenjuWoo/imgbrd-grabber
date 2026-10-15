@@ -201,6 +201,9 @@ TEST_CASE("Taste profile treats synonyms and other spellings as one taste", "[di
 	REQUIRE(tuned.weight("body_paint") == 0);
 	REQUIRE(tuned.avoidedTags(10).size() == 2); // hidden_sex_toy and stealth_sex_toy; Neutral is not avoided.
 	REQUIRE(TasteTuning::fromJson(tuning.toJson()).tags == tuning.tags);
+	tuning.seenHours = 24;
+	REQUIRE(TasteTuning::fromJson(tuning.toJson()).seenHours == 24);
+	REQUIRE(TasteTuning::fromJson({}).seenHours == 48);
 	REQUIRE(TasteProfile::isMetaTag("3:4"));
 	REQUIRE(TasteProfile::isMetaTag("2d_(artwork)"));
 }

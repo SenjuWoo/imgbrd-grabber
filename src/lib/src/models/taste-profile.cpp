@@ -372,7 +372,7 @@ QJsonObject TasteTuning::toJson() const
 	for (auto it = tags.constBegin(); it != tags.constEnd(); ++it) {
 		preferences.insert(it.key(), it.value());
 	}
-	return {{"tags", preferences}, {"focus", QJsonArray::fromStringList(focus)}, {"variety", variety}};
+	return {{"tags", preferences}, {"focus", QJsonArray::fromStringList(focus)}, {"variety", variety}, {"seenHours", seenHours}};
 }
 
 TasteTuning TasteTuning::fromJson(const QJsonObject &json)
@@ -393,6 +393,7 @@ TasteTuning TasteTuning::fromJson(const QJsonObject &json)
 		}
 	}
 	tuning.variety = std::clamp(json.value("variety").toInt(Balanced), int(Familiar), int(Adventurous));
+	tuning.seenHours = std::clamp(json.value("seenHours").toInt(tuning.seenHours), 0, 24 * 365);
 	return tuning;
 }
 

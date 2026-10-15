@@ -144,6 +144,12 @@ npm test -- --runInBand
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
 
+## Changes in 7.21.1
+
+- Discover no longer repeats a picture for **Show again after** hours (Tune taste…, default 48, 0 = never repeat). Until now it remembered only the last 4000 pictures, which a day of browsing used up; times are kept per picture and the same file from another source counts as seen.
+- Searches stop hanging on rate limits: a 429 is retried inside that search after 5 s, then 15 s, instead of waiting in the site's shared 60 s retry queue behind every earlier retry (including cancelled Discover ones).
+- Search tiles open with a double click, like Discover and the Library. A plain click only focuses the tile; Ctrl+click still selects.
+
 ## Changes in 7.21.0
 
 - Library: import a folder as ♥ Loved (confirmed count, Undo); batch exact-MD5 source lookup for untagged imports with review before linking; **Health…** report (missing files, no thumbnail, no tags, unknown source, metadata errors, duplicates, not rated) with open and catalog-only removal; Find source gets a reverse-image-search menu that copies the picture and opens the site in the browser (no upload by Grabber).

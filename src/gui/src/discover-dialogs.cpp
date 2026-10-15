@@ -10,6 +10,7 @@
 #include <QLocale>
 #include <QPushButton>
 #include <QRegularExpression>
+#include <QSpinBox>
 #include <QTableWidget>
 #include <QVBoxLayout>
 #include <algorithm>
@@ -113,6 +114,14 @@ DiscoverTasteDialog::DiscoverTasteDialog(DiscoveryFeed *feed, QWidget *parent)
 	m_varietyHint->setWordWrap(true);
 	form->addRow(tr("Variety"), m_variety);
 	form->addRow(QString(), m_varietyHint);
+	m_seenHours = new QSpinBox(this);
+	m_seenHours->setObjectName("discoverSeenHours");
+	m_seenHours->setRange(0, 24 * 365);
+	m_seenHours->setSuffix(tr(" hours"));
+	m_seenHours->setSpecialValueText(tr("never"));
+	m_seenHours->setValue(tuning.seenHours);
+	m_seenHours->setToolTip(tr("A picture Discover showed stays out of the feed for this long, then may come back in case you missed it. Never = it is not shown again."));
+	form->addRow(tr("Show again after"), m_seenHours);
 	layout->addLayout(form);
 	connect(m_variety, &QComboBox::currentIndexChanged, this, &DiscoverTasteDialog::updateVariety);
 	updateVariety();
@@ -169,6 +178,7 @@ DiscoverTasteDialog::DiscoverTasteDialog(DiscoveryFeed *feed, QWidget *parent)
 	connect(reset, &QPushButton::clicked, this, [this]() {
 		m_focus->clear();
 		m_variety->setCurrentIndex(m_variety->findData(TasteTuning::Balanced));
+		m_seenHours->setValue(TasteTuning().seenHours);
 		for (int row = 0; row < m_tags->rowCount(); ++row) {
 			static_cast<QComboBox*>(m_tags->cellWidget(row, 5))->setCurrentIndex(0);
 		}
@@ -248,6 +258,7 @@ TasteTuning DiscoverTasteDialog::tuning() const
 		}
 	}
 	result.variety = m_variety->currentData().toInt();
+	result.seenHours = m_seenHours->value();
 	for (int row = 0; row < m_tags->rowCount(); ++row) {
 		const int preference = static_cast<QComboBox*>(m_tags->cellWidget(row, 5))->currentData().toInt();
 		if (preference != 0) {

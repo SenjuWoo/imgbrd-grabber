@@ -185,7 +185,8 @@ TEST_CASE("Discover learns from ratings and hides rated, blacklisted and dismiss
 	REQUIRE(state.open(QIODevice::ReadOnly));
 	const auto saved = QJsonDocument::fromJson(state.readAll()).object();
 	REQUIRE(saved.value("hidden").toArray().contains(second));
-	REQUIRE(saved.value("seen").toArray().size() == 2);
+	REQUIRE(saved.value("seenAt").toObject().contains(second));
+	REQUIRE(home.feed()->isSeen(second));
 	REQUIRE(profile->library()->entry(rated).favorite);
 	REQUIRE(home.feed()->feedback().value("forest").rated == 1);
 	REQUIRE(home.feed()->feedback().value("forest").shown == 4); // Hiding counts more than scrolling past.

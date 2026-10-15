@@ -44,6 +44,8 @@ struct TasteTuning
 	QHash<QString, int> tags;
 	QStringList focus;
 	int variety = Balanced;
+	/** Hours before a picture Discover already showed may be shown again; 0 never repeats one. Not part of the taste. */
+	int seenHours = 48;
 
 	bool isNeutral() const;
 	QJsonObject toJson() const;

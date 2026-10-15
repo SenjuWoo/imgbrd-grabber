@@ -79,6 +79,8 @@ class DiscoveryFeed : public QObject
 		void dismiss(const QString &key, const QStringList &tags = {}, bool never = false, const QSharedPointer<Image> &image = {});
 		/** Whether a picture was hidden with "Not interested", here or in a search. */
 		bool isHidden(const QString &key) const;
+		/** True while a picture shown less than `tuning().seenHours` ago (or ever, with 0 hours) should stay out of the feed. */
+		bool isSeen(const QString &key) const;
 		/** The first of these tags the user never wants to see, or an empty string. */
 		QString neverShown(const QStringList &tags) const;
 		void resetDismissed();
@@ -119,6 +121,7 @@ class DiscoveryFeed : public QObject
 
 		void loadState();
 		void saveState() const;
+		void pruneSeen();
 		void rebuildTaste();
 		void pageFinished(Page *page, bool success);
 		void emitGroup(int group, bool force);
@@ -163,8 +166,8 @@ class DiscoveryFeed : public QObject
 		QHash<QString, QSharedPointer<Image>> m_shown;
 		QList<ImageFingerprint> m_shownFingerprints;
 		QSet<QString> m_shownMd5;
-		QStringList m_seen;
-		QSet<QString> m_seenSet;
+		// Pictures already shown: key (and "md5:<md5>" so another source's copy counts too) -> when, in epoch seconds.
+		QHash<QString, qint64> m_seen;
 		QStringList m_hidden;
 		QSet<QString> m_hiddenSet;
 		QHash<QString, HiddenRecord> m_hiddenRecords;

@@ -186,6 +186,9 @@ void PageApi::load(bool rateLimit, bool force)
 	m_source.clear();
 	m_errors.clear();
 
+	if (m_retryTimer != nullptr) {
+		m_retryTimer->stop();
+	}
 	log(QStringLiteral("[%1][%2] Loading page `%3`").arg(m_site->url(), m_format, m_url.toString()), Logger::Info);
 	Site::QueryType type = rateLimit ? Site::QueryType::Retry : Site::QueryType::List;
 	setReply(m_isPost
@@ -195,6 +198,9 @@ void PageApi::load(bool rateLimit, bool force)
 }
 void PageApi::abort()
 {
+	if (m_retryTimer != nullptr) {
+		m_retryTimer->stop();
+	}
 	setReply(nullptr);
 	m_loading = false;
 	m_loaded = false;
@@ -274,8 +280,17 @@ void PageApi::parse()
 			return;
 		}
 		log(QStringLiteral("[%1][%2] Limit reached (%3). New try.").arg(m_site->url(), m_format, QString::number(statusCode)), Logger::Warning);
-		m_site->notifyRateLimited(m_site->setting("download/throttle_retry", 60).toInt());
-		load(true, true);
+		// Wait inside this page only (5 s, then 15 s, at most the retry delay of the site). The shared Retry queue spaced every
+		// retry of a site 60 s apart, so one search stood behind all earlier ones, aborted or not, and looked hung.
+		const int waitSeconds = qMin(m_site->setting("download/throttle_retry", 60).toInt(), 5 * int(qPow(3, m_rateLimitRetries - 1)));
+		m_site->notifyRateLimited(waitSeconds);
+		setReply(nullptr);
+		if (m_retryTimer == nullptr) {
+			m_retryTimer = new QTimer(this);
+			m_retryTimer->setSingleShot(true);
+			connect(m_retryTimer, &QTimer::timeout, this, [this]() { load(false, true); });
+		}
+		m_retryTimer->start(waitSeconds * 1000);
 		return;
 	}
 

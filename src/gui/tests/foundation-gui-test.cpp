@@ -96,6 +96,11 @@ TEST_CASE("Cached previews stay image-only and density changes preserve selectio
 	REQUIRE(actions->isHidden());
 	QTest::keyClick(button, Qt::Key_Return);
 	REQUIRE(opened.count() == 1);
+	// A plain click only focuses the tile; opening takes a double click, as in Discover and the Library.
+	QTest::mouseClick(button, Qt::LeftButton, Qt::NoModifier, button->rect().center());
+	REQUIRE(opened.count() == 1);
+	QTest::mouseDClick(button, Qt::LeftButton, Qt::NoModifier, button->rect().center());
+	REQUIRE(opened.count() == 2);
 	profile->getSettings()->setValue("Gallery/density", 2);
 	preview.refreshDensity();
 	REQUIRE(container.size() == QSize(256, 256));

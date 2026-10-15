@@ -44,6 +44,8 @@ void QBouton::setProgress(qint64 current, qint64 max)
 
 void QBouton::setInvertToggle(bool invertToggle)
 { m_invertToggle = invertToggle; }
+void QBouton::setOpenOnDoubleClick(bool openOnDoubleClick)
+{ m_openOnDoubleClick = openOnDoubleClick; }
 void QBouton::setCounter(const QString &counter)
 { m_counter = counter; }
 
@@ -199,7 +201,7 @@ void QBouton::mousePressEvent(QMouseEvent *event)
 			emit this->toggled(m_id, this->isChecked(), range);
 			emit this->toggled(m_id.toString(), this->isChecked(), range);
 			emit this->toggled(m_id.toInt(), this->isChecked(), range);
-		} else {
+		} else if (!m_openOnDoubleClick || m_doubleClick) {
 			emit this->appui(m_id);
 			emit this->appui(m_id.toString());
 			emit this->appui(m_id.toInt());
@@ -218,6 +220,14 @@ void QBouton::mousePressEvent(QMouseEvent *event)
 	}
 
 	event->accept();
+}
+
+void QBouton::mouseDoubleClickEvent(QMouseEvent *event)
+{
+	// The second press of a double click arrives here instead of mousePressEvent.
+	m_doubleClick = true;
+	mousePressEvent(event);
+	m_doubleClick = false;
 }
 
 void QBouton::keyPressEvent(QKeyEvent *event)

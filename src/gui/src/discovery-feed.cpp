@@ -1,4 +1,5 @@
 #include "discovery-feed.h"
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -29,7 +30,8 @@ namespace
 	constexpr int BatchQueries = 4;
 	constexpr int PageLimit = 30;
 	constexpr int ConcurrentPreviews = 8;
-	constexpr int MaxSeen = 4000;
+	constexpr int MaxSeen = 30000;
+	const QString Md5Prefix = QStringLiteral("md5:");
 	constexpr int MaxHidden = 5000;
 	constexpr int MaxFeedback = 3000;
 	// Newest posts sampled per batch to learn how common tags are on each source; only the few that fit the taste are shown.
@@ -113,15 +115,19 @@ void DiscoveryFeed::loadState()
 		return;
 	}
 	const auto root = QJsonDocument::fromJson(file.readAll()).object();
+	// Older profiles kept a plain list of keys without times; those count as shown now.
+	const qint64 now = QDateTime::currentSecsSinceEpoch();
 	for (const auto &value : root.value("seen").toArray()) {
-		m_seen.append(value.toString());
+		m_seen.insert(value.toString(), now);
+	}
+	const auto seenAt = root.value("seenAt").toObject();
+	for (auto it = seenAt.constBegin(); it != seenAt.constEnd(); ++it) {
+		m_seen.insert(it.key(), static_cast<qint64>(it.value().toDouble()));
 	}
 	for (const auto &value : root.value("hidden").toArray()) {
 		m_hidden.append(value.toString());
 	}
-	m_seen = m_seen.mid(std::max<qsizetype>(0, m_seen.size() - MaxSeen));
 	m_hidden = m_hidden.mid(std::max<qsizetype>(0, m_hidden.size() - MaxHidden));
-	m_seenSet = QSet<QString>(m_seen.begin(), m_seen.end());
 	m_hiddenSet = QSet<QString>(m_hidden.begin(), m_hidden.end());
 	const auto disliked = root.value("disliked").toObject();
 	for (auto it = disliked.constBegin(); it != disliked.constEnd(); ++it) {
@@ -131,6 +137,7 @@ void DiscoveryFeed::loadState()
 	}
 	m_background = TagBackground::fromJson(root.value("background").toObject());
 	m_tuning = TasteTuning::fromJson(root.value("tuning").toObject());
+	pruneSeen();
 	const auto records = root.value("hiddenItems").toObject();
 	for (auto it = records.constBegin(); it != records.constEnd(); ++it) {
 		const auto record = it.value().toObject();
@@ -148,6 +155,29 @@ void DiscoveryFeed::loadState()
 		const double shown = values.at(0).toDouble(), rated = values.at(1).toDouble();
 		if (shown >= 0 && rated >= 0) {
 			m_feedback.insert(it.key(), {shown, rated});
+		}
+	}
+}
+
+bool DiscoveryFeed::isSeen(const QString &key) const
+{
+	const auto it = m_seen.constFind(key);
+	return it != m_seen.constEnd() && (m_tuning.seenHours <= 0 || *it + qint64(m_tuning.seenHours) * 3600 > QDateTime::currentSecsSinceEpoch());
+}
+
+void DiscoveryFeed::pruneSeen()
+{
+	// Past the window a picture may come back; with "never" only the size cap forgets the oldest.
+	const qint64 now = QDateTime::currentSecsSinceEpoch();
+	for (auto it = m_seen.begin(); it != m_seen.end();) {
+		it = m_tuning.seenHours > 0 && *it + qint64(m_tuning.seenHours) * 3600 <= now ? m_seen.erase(it) : std::next(it);
+	}
+	if (m_seen.size() > MaxSeen) {
+		QList<qint64> times = m_seen.values();
+		std::nth_element(times.begin(), times.begin() + (times.size() - MaxSeen), times.end());
+		const qint64 cutoff = times.at(times.size() - MaxSeen);
+		for (auto it = m_seen.begin(); it != m_seen.end();) {
+			it = *it < cutoff ? m_seen.erase(it) : std::next(it);
 		}
 	}
 }
@@ -173,9 +203,13 @@ void DiscoveryFeed::saveState() const
 	for (auto it = m_hiddenRecords.constBegin(); it != m_hiddenRecords.constEnd(); ++it) {
 		records.insert(it.key(), QJsonObject {{"image", it->image}, {"penalized", QJsonArray::fromStringList(it->penalized)}, {"at", it->at}});
 	}
+	QJsonObject seenAt;
+	for (auto it = m_seen.constBegin(); it != m_seen.constEnd(); ++it) {
+		seenAt.insert(it.key(), double(it.value()));
+	}
 	const QJsonObject root {
 		{"version", 3},
-		{"seen", QJsonArray::fromStringList(m_seen)},
+		{"seenAt", seenAt},
 		{"hidden", QJsonArray::fromStringList(m_hidden)},
 		{"hiddenItems", records},
 		{"disliked", disliked},
@@ -366,8 +400,7 @@ void DiscoveryFeed::restore(const QStringList &keys)
 				m_dislikedTags.erase(it);
 			}
 		}
-		m_seenSet.remove(key);
-		m_seen.removeAll(key);
+		m_seen.remove(key);
 	}
 	m_tasteDirty = true;
 	saveState();
@@ -584,7 +617,7 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 			}
 			const QString key = LibraryStore::imageKey(*image);
 			const QString md5 = image->md5().toLower();
-			if (key.isEmpty() || m_seenSet.contains(key) || m_hiddenSet.contains(key) || m_shown.contains(key) || m_candidates.contains(key)
+			if (key.isEmpty() || isSeen(key) || (!md5.isEmpty() && isSeen(Md5Prefix + md5)) || m_hiddenSet.contains(key) || m_shown.contains(key) || m_candidates.contains(key)
 				|| (!md5.isEmpty() && m_shownMd5.contains(md5)) || store->isKnown(*image)) {
 				continue;
 			}
@@ -799,14 +832,12 @@ void DiscoveryFeed::emitGroup(int group, bool force)
 		if (!md5.isEmpty()) {
 			m_shownMd5.insert(md5);
 		}
-		if (!m_seenSet.contains(candidate.item.key)) {
-			m_seen.append(candidate.item.key);
-			m_seenSet.insert(candidate.item.key);
+		m_seen.insert(candidate.item.key, QDateTime::currentSecsSinceEpoch());
+		if (!md5.isEmpty()) {
+			m_seen.insert(Md5Prefix + md5, QDateTime::currentSecsSinceEpoch());
 		}
 	}
-	while (m_seen.size() > MaxSeen) {
-		m_seenSet.remove(m_seen.takeFirst());
-	}
+	pruneSeen();
 	if (!items.isEmpty()) {
 		m_batchEmitted += int(items.size());
 		emit itemsReady(items);
