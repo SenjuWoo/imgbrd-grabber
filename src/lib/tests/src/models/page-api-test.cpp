@@ -111,6 +111,34 @@ TEST_CASE("PageApi")
 		REQUIRE(CustomNetworkAccessManager::NextFiles.size() == 1);
 		CustomNetworkAccessManager::NextFiles.clear();
 	}
+
+	SECTION("A second page meeting the same limit gives up at once")
+	{
+		// One page waits the limit out; a page that meets the same limit moments later fails without
+		// stacking a second 5 s + 15 s retry chain behind the first (joined pages keep what they found).
+		Site *site = sites.first();
+		site->setSetting("download/throttle_retry", 3600, 60);
+		CustomNetworkAccessManager::NextFiles.clear();
+		CustomNetworkAccessManager::NextFiles.enqueue("429");
+		CustomNetworkAccessManager::NextFiles.enqueue("429");
+
+		QStringList tags = QStringList() << "test";
+		Page waiting(profile, site, sites, tags);
+		PageApi waitingApi(&waiting, profile, site, site->getApis().first(), tags);
+		QSignalSpy waitingSpy(&waitingApi, &PageApi::finishedLoading);
+		waitingApi.load(); // 429, then waits out the site's retry window.
+		QTest::qWait(500);
+		REQUIRE(waitingSpy.isEmpty());
+
+		Page follower(profile, site, sites, tags);
+		PageApi followerApi(&follower, profile, site, site->getApis().first(), tags);
+		QSignalSpy followerSpy(&followerApi, &PageApi::finishedLoading);
+		followerApi.load(); // The same limit, moments later: no second wait.
+		REQUIRE(followerSpy.wait(3000));
+		REQUIRE(followerSpy.first().at(1).value<PageApi::LoadResult>() == PageApi::Error);
+		REQUIRE(CustomNetworkAccessManager::NextFiles.isEmpty());
+		waitingApi.abort();
+	}
 }
 
 TEST_CASE("PageApi pagination uses response evidence and the effective API limit")

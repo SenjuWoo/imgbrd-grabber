@@ -185,8 +185,8 @@ TEST_CASE("Discover learns from ratings and hides rated, blacklisted and dismiss
 	REQUIRE(state.open(QIODevice::ReadOnly));
 	const auto saved = QJsonDocument::fromJson(state.readAll()).object();
 	REQUIRE(saved.value("hidden").toArray().contains(second));
-	REQUIRE(saved.value("seenAt").toObject().contains(second));
-	REQUIRE(home.feed()->isSeen(second));
+	// Shown pictures count as seen only once the next batch is fetched, so this one is not marked seen yet.
+	REQUIRE_FALSE(home.feed()->isSeen(second));
 	REQUIRE(profile->library()->entry(rated).favorite);
 	REQUIRE(home.feed()->feedback().value("forest").rated == 1);
 	REQUIRE(home.feed()->feedback().value("forest").shown == 4); // Hiding counts more than scrolling past.
@@ -245,6 +245,38 @@ TEST_CASE("Discover samples newest posts to learn how common tags are on each so
 	const auto saved = QJsonDocument::fromJson(state.readAll()).object();
 	REQUIRE(TagBackground::fromJson(saved.value("background").toObject()).frequency("forest") < 0); // Not yet well sampled.
 	REQUIRE(saved.value("background").toObject().value(site->url()).toObject().value("posts").toDouble() == 4);
+}
+
+TEST_CASE("Discover marks shown pictures seen only once the next batch is fetched", "[library][home][discovery]")
+{
+	auto clearReplies = qScopeGuard([]() { CustomNetworkAccessManager::NextFiles.clear(); });
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = jsonDanbooru(profile.data());
+	seedTagBackground(profile.data(), site->url());
+	saveRated(profile.data(), 801, QString(32, '8'), "forest", true);
+	CustomNetworkAccessManager::NextFiles.enqueue(writePosts(directory, "posts.json", {
+		post(901, QString(32, '1'), "forest river"),
+		post(902, QString(32, '2'), "forest lake"),
+	}));
+	CustomNetworkAccessManager::NextFiles.enqueue(writePreview(directory, "a.png", Qt::red));
+	CustomNetworkAccessManager::NextFiles.enqueue(writePreview(directory, "b.png", Qt::blue));
+
+	HomeTab home(profile.data(), nullptr);
+	home.resize(1100, 800);
+	home.show();
+	auto *feed = home.feed();
+	REQUIRE(QTest::qWaitFor([&home]() { return !home.feed()->isBusy() && home.grid()->gridModel()->rowCount() == 2; }, 8000));
+	const QString first = home.grid()->gridModel()->item(0).key;
+	const QString second = home.grid()->gridModel()->item(1).key;
+	// Loaded and on screen, but not asked past: still in the repeat window.
+	REQUIRE_FALSE(feed->isSeen(first));
+	REQUIRE_FALSE(feed->isSeen(second));
+
+	feed->fetchMore(); // Asking for the next batch is what marks the shown one seen.
+	REQUIRE(feed->isSeen(first));
+	REQUIRE(feed->isSeen(second));
 }
 
 TEST_CASE("Discover reports failed sources and starts fresh without ratings", "[library][home][discovery]")

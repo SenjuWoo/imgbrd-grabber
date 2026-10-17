@@ -270,7 +270,14 @@ void PageApi::parse()
 	const int statusCode = m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 	if (statusCode == 429 || statusCode == 503 || statusCode == 509) {
 		QString retryReason;
-		if (NetworkFollow::takeRetry(&m_rateLimitRetries, &retryReason) == NetworkFollow::Action::Stop) {
+		// One request per site waits the limit out. A page that meets the same limit moments after another
+		// page already did gives up at once: its own 5 s + 15 s chain would only freeze the search longer.
+		const qint64 sinceLimit = m_site->msSinceRateLimit();
+		const bool followsAnother = m_rateLimitRetries == 0 && sinceLimit >= 0 && sinceLimit < 3000;
+		if (followsAnother) {
+			retryReason = QStringLiteral("another request of this site is already waiting out the same limit");
+		}
+		if (followsAnother || NetworkFollow::takeRetry(&m_rateLimitRetries, &retryReason) == NetworkFollow::Action::Stop) {
 			log(QStringLiteral("[%1][%2] Giving up after rate limit (%3): %4").arg(m_site->url(), m_format, QString::number(statusCode), retryReason), Logger::Warning);
 			m_errors.append(retryReason);
 			setReply(nullptr);

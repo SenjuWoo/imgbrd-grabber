@@ -1,6 +1,7 @@
 #ifndef SITE_H
 #define SITE_H
 
+#include <QDateTime>
 #include <QString>
 #include <QUrl>
 #include <QVariant>
@@ -81,7 +82,9 @@ class Site : public QObject
 		void setRequestHeaders(QNetworkRequest &request) const;
 		Profile *getProfile() { return m_profile; }
 		/** Tells listeners this site answered 429/503 and the request retries after `seconds`. */
-		void notifyRateLimited(int seconds) { emit rateLimited(this, seconds); }
+		void notifyRateLimited(int seconds) { m_lastRateLimit = QDateTime::currentMSecsSinceEpoch(); emit rateLimited(this, seconds); }
+		/** Milliseconds since this site last answered 429/503, or -1 when that has not happened this session. */
+		qint64 msSinceRateLimit() const { return m_lastRateLimit < 0 ? -1 : QDateTime::currentMSecsSinceEpoch() - m_lastRateLimit; }
 
 		// Api
 		const QList<Api*> &getApis() const;
@@ -118,6 +121,7 @@ class Site : public QObject
 		QString m_name;
 		QString m_url;
 		QString m_userAgent;
+		qint64 m_lastRateLimit = -1;
 		SourceEngine *m_sourceEngine;
 		QList<QNetworkCookie> m_cookies;
 		MixedSettings *m_settings;

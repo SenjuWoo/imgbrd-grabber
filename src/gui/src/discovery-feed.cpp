@@ -43,6 +43,9 @@ namespace
 	constexpr int MaxHiddenRecords = 300;
 	// Requests per source in one batch; more trips rate limits (rule34.xxx answers 429).
 	constexpr int MaxPagesPerSource = 2;
+	// Seconds a source that failed a batch request (rate limit, wall, outage) is left alone, so searches are
+	// not stuck behind its retries and the next batches spend their requests on sources that answer.
+	constexpr int SourceBackoff = 5 * 60;
 
 	// Share of each source's results and of each batch kept, by variety (familiar, balanced, adventurous).
 	double sourceShare(int variety) { return variety == TasteTuning::Familiar ? 0.5 : variety == TasteTuning::Adventurous ? 1.0 : 0.7; }
@@ -401,6 +404,8 @@ void DiscoveryFeed::restore(const QStringList &keys)
 			}
 		}
 		m_seen.remove(key);
+		// Restored before the next batch flushed it: it must not be marked seen behind the user's back.
+		m_pendingSeen.removeIf([&key](const QPair<QString, QString> &pending) { return pending.first == key; });
 	}
 	m_tasteDirty = true;
 	saveState();
@@ -479,6 +484,19 @@ void DiscoveryFeed::fetchMore()
 	if (m_busy || m_paused) {
 		return;
 	}
+	// The shown batch counts as seen only now that the next one is asked for: pictures merely loaded
+	// (not looked through) keep their place in the repeat window instead of disappearing for good.
+	if (!m_pendingSeen.isEmpty()) {
+		const qint64 now = QDateTime::currentSecsSinceEpoch();
+		for (const auto &pending : qAsConst(m_pendingSeen)) {
+			m_seen.insert(pending.first, now);
+			if (!pending.second.isEmpty()) {
+				m_seen.insert(Md5Prefix + pending.second, now);
+			}
+		}
+		m_pendingSeen.clear();
+		pruneSeen();
+	}
 	if (m_tasteDirty) {
 		rebuildTaste();
 	}
@@ -531,13 +549,15 @@ void DiscoveryFeed::fetchMore()
 	}
 	queries.append(m_taste.queries(sources, wanted + 4, batchSeed, m_feedback));
 	QHash<QString, int> perSource;
+	// Backed-off sources are skipped before they take a request slot.
+	const qint64 backoffNow = QDateTime::currentSecsSinceEpoch();
 	for (const auto &query : queries) {
 		if (m_pages.size() >= wanted + samples) {
 			break;
 		}
 		const QString signature = query.website + '|' + query.tags.join(' ');
 		Site *site = sites.value(query.website);
-		if (site == nullptr || m_exhausted.contains(signature) || perSource.value(query.website) >= MaxPagesPerSource) {
+		if (site == nullptr || m_exhausted.contains(signature) || m_backoff.value(query.website, 0) > backoffNow || perSource.value(query.website) >= MaxPagesPerSource) {
 			continue;
 		}
 		perSource[query.website] += 1;
@@ -581,6 +601,9 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 		if (!m_failedSources.contains(name)) {
 			m_failedSources.append(name);
 		}
+		// Leave a source that just failed alone for a while: retrying it every batch burns its rate
+		// limit and leaves searches nothing to work with.
+		m_backoff.insert(website, QDateTime::currentSecsSinceEpoch() + SourceBackoff);
 		if (queryTags.isEmpty()) {
 			m_unsampleable.insert(website); // Do not spend every batch on a source that refuses anonymous listings.
 		}
@@ -832,10 +855,10 @@ void DiscoveryFeed::emitGroup(int group, bool force)
 		if (!md5.isEmpty()) {
 			m_shownMd5.insert(md5);
 		}
-		m_seen.insert(candidate.item.key, QDateTime::currentSecsSinceEpoch());
-		if (!md5.isEmpty()) {
-			m_seen.insert(Md5Prefix + md5, QDateTime::currentSecsSinceEpoch());
-		}
+		// Counted as seen when the next batch is asked for (fetchMore), not now: a batch that was only
+		// loaded, never looked through, keeps its place in the repeat window. Every picture here was
+		// fully loaded: its preview is required above.
+		m_pendingSeen.append({candidate.item.key, md5});
 	}
 	pruneSeen();
 	if (!items.isEmpty()) {

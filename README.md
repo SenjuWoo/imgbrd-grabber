@@ -144,6 +144,13 @@ npm test -- --runInBand
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
 
+## Changes in 7.21.2
+
+- Searches search exactly the tags you type, on every source: two tags always mean **both**. The synonym expansion (typing `buttplug` also searched `anal_plug` and `butt_plug`, so results included pictures without the tag you searched) is gone.
+- No more stacked rate-limit waits: while one request of a site is waiting out a 429, another page of that site fails right away instead of adding its own 5 s + 15 s retry chain and freezing the search ~20 s longer.
+- Discover leaves a source that just failed (rate limit, wall, outage) alone for 5 minutes instead of retrying it every batch; searches find sources responsive again sooner.
+- Discover marks shown pictures as "seen" only when the next batch is fetched (scroll to load more or Refresh), so a batch that was loaded but not looked through keeps its place in the **Show again after** window.
+
 ## Changes in 7.21.1
 
 - Discover no longer repeats a picture for **Show again after** hours (Tune taste…, default 48, 0 = never repeat). Until now it remembered only the last 4000 pictures, which a day of browsing used up; times are kept per picture and the same file from another source counts as seen.

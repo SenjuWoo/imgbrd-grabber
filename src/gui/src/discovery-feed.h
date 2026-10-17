@@ -153,6 +153,8 @@ class DiscoveryFeed : public QObject
 		QHash<QString, int> m_nextPage;
 		QSet<QString> m_exhausted;
 		QStringList m_failedSources;
+		// Source that failed a batch request -> epoch seconds until which Discover skips it.
+		QHash<QString, qint64> m_backoff;
 
 		QHash<QString, Candidate> m_candidates;
 		QHash<int, QStringList> m_groups;
@@ -168,6 +170,8 @@ class DiscoveryFeed : public QObject
 		QSet<QString> m_shownMd5;
 		// Pictures already shown: key (and "md5:<md5>" so another source's copy counts too) -> when, in epoch seconds.
 		QHash<QString, qint64> m_seen;
+		// Shown but not yet marked seen: they count once the next batch is asked for (key, md5).
+		QList<QPair<QString, QString>> m_pendingSeen;
 		QStringList m_hidden;
 		QSet<QString> m_hiddenSet;
 		QHash<QString, HiddenRecord> m_hiddenRecords;

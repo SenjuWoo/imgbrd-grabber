@@ -1462,23 +1462,7 @@ void SearchTab::loadPage()
 	ui_buttonLastPage->setEnabled(false);
 	m_page = 0;
 	m_stop = false;
-	// Tag adapter: a tag sources name differently ("hidden_sex_toy", "stealth_sex_toy") is searched under all its names in
-	// one request, with the source's OR syntax. Only names Discover saw in ratings or sampled posts; one tag per search.
-	int adapted = -1;
-	QStringList names;
-	DiscoveryFeed *feed = m_parent != nullptr ? m_parent->discoveryFeed() : nullptr;
-	const bool plain = std::none_of(m_lastQuery.tags.cbegin(), m_lastQuery.tags.cend(), [](const QString &tag) { return tag.startsWith('~') || tag.contains('{') || tag.contains('('); });
-	if (merged && feed != nullptr && plain && m_lastQuery.gallery.isNull() && m_lastQuery.urls.isEmpty()) {
-		const auto &taste = feed->taste();
-		for (int i = 0; i < m_lastQuery.tags.size() && adapted < 0; ++i) {
-			const QString &tag = m_lastQuery.tags[i];
-			const QStringList others = tag.startsWith('-') || tag.contains(':') ? QStringList() : taste.equivalents(tag);
-			if (!others.isEmpty()) {
-				adapted = i;
-				names = QStringList {tag} + others.mid(0, 3);
-			}
-		}
-	}
+	// Searches use the tags exactly as typed: no synonym expansion, so two tags always mean both.
 	QList<QSharedPointer<Page>> batch;
 	for (Site *site : loadSites()) {
 		const QString key = site->url();
@@ -1486,8 +1470,6 @@ void SearchTab::loadPage()
 		if (previous && !m_pages.value(key).isEmpty() && !m_failedPages.contains(previous.data()) && previous->isValid() && !previous->hasNext()) { continue; }
 		if (previous && previous->page() + 1 != currentPage) { previous.clear(); }
 		SearchQuery query = m_lastQuery;
-		const QString anyName = adapted < 0 ? QString() : TasteProfile::anyOf(site->getSourceEngine()->getName(), site->url(), names, int(query.tags.size()));
-		if (!anyName.isEmpty()) { query.tags[adapted] = anyName; }
 		if (m_lastUrls.contains(site->url())) { query.urls = m_lastUrls.take(site->url()); }
 		auto page = QSharedPointer<Page>::create(m_profile, site, m_sites.values(), query, currentPage, perPage, postFilter(true), false, this);
 		if (previous) { page->setLastPage(previous->pageInformation()); }
