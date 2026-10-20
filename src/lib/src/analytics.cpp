@@ -17,10 +17,11 @@ void Analytics::setMeasurementID(const QString& measurementId)
 
 void Analytics::setEnabled(bool enabled)
 {
-	m_enabled = enabled;
-	if (!enabled) {
-		m_googleAnalytics.stopSending();
-	}
+	// Woo Edit never reports usage: the compiled-in Google Analytics IDs belong to the upstream project, and an
+	// old "send_usage_data=true" in a profile would otherwise send the sources a user searches to a third party.
+	Q_UNUSED(enabled)
+	m_enabled = false;
+	m_googleAnalytics.stopSending();
 }
 
 

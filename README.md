@@ -144,6 +144,12 @@ npm test -- --runInBand
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
 
+## Changes in 7.21.4
+
+- **No usage reporting.** Earlier builds still carried the upstream project's Google Analytics IDs, and a profile with `send_usage_data=true` (Options ▸ Send usage data) sent the sources it loaded pages from to Google. Woo Edit now never sends it, whatever the profile says; the Options box is off and greyed out.
+- Danbooru's XML source no longer throws when the server answers with a wall or error page; it reports the page as unusable instead of the uncaught `Cannot read property 'post' of undefined`.
+- Opening a picture whose thumbnail never loaded, and the Find source dialog without a stored thumbnail, no longer log `QPixmap::scaled: Pixmap is a null pixmap`.
+
 ## Changes in 7.21.3
 
 - Paheal (rule34.paheal.net) returns images again: the site changed its thumbnail markup (dimensions separated by a space instead of ` // `, no `width`/`height` attributes, previews served from its CDN), so every paheal result parsed as zero images and searches silently lost that source. The parser accepts both the old and the new markup, so paheal contributes to every search again.

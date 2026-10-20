@@ -54,7 +54,9 @@ LibrarySourceDialog::LibrarySourceDialog(Profile *profile, const QString &key, Q
 	picture->setAlignment(Qt::AlignCenter);
 	QPixmap thumbnail;
 	thumbnail.loadFromData(entry.thumbnail);
-	picture->setPixmap(thumbnail.scaled(300, 140, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+	if (!thumbnail.isNull()) {
+		picture->setPixmap(thumbnail.scaled(300, 140, Qt::KeepAspectRatio, Qt::SmoothTransformation));
+	}
 	layout->addWidget(picture);
 	auto *name = new QLabel(entry.image.value("name").toString(), this);
 	name->setTextFormat(Qt::PlainText);

@@ -37,6 +37,17 @@ describe("Danbooru (2.0)", () => {
 
     describe("XML API", () => {
         describe("Search", () => {
+            it("reports a page that is not a post list instead of throwing", () => {
+                const res = source.apis.xml.search.parse("<html><body>Just a moment...</body></html>", 200) as IParsedSearch & IError;
+                expect(res.error).toEqual("Unexpected response from the server");
+            });
+
+            it("treats an empty list as no results", () => {
+                const res = source.apis.xml.search.parse('<?xml version="1.0" encoding="UTF-8"?><posts type="array"></posts>', 200) as IParsedSearch & IError;
+                expect(res.error).toBeUndefined();
+                expect(res.images.length).toEqual(0);
+            });
+
             it("works for basic listing", () => {
                 expect(search(source.apis.xml, "tag1", 2)).toEqual("/posts.xml?limit=10&page=2&tags=tag1");
             });

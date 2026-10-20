@@ -300,7 +300,12 @@ export const source: ISource = {
                         return { error: xml["result"]["#text"] };
                     }
 
-                    const data = Grabber.makeArray(Grabber.typedXML(xml).posts.post);
+                    // A wall or error page (HTML, not <posts>) must fail cleanly: an exception here only sends the search down the slower JSON and HTML fallbacks.
+                    const typed = Grabber.typedXML(xml);
+                    if (typed.posts === undefined) {
+                        return { error: "Unexpected response from the server" };
+                    }
+                    const data = Grabber.makeArray(typed.posts.post);
                     const images: IImage[] = [];
                     for (const image of data) {
                         const img = Grabber.mapFields(image, map);

@@ -25,6 +25,7 @@ class Analytics
 		void setTrackingID(const QString& trackingId);
 		void setMeasurementID(const QString& measurementId);
 		void setEnabled(bool enabled);
+		bool isEnabled() const { return m_enabled; }
 
 		// API
 		void startSending();

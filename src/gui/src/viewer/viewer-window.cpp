@@ -1270,6 +1270,9 @@ void ViewerWindow::showThumbnail()
 		m_displayImage = result;
 		update(false, true);
 	}
+	// No thumbnail was loaded: nothing to scale (Qt would log a null-pixmap warning)
+	else if (m_image->previewImage().isNull()) {
+	}
 	// Gifs get non-resizable thumbnails
 	else if (!m_isAnimated.isEmpty() || m_image->isVideo()) {
 		m_labelImage->setPixmap(m_image->previewImage().scaled(size, Qt::IgnoreAspectRatio, Qt::FastTransformation));
