@@ -144,6 +144,10 @@ npm test -- --runInBand
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
 
+## Changes in 7.21.3
+
+- Paheal (rule34.paheal.net) returns images again: the site changed its thumbnail markup (dimensions separated by a space instead of ` // `, no `width`/`height` attributes, previews served from its CDN), so every paheal result parsed as zero images and searches silently lost that source. The parser accepts both the old and the new markup, so paheal contributes to every search again.
+
 ## Changes in 7.21.2
 
 - Searches search exactly the tags you type, on every source: two tags always mean **both**. The synonym expansion (typing `buttplug` also searched `anal_plug` and `butt_plug`, so results included pictures without the tag you searched) is gone.
