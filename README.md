@@ -144,6 +144,14 @@ npm test -- --runInBand
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
 
+## Changes in 7.21.5
+
+- **A failed video no longer turns into a still image.** When the video file failed to download, extension rotation could fall back to `jpg`/`png`, and sites answer that URL with the thumbnail, so the retry "succeeded" and saved a JPEG in place of the video. Videos now only rotate between video formats.
+- A filename condition on an empty tag (`<"">`) no longer dereferences a null filter and crash while expanding filenames.
+- Setting a favorite's thumbnail no longer reuses the first picture of whatever search ran last; it only uses a picture that actually carries the favorite's tag.
+- The Log tab keeps the last 5000 lines and no longer records undo history, so a long download run stays responsive instead of re-laying out an ever-growing document.
+- Batch download no longer pumps the event loop before starting the next file, which could start it before the current save had returned.
+
 ## Changes in 7.21.4
 
 - **No usage reporting.** Earlier builds still carried the upstream project's Google Analytics IDs, and a profile with `send_usage_data=true` (Options ▸ Send usage data) sent the sources it loaded pages from to Google. Woo Edit now never sends it, whatever the profile says; the Options box is off and greyed out.

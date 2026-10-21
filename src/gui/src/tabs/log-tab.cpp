@@ -16,6 +16,10 @@ LogTab::LogTab(QWidget *parent)
 {
 	ui->setupUi(this);
 
+	// A long run of log lines used to relayout an ever-growing document on every append.
+	ui->labelLog->setUndoRedoEnabled(false);
+	ui->labelLog->setMaximumBlockCount(5000);
+
 	// Load already written log
 	QFile logFile(Logger::getInstance().logFile());
 	if (logFile.open(QFile::ReadOnly | QFile::Text)) {

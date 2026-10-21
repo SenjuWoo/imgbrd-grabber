@@ -23,7 +23,7 @@
 #endif
 
 #ifndef MyAppVersion
-# define MyAppVersion "7.21.4"
+# define MyAppVersion "7.21.5"
 #endif
 
 #define PlatformNamePrefix ""
