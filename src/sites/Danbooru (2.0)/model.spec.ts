@@ -18,6 +18,14 @@ describe("Danbooru (2.0)", () => {
                 expect(res.images.length).toEqual(10);
                 expect(res.images.map(i => i.id).slice(0, 3)).toEqual([4018204, 4018203, 4018202]);
             });
+
+            it("reports a rejected search as terminal", () => {
+                const src = '{"success":false,"error":"PostQuery::TagLimitError","message":"You cannot search for more than 2 tags at a time."}';
+                const res = source.apis.json.search.parse(src, 422) as IParsedSearch & IError;
+
+                expect(res.error).toEqual("You cannot search for more than 2 tags at a time.");
+                expect(res.terminal).toEqual(true);
+            });
         });
 
         describe("Tags", () => {
@@ -46,6 +54,14 @@ describe("Danbooru (2.0)", () => {
                 const res = source.apis.xml.search.parse('<?xml version="1.0" encoding="UTF-8"?><posts type="array"></posts>', 200) as IParsedSearch & IError;
                 expect(res.error).toBeUndefined();
                 expect(res.images.length).toEqual(0);
+            });
+
+            it("reports a rejected search as terminal", () => {
+                const src = '<?xml version="1.0" encoding="UTF-8"?><result><success type="boolean">false</success><error>PostQuery::TagLimitError</error><message>You cannot search for more than 2 tags at a time.</message></result>';
+                const res = source.apis.xml.search.parse(src, 422) as IParsedSearch & IError;
+
+                expect(res.error).toEqual("You cannot search for more than 2 tags at a time.");
+                expect(res.terminal).toEqual(true);
             });
 
             it("works for basic listing", () => {
@@ -80,6 +96,14 @@ describe("Danbooru (2.0)", () => {
         describe("Search", () => {
             it("works for basic listing", () => {
                 expect(search(source.apis.html, "", 2)).toEqual("/posts?limit=10&page=2&tags=");
+            });
+
+            it("reports a rejected search as terminal", () => {
+                const src = '<h1>Search Error</h1>\n\n<p>\n  You cannot search for more than 2 tags at a time.\n\n    <a href="/upgrade">Upgrade your account</a>\n</p>';
+                const res = source.apis.html.search.parse(src, 422) as IParsedSearch & IError;
+
+                expect(res.error).toEqual("You cannot search for more than 2 tags at a time.");
+                expect(res.terminal).toEqual(true);
             });
 
             // FIXME: broken

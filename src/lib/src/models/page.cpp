@@ -161,6 +161,11 @@ void Page::loadFinished(PageApi *api, PageApi::LoadResult status)
 			Analytics::getInstance().sendEvent("Page load", "Error", eventLabel);
 		}
 		m_errors.append(errors);
+		// A rejected search (tag limit, bad syntax) gets the same answer from every API of the site.
+		if (api->isTerminal()) {
+			emit failedLoading(this);
+			return;
+		}
 		fallback();
 	}
 }

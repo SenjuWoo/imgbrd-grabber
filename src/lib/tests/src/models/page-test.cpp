@@ -56,6 +56,34 @@ TEST_CASE("Page")
 	}
 }
 
+TEST_CASE("A rejected search stops the API fallback")
+{
+	setupSource("Danbooru (2.0)");
+	setupSite("Danbooru (2.0)", "danbooru.donmai.us");
+	const QScopedPointer<Profile> profile(makeProfile());
+	auto *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	site->setAutoLogin(false);
+
+	QTemporaryFile rejected;
+	REQUIRE(rejected.open());
+	REQUIRE(rejected.write(R"(<?xml version="1.0" encoding="UTF-8"?><result><success type="boolean">false</success><error>PostQuery::TagLimitError</error><message>You cannot search for more than 2 tags at a time.</message></result>)") > 0);
+	rejected.flush();
+
+	CustomNetworkAccessManager::NextFiles.clear();
+	CustomNetworkAccessManager::NextFiles.enqueue(rejected.fileName());
+	// Would only be consumed if the site needlessly fell back to its other APIs.
+	CustomNetworkAccessManager::NextFiles.enqueue(rejected.fileName());
+
+	Page page(profile.data(), site, {site}, QStringList{"1girl", "solo", "smile"});
+	QSignalSpy failed(&page, &Page::failedLoading);
+	page.load();
+	REQUIRE(failed.wait());
+	REQUIRE(page.errors().join(" ").contains("more than 2 tags"));
+	REQUIRE(CustomNetworkAccessManager::NextFiles.size() == 1);
+	CustomNetworkAccessManager::NextFiles.clear();
+}
+
 TEST_CASE("Page reload emits once and unsupported endpoints remain readable")
 {
 	setupSource("Danbooru (2.0)");

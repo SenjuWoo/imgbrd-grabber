@@ -30,6 +30,8 @@ struct PageUrl
 struct ParsedPage
 {
 	QString error;
+	// The request itself is invalid (rejected search), so other APIs of the site answer the same.
+	bool terminal = false;
 	int pageCount = -1;
 	int imageCount = -1;
 	QList<Tag> tags;

@@ -136,7 +136,8 @@ export const source: ISource = {
                     const data = JSON.parse(src);
 
                     if ("success" in data && data["success"] === false && "message" in data) {
-                        return { error: data["message"] };
+                        // A rejected search (tag limit, bad syntax): every API answers the same, so stop the fallback.
+                        return { error: data["message"], terminal: true };
                     }
 
                     const images: IImage[] = [];
@@ -295,14 +296,17 @@ export const source: ISource = {
                     };
 
                     const xml = Grabber.parseXML(src);
+                    const typed = xml ? Grabber.typedXML(xml) : null;
 
-                    if ("result" in xml && "@attributes" in xml["result"] && "success" in xml["result"]["@attributes"] && xml["result"]["@attributes"]["success"] === "false") {
-                        return { error: xml["result"]["#text"] };
+                    // A rejected search answers with <result><success>false</success><message>…</message></result>
+                    // (older servers use the attribute form). Every API answers the same, so stop the fallback.
+                    if (typed && typed.result !== undefined) {
+                        const reason = typeof typed.result === "string" ? typed.result : (typed.result.message || typed.result.error);
+                        return { error: reason || "The search was rejected", terminal: true };
                     }
 
                     // A wall or error page (HTML, not <posts>) must fail cleanly: an exception here only sends the search down the slower JSON and HTML fallbacks.
-                    const typed = Grabber.typedXML(xml);
-                    if (typed.posts === undefined) {
+                    if (!typed || typed.posts === undefined) {
                         return { error: "Unexpected response from the server" };
                     }
                     const data = Grabber.makeArray(typed.posts.post);
@@ -361,6 +365,12 @@ export const source: ISource = {
                     }
                 },
                 parse: (src: string, statusCode: number): IParsedSearch | IError => {
+                    // A rejected search answers with a "Search Error" page and HTTP 422; every API answers the same.
+                    if (statusCode === 422) {
+                        const rejected = src.match(/<h1>Search Error<\/h1>\s*<p>\s*([\s\S]*?)(?:<a |<\/p>)/);
+                        return { error: rejected ? rejected[1].trim() : "The search was rejected", terminal: true };
+                    }
+
                     const match = src.match(/<div id="page">\s*<p>([^<]+)<\/p>\s*<\/div>/m);
                     if (match) {
                         return { error: match[1] };

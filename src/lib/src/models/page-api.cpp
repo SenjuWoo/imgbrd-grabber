@@ -173,6 +173,7 @@ void PageApi::load(bool rateLimit, bool force)
 	m_tags.clear();
 	m_loaded = false;
 	m_loading = true;
+	m_terminal = false;
 	m_pageImageCount = 0;
 	m_filteredImageCount = 0;
 	m_imagesCount = -1;
@@ -356,6 +357,7 @@ void PageApi::parseActual()
 
 			// Handle errors
 			if (!page.error.isEmpty()) {
+				m_terminal = page.terminal;
 				log(QStringLiteral("[%1][%2] %3").arg(m_site->url(), m_format, page.error), Logger::Warning);
 				if (!keepJoined) {
 					m_errors.append(page.error);
@@ -540,6 +542,11 @@ int PageApi::filteredImageCount() const
 { return m_filteredImageCount; }
 int PageApi::highLimit() const
 { return m_api->maxLimit(); }
+
+bool PageApi::isTerminal() const
+{
+	return m_terminal;
+}
 
 bool PageApi::hasNext() const
 {

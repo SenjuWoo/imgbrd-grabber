@@ -343,6 +343,10 @@ ParsedPage JavascriptApi::parsePageInternal(const QString &type, Page *parentPag
 		ret.error = results.property("error").toString();
 	}
 
+	if (results.hasProperty("terminal")) {
+		ret.terminal = results.property("terminal").toBool();
+	}
+
 	if (results.hasProperty("tags")) {
 		ret.tags = makeTags(results.property("tags"), site);
 	}

@@ -144,6 +144,11 @@ npm test -- --runInBand
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
 
+## Changes in 7.21.6
+
+- **A rejected search now says why, and stops.** Danbooru answers a three-tag anonymous search with HTTP 422 and "You cannot search for more than 2 tags at a time."; the app used to spend the XML, JSON **and** HTML endpoints on it and then report "No valid source of the site returned result". The site's own message is shown, and the remaining APIs are skipped because they would answer the same.
+- Same handling for any search the site refuses on every format (invalid syntax, tag limit): one request, one clear error.
+
 ## Changes in 7.21.5
 
 - **A failed video no longer turns into a still image.** When the video file failed to download, extension rotation could fall back to `jpg`/`png`, and sites answer that URL with the thumbnail, so the retry "succeeded" and saved a JPEG in place of the video. Videos now only rotate between video formats.

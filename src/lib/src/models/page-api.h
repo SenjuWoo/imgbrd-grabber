@@ -54,6 +54,8 @@ class PageApi : public QObject
 		int imagesPerPage() const;
 		int highLimit() const;
 		bool hasNext() const;
+		// The site rejected the search itself, so another API of the same site would reject it too.
+		bool isTerminal() const;
 		int page() const;
 		int pageImageCount() const;
 		int filteredImageCount() const;
@@ -109,6 +111,7 @@ class PageApi : public QObject
 		bool m_imagesCountSafe, m_pagesCountSafe;
 		bool m_loading = false;
 		bool m_loaded = false;
+		bool m_terminal = false;
 		QSet<QString> m_redirectsSeen;
 		int m_redirectHops = 0;
 		int m_rateLimitRetries = 0;

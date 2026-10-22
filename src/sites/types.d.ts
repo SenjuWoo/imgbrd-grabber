@@ -238,6 +238,8 @@ type IRequest = IRequestGet | IRequestPost;
  */
 interface IError {
     error: string;
+    /** The request itself is invalid, so other APIs of the site would answer the same. */
+    terminal?: boolean;
 }
 interface IParsedSearch {
     images: IImage[];
