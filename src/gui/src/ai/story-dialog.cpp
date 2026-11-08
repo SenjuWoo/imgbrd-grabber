@@ -1,10 +1,12 @@
 #include "ai/story-dialog.h"
 #include <QApplication>
+#include <QCheckBox>
 #include <QClipboard>
 #include <QDialogButtonBox>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QHBoxLayout>
+#include <QInputDialog>
 #include <QLabel>
 #include <QLineEdit>
 #include <QMessageBox>
@@ -12,8 +14,10 @@
 #include <QProgressDialog>
 #include <QPushButton>
 #include <QSet>
+#include <QSettings>
 #include <QVBoxLayout>
 #include "ai/picture-story.h"
+#include "ai/story-models.h"
 #include "models/image.h"
 #include "models/library-store.h"
 #include "models/profile.h"
@@ -62,14 +66,45 @@ StoryDialog::StoryDialog(Profile *profile, const QSharedPointer<Image> &image, Q
 	m_apiKey = new QLineEdit(PictureStory::apiKey(profile), m_settings);
 	m_apiKey->setEchoMode(QLineEdit::Password);
 	m_apiKey->setPlaceholderText(QStringLiteral("sk-or-…"));
-	m_model = new QLineEdit(PictureStory::model(profile), m_settings);
+
+	auto *modelRow = new QWidget(m_settings);
+	auto *modelLayout = new QHBoxLayout(modelRow);
+	modelLayout->setContentsMargins(0, 0, 0, 0);
+	m_model = new QLineEdit(PictureStory::model(profile), modelRow);
 	m_model->setPlaceholderText(QStringLiteral("openrouter/auto"));
+	auto *find = new QPushButton(tr("Find vision models…"), modelRow);
+	modelLayout->addWidget(m_model, 1);
+	modelLayout->addWidget(find);
+
+	m_auto = new QCheckBox(tr("Pick the best free vision model automatically"), m_settings);
+	m_auto->setChecked(PictureStory::autoModel(profile));
+	m_quality = new QCheckBox(tr("Quality: read the scene first, then write from it"), m_settings);
+	m_quality->setChecked(PictureStory::quality(profile));
+	m_writerModel = new QLineEdit(PictureStory::writerModel(profile), m_settings);
+	m_writerModel->setPlaceholderText(tr("same model as the picture"));
+
 	form->addRow(tr("Base URL"), m_baseUrl);
 	form->addRow(tr("API key"), m_apiKey);
-	form->addRow(tr("Model"), m_model);
+	form->addRow(tr("Model"), modelRow);
+	form->addRow(QString(), m_auto);
+	form->addRow(QString(), m_quality);
+	form->addRow(tr("Writing model"), m_writerModel);
+
+	// An automatic choice makes the model field moot until the user turns it off again.
+	const auto syncModelField = [this]() {
+		m_model->setEnabled(!m_auto->isChecked());
+		m_writerModel->setEnabled(m_quality->isChecked());
+	};
+	syncModelField();
+	connect(m_auto, &QCheckBox::toggled, this, syncModelField);
+	connect(m_quality, &QCheckBox::toggled, this, syncModelField);
+	connect(find, &QPushButton::clicked, this, &StoryDialog::pickVisionModel);
 
 	auto *buttons = new QDialogButtonBox(this);
 	m_generate = buttons->addButton(tr("Write a story"), QDialogButtonBox::ActionRole);
+	// Only offered after the picture could not be used: writing from tags is a choice, never a silent fallback.
+	m_tagsOnly = buttons->addButton(tr("Write from tags only"), QDialogButtonBox::ActionRole);
+	m_tagsOnly->setVisible(false);
 	auto *copy = buttons->addButton(tr("Copy"), QDialogButtonBox::ActionRole);
 	auto *settings = buttons->addButton(tr("AI settings"), QDialogButtonBox::ActionRole);
 	buttons->addButton(QDialogButtonBox::Close);
@@ -80,27 +115,36 @@ StoryDialog::StoryDialog(Profile *profile, const QSharedPointer<Image> &image, Q
 	layout->addWidget(m_settings);
 	layout->addWidget(buttons);
 
-	connect(m_generate, &QPushButton::clicked, this, &StoryDialog::generate);
+	connect(m_generate, &QPushButton::clicked, this, [this]() { generate(); });
+	connect(m_tagsOnly, &QPushButton::clicked, this, [this]() { generate(true); });
 	connect(copy, &QPushButton::clicked, this, [this]() {
 		QApplication::clipboard()->setText(m_text->toPlainText());
 	});
 	connect(settings, &QPushButton::clicked, this, [this]() { showSettings(m_settings->isHidden()); });
 	connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 	connect(m_story, &PictureStory::ready, this, [this](const QString &key, const QString &text) {
-		setStory(text, PictureStory::model(m_profile));
+		setStory(text, m_story->modelUsed());
 		if (m_story->usedPicture()) {
-			m_status->setText(tr("Written from the picture and its tags by %1.").arg(PictureStory::model(m_profile)));
-		} else if (m_story->visionFallback()) {
-			m_status->setText(tr("The provider refused the picture, so this story was written from tags only by %1.").arg(PictureStory::model(m_profile)));
+			m_status->setText(PictureStory::quality(m_profile)
+				? tr("Written from the scene read off the picture by %1.").arg(m_story->modelUsed())
+				: tr("Written from the picture and its tags by %1.").arg(m_story->modelUsed()));
 		} else {
-			m_status->setText(tr("No picture was available for this one, so this story was written from tags only by %1.").arg(PictureStory::model(m_profile)));
+			m_status->setText(tr("Written from tags only by %1, because no picture was sent.").arg(m_story->modelUsed()));
 		}
 		m_generate->setEnabled(true);
+		m_tagsOnly->setVisible(false);
 		Q_UNUSED(key)
 	});
 	connect(m_story, &PictureStory::failed, this, [this](const QString &key, const QString &error) {
 		m_status->setText(error);
 		m_generate->setEnabled(true);
+		// Offer the three ways forward the failure allows, and only those.
+		const PictureStory::Error kind = m_story->errorKind();
+		const bool pictureProblem = kind == PictureStory::Error::ImageRejected || kind == PictureStory::Error::NoPicture;
+		m_tagsOnly->setVisible(pictureProblem && !m_image.isNull());
+		if (kind == PictureStory::Error::InvalidModel || kind == PictureStory::Error::ImageRejected) {
+			showSettings(true);
+		}
 		Q_UNUSED(key)
 	});
 
@@ -130,6 +174,10 @@ void StoryDialog::showSettings(bool visible)
 void StoryDialog::saveSettings()
 {
 	PictureStory::configure(m_profile, m_baseUrl->text(), m_apiKey->text(), m_model->text());
+	PictureStory::setAutoModel(m_profile, m_auto->isChecked());
+	PictureStory::setQuality(m_profile, m_quality->isChecked());
+	PictureStory::setWriterModel(m_profile, m_writerModel->text());
+	m_profile->getSettings()->sync();
 }
 
 void StoryDialog::setStory(const QString &text, const QString &model)
@@ -138,7 +186,51 @@ void StoryDialog::setStory(const QString &text, const QString &model)
 	StoryStore(m_profile->getPath()).setStory(m_key, text, model);
 }
 
-void StoryDialog::generate()
+void StoryDialog::pickVisionModel()
+{
+	// The provider's own list decides here too; nothing paid is ever chosen without the user seeing it.
+	saveSettings();
+	auto *catalog = new StoryModelCatalog(m_profile, this);
+	// Parent-owned and only closed, never destroyed while replies are still in flight.
+	auto *progress = new QProgressDialog(tr("Reading the model list…"), tr("Cancel"), 0, 0, this);
+	progress->setWindowModality(Qt::WindowModal);
+	progress->setMinimumDuration(0);
+	connect(catalog, &StoryModelCatalog::failed, this, [this, progress](const QString &error) {
+		progress->close();
+		m_status->setText(error);
+	});
+	connect(catalog, &StoryModelCatalog::ready, this, [this, progress](const QList<StoryModel> &models) {
+		progress->close();
+		QStringList labels;
+		QStringList ids;
+		for (const StoryModel &model : models) {
+			if (!model.images) {
+				continue;
+			}
+			const QString price = model.free ? tr("free") : tr("paid");
+			labels.append(QStringLiteral("%1 — %2, %3").arg(model.id, price, tr("reads images")));
+			ids.append(model.id);
+		}
+		if (ids.isEmpty()) {
+			m_status->setText(tr("This provider lists no model that reads images; type the model id yourself."));
+			return;
+		}
+		bool accepted = false;
+		const QString chosen = QInputDialog::getItem(this, tr("Vision models"), tr("Model:"), labels, 0, false, &accepted);
+		if (!accepted) {
+			return;
+		}
+		const int index = labels.indexOf(chosen);
+		if (index >= 0) {
+			m_model->setText(ids.at(index));
+			m_auto->setChecked(false);
+		}
+	});
+	catalog->fetch();
+	progress->exec();
+}
+
+void StoryDialog::generate(bool tagsOnly)
 {
 	if (m_image.isNull()) {
 		return;
@@ -151,8 +243,9 @@ void StoryDialog::generate()
 	}
 	showSettings(false);
 	m_generate->setEnabled(false);
-	m_status->setText(tr("Writing…"));
-	m_story->generate(m_image, localPathFor(m_profile, m_key));
+	m_tagsOnly->setVisible(false);
+	m_status->setText(tagsOnly ? tr("Writing from tags…") : tr("Writing…"));
+	m_story->generate(m_image, localPathFor(m_profile, m_key), tagsOnly);
 }
 
 
@@ -205,7 +298,7 @@ namespace
 					deleteLater();
 				});
 				connect(m_writer, &PictureStory::ready, this, [this](const QString &, const QString &text) {
-					m_store.setStory(m_keys.value(m_index), text, PictureStory::model(m_profile));
+					m_store.setStory(m_keys.value(m_index), text, m_writer->modelUsed());
 					++m_index;
 					next();
 				});

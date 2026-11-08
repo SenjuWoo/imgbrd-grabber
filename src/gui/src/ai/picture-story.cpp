@@ -1,5 +1,6 @@
 #include "ai/picture-story.h"
 #include <QBuffer>
+#include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -15,6 +16,7 @@
 #include <QSettings>
 #include <QTimer>
 #include <QUrl>
+#include "ai/story-models.h"
 #include "logger.h"
 #include "models/image.h"
 #include "models/library-store.h"
@@ -34,6 +36,8 @@ namespace
 	// A JPEG that is still huge after downscaling is not worth the request; the tags alone make a story.
 	constexpr int MaxImageBytes = 1500 * 1024;
 	const QString KeyFile = QStringLiteral("story-key.dat");
+	// A stored automatic choice is reused for a week; the provider's catalogue changes, its ids less so.
+	constexpr qint64 AutoModelMaxAge = 7 * 24 * 3600;
 
 	QString setting(Profile *profile, const QString &name)
 	{
@@ -66,10 +70,38 @@ namespace
 		}
 		return parts.join('\n');
 	}
+
+	// Tags that carry technical noise rather than a scene; they never help a story.
+	bool isNoiseTag(const QString &tag)
+	{
+		static const QStringList noise {
+			QStringLiteral("highres"), QStringLiteral("absurdres"), QStringLiteral("lowres"),
+			QStringLiteral("commentary"), QStringLiteral("commentary_request"), QStringLiteral("translated"),
+			QStringLiteral("translation_request"), QStringLiteral("tagme"), QStringLiteral("bad_id"),
+			QStringLiteral("bad_pixiv_id"), QStringLiteral("bad_twitter_id"), QStringLiteral("bad_link"),
+		};
+		return noise.contains(tag);
+	}
+
+	// True when `keyword` appears in `tag` as a whole component ("long_hair" matches "hair", not "haircut").
+	bool hasWord(const QString &tag, const QString &keyword)
+	{
+		return tag == keyword || tag.startsWith(keyword + '_') || tag.endsWith('_' + keyword) || tag.contains('_' + keyword + '_');
+	}
+
+	bool matchesAny(const QString &tag, const QStringList &keywords)
+	{
+		for (const QString &keyword : keywords) {
+			if (hasWord(tag, keyword)) {
+				return true;
+			}
+		}
+		return false;
+	}
 }
 
-PictureStory::PictureStory(Profile *profile, QObject *parent)
-	: QObject(parent), m_profile(profile), m_manager(new QNetworkAccessManager(this))
+PictureStory::PictureStory(Profile *profile, QObject *parent, QNetworkAccessManager *manager)
+	: QObject(parent), m_profile(profile), m_manager(manager != nullptr ? manager : new QNetworkAccessManager(this))
 {
 }
 
@@ -135,6 +167,55 @@ QString PictureStory::model(Profile *profile)
 {
 	const QString value = setting(profile, "Story/model");
 	return value.isEmpty() ? DefaultModel : value;
+}
+
+bool PictureStory::quality(Profile *profile)
+{
+	return profile->getSettings()->value("Story/quality", false).toBool();
+}
+
+void PictureStory::setQuality(Profile *profile, bool quality)
+{
+	profile->getSettings()->setValue("Story/quality", quality);
+}
+
+QString PictureStory::writerModel(Profile *profile)
+{
+	return setting(profile, "Story/writerModel");
+}
+
+void PictureStory::setWriterModel(Profile *profile, const QString &model)
+{
+	profile->getSettings()->setValue("Story/writerModel", model.trimmed());
+}
+
+bool PictureStory::autoModel(Profile *profile)
+{
+	// Local servers do not describe their models, so an automatic lookup cannot decide for them.
+	const bool automatic = !isLocal(endpoint(baseUrl(profile)));
+	return profile->getSettings()->value("Story/autoModel", automatic).toBool();
+}
+
+void PictureStory::setAutoModel(Profile *profile, bool automatic)
+{
+	profile->getSettings()->setValue("Story/autoModel", automatic);
+}
+
+QString PictureStory::cachedAutoModel(Profile *profile)
+{
+	const QSettings *settings = profile->getSettings();
+	const qint64 chosen = settings->value("Story/autoModelAt", 0).toLongLong();
+	if (chosen <= 0 || QDateTime::currentSecsSinceEpoch() - chosen > AutoModelMaxAge) {
+		return {};
+	}
+	return setting(profile, "Story/autoModelId");
+}
+
+void PictureStory::setCachedAutoModel(Profile *profile, const QString &model)
+{
+	QSettings *settings = profile->getSettings();
+	settings->setValue("Story/autoModelId", model.trimmed());
+	settings->setValue("Story/autoModelAt", model.isEmpty() ? 0 : QDateTime::currentSecsSinceEpoch());
 }
 
 QUrl PictureStory::endpoint(const QString &baseUrl)
@@ -206,6 +287,16 @@ bool PictureStory::visionFallback() const
 	return m_visionFallback;
 }
 
+PictureStory::Error PictureStory::errorKind() const
+{
+	return m_error;
+}
+
+QString PictureStory::modelUsed() const
+{
+	return m_model;
+}
+
 void PictureStory::abort()
 {
 	if (m_reply != nullptr) {
@@ -244,30 +335,71 @@ QString PictureStory::imageDataUrl(const QString &path)
 	return QStringLiteral("data:image/jpeg;base64,") + QString::fromLatin1(bytes.toBase64());
 }
 
-void PictureStory::generate(const QSharedPointer<Image> &image, const QString &localPath)
+QStringList PictureStory::prioritizedTags(const QStringList &tags, int budget)
 {
-	if (image.isNull()) {
-		return;
-	}
-	abort();
-	m_retried = false;
-	m_image = image;
-	m_key = LibraryStore::imageKey(*image);
-	if (m_key.isEmpty()) {
-		m_key = image->pageUrl().toString();
-	}
-	m_model = model(m_profile);
-	m_pictureUrl = pictureUrl(*image);
-	// A downloaded copy on disk is preferred even when the picture has a URL: hotlink-blocked or
-	// login-only URLs would otherwise leave the model answering from the tags alone.
-	m_localDataUrl = imageDataUrl(localPath);
-	m_usedPicture = false;
-	m_visionFallback = false;
+	// Tags that describe the scene itself. Anything matching none of these still follows, in its own order.
+	static const QStringList interaction {
+		"duo", "solo", "couple", "multiple_girls", "multiple_boys", "group", "hug", "kiss", "embrace",
+		"holding_hands", "yuri", "yaoi", "hetero", "size_difference", "age_difference", "interspecies",
+		"handjob", "fellatio", "cunnilingus", "sex", "penetration", "riding", "after_sex",
+	};
+	static const QStringList action {
+		"standing", "sitting", "lying", "kneeling", "crouching", "leaning", "running", "walking", "jumping",
+		"dancing", "sleeping", "bent_over", "spread", "arms_up", "hand_on_hip", "looking", "eye_contact",
+		"stretching", "carrying", "pulling", "pushing", "biting", "sucking", "licking", "eating", "drinking",
+		"reading", "playing", "fighting", "hugging", "kissing", "undressing", "bottomless", "topless",
+	};
+	static const QStringList clothing {
+		"dress", "skirt", "shirt", "blouse", "uniform", "bikini", "swimsuit", "lingerie", "underwear",
+		"panties", "bra", "stockings", "thighhighs", "gloves", "hat", "cap", "boots", "shoes", "jacket",
+		"coat", "kimono", "yukata", "armor", "nude", "naked", "towel", "apron", "scarf", "necklace",
+		"earrings", "choker", "suspenders", "corset", "leotard", "bodysuit", "pantyhose",
+	};
+	static const QStringList setting {
+		"forest", "beach", "city", "street", "room", "bed", "window", "night", "sunset", "sunrise",
+		"indoors", "outdoors", "water", "rain", "snow", "sky", "clouds", "garden", "park", "school",
+		"library", "bath", "onsen", "ruins", "mountain", "field", "desert", "space", "pool", "kitchen",
+		"office", "classroom", "cafe", "bar", "alley", "rooftop", "balcony",
+	};
+	static const QStringList expression {
+		"smile", "grin", "blush", "tears", "crying", "angry", "sad", "surprised", "closed_eyes",
+		"half-closed_eyes", "open_mouth", "tongue", "fang", "smug", "serious", "expressionless",
+		"laughing", "shy", "scared", "ecstasy",
+	};
 
-	// Names first: who a character is and which series they come from cannot be seen in the picture, so
-	// those tags are never dropped for space. Technical noise is left out entirely.
+	const QList<QStringList> buckets {interaction, action, clothing, setting, expression};
+	QList<QStringList> picked(buckets.size());
+	QStringList leftovers;
+
+	for (const QString &tag : tags) {
+		bool placed = false;
+		for (int i = 0; i < buckets.size(); ++i) {
+			if (matchesAny(tag, buckets[i])) {
+				picked[i].append(tag);
+				placed = true;
+				break;
+			}
+		}
+		if (!placed) {
+			leftovers.append(tag);
+		}
+	}
+
+	QStringList ordered;
+	for (const QStringList &bucket : picked) {
+		ordered.append(bucket);
+	}
+	ordered.append(leftovers);
+	ordered.removeDuplicates();
+	return ordered.mid(0, budget);
+}
+
+QString PictureStory::metadataBlock(const Image &image) const
+{
+	// Names first: who a character is and which series they come from cannot be seen in the picture, so those
+	// tags are never dropped for space. The general list is reordered so actions and clothing survive the budget.
 	QStringList characters, series, artists, general;
-	for (const Tag &tag : image->tags()) {
+	for (const Tag &tag : image.tags()) {
 		const QString type = tag.type().name();
 		if (tag.text().isEmpty()) {
 			continue;
@@ -284,19 +416,12 @@ void PictureStory::generate(const QSharedPointer<Image> &image, const QString &l
 	}
 	if (characters.isEmpty() && series.isEmpty() && general.isEmpty()) {
 		// Older Library entries carry no tag types: use the plain list without the usual noise.
-		static const QStringList noise {
-			QStringLiteral("highres"), QStringLiteral("absurdres"), QStringLiteral("lowres"),
-			QStringLiteral("commentary"), QStringLiteral("commentary_request"), QStringLiteral("translated"),
-			QStringLiteral("translation_request"), QStringLiteral("tagme"),
-		};
-		for (const QString &tag : image->tagsString()) {
-			if (!noise.contains(tag)) {
+		for (const QString &tag : image.tagsString()) {
+			if (!isNoiseTag(tag)) {
 				general.append(tag);
 			}
 		}
 	}
-	general.removeDuplicates();
-	general = general.mid(0, 60);
 
 	QStringList lines;
 	if (!characters.isEmpty()) {
@@ -308,27 +433,103 @@ void PictureStory::generate(const QSharedPointer<Image> &image, const QString &l
 	if (!artists.isEmpty()) {
 		lines.append(QStringLiteral("Artist: ") + artists.join(", "));
 	}
-	if (!general.isEmpty()) {
-		lines.append(QStringLiteral("Tags: ") + general.join(' '));
+	const QStringList ordered = prioritizedTags(general);
+	if (!ordered.isEmpty()) {
+		lines.append(QStringLiteral("Tags: ") + ordered.join(' '));
 	}
-	if (!image->name().isEmpty()) {
-		lines.append(QStringLiteral("Title: ") + image->name());
+	if (!image.name().isEmpty()) {
+		lines.append(QStringLiteral("Title: ") + image.name());
 	}
-	if (image->parentSite() != nullptr) {
-		lines.append(QStringLiteral("From: ") + image->parentSite()->name());
+	if (image.parentSite() != nullptr) {
+		lines.append(QStringLiteral("From: ") + image.parentSite()->name());
 	}
-	const QSize size = image->size();
+	const QSize size = image.size();
 	if (size.isValid() && !size.isEmpty()) {
 		lines.append(QStringLiteral("Size: %1x%2").arg(size.width()).arg(size.height()));
 	}
-	m_prompt = lines.join('\n');
+	return lines.join('\n');
+}
+
+void PictureStory::generate(const QSharedPointer<Image> &image, const QString &localPath, bool allowTagsOnly)
+{
+	if (image.isNull()) {
+		return;
+	}
+	abort();
+	m_image = image;
+	m_key = LibraryStore::imageKey(*image);
+	if (m_key.isEmpty()) {
+		m_key = image->pageUrl().toString();
+	}
+	m_error = Error::None;
+	m_usedPicture = false;
+	m_visionFallback = false;
+	m_scene.clear();
+	m_sceneStage = false;
+	m_allowTagsOnly = allowTagsOnly;
+	m_quality = quality(m_profile);
+	m_pictureUrl = pictureUrl(*image);
+	// A downloaded copy on disk is preferred even when the picture has a URL: hotlink-blocked or
+	// login-only URLs would otherwise leave the model answering from the tags alone.
+	m_localDataUrl = imageDataUrl(localPath);
+	m_prompt = metadataBlock(*image);
+	m_model = model(m_profile);
 
 	const QString problem = settingsProblem(m_profile);
 	if (!problem.isEmpty()) {
-		emit failed(m_key, problem);
+		fail(Error::Config, problem);
 		return;
 	}
-	send(true);
+
+	if (autoModel(m_profile)) {
+		resolveAutoModel();
+		return;
+	}
+	startRequest();
+}
+
+void PictureStory::resolveAutoModel()
+{
+	// A recent choice is reused; otherwise the provider's own list decides, and only a free model is taken.
+	const QString cached = cachedAutoModel(m_profile);
+	if (!cached.isEmpty()) {
+		m_model = cached;
+		startRequest();
+		return;
+	}
+
+	auto *catalog = new StoryModelCatalog(m_profile, this);
+	connect(catalog, &StoryModelCatalog::ready, this, [this, catalog](const QList<StoryModel> &models) {
+		catalog->deleteLater();
+		for (const StoryModel &model : models) {
+			if (model.images && model.free) {
+				setCachedAutoModel(m_profile, model.id);
+				m_model = model.id;
+				log(QStringLiteral("Story: automatic vision model is %1").arg(model.id), Logger::Info);
+				startRequest();
+				return;
+			}
+		}
+		fail(Error::InvalidModel, tr("No free model that reads images is listed by this provider right now. Pick one in AI story settings; a paid model is never chosen for you."));
+	});
+	connect(catalog, &StoryModelCatalog::failed, this, [this, catalog](const QString &error) {
+		catalog->deleteLater();
+		fail(Error::Provider, tr("Could not look up a free vision model: %1").arg(error));
+	});
+	catalog->fetch();
+}
+
+void PictureStory::startRequest()
+{
+	const QString picture = !m_localDataUrl.isEmpty() ? m_localDataUrl : m_pictureUrl;
+	const bool pictured = !picture.isEmpty();
+	if (!pictured && !m_allowTagsOnly) {
+		fail(Error::NoPicture, tr("This picture has no file or address the provider could read. Download it first, or choose \"Write from tags only\"."));
+		return;
+	}
+	// Quality mode reads the scene before writing; that needs the picture itself.
+	m_sceneStage = m_quality && pictured;
+	send(pictured);
 }
 
 void PictureStory::send(bool withPicture)
@@ -346,14 +547,34 @@ void PictureStory::send(bool withPicture)
 	// A local copy travels as data; otherwise the provider fetches the URL itself.
 	const QString picture = !m_localDataUrl.isEmpty() ? m_localDataUrl : m_pictureUrl;
 	const bool pictured = withPicture && !picture.isEmpty();
-	m_usedPicture = pictured;
+	m_pictureAttached = pictured;
 
-	// The instruction says which evidence the answer stands on, so a tags-only result is never dressed up
-	// as something the model actually saw.
+	// In quality mode the writing pass may run on a different model than the one that read the picture.
+	const QString writer = writerModel(m_profile);
+	const QString modelToUse = (!m_sceneStage && m_quality && !writer.isEmpty()) ? writer : m_model;
+
 	QString text = m_prompt + QStringLiteral("\n\n");
-	text += pictured
-		? QStringLiteral("Write the story behind this picture. Ground it in what is visibly happening: how many characters there are, their poses, clothing, expressions and the setting. Use the names above only to say who they are. Do not add characters, change clothing, poses or actions, or invent canon lore.")
-		: QStringLiteral("The picture itself is not available, so write from this metadata only. Ground the scene in the tags that describe setting, poses and clothing, and do not describe details they do not support.");
+	if (m_sceneStage) {
+		text += QStringLiteral("Describe only what is visible in this picture, for a writer who cannot see it. Answer with these lines, each either filled in or \"none\":\n"
+							   "Characters: how many, and who they are if the names above fit\n"
+							   "Actions: what each one is doing\n"
+							   "Poses: how they hold themselves\n"
+							   "Clothing: what each is wearing, or not wearing\n"
+							   "Setting: place, time of day, light\n"
+							   "Interaction: what they do to each other\n"
+							   "Expression: faces and mood\n"
+							   "Uncertain: anything ambiguous or conflicting\n"
+							   "Only include people and details you can see. Never guess a name that is not in the list above.");
+	} else if (pictured) {
+		m_usedPicture = true;
+		text += QStringLiteral("Write the story behind this picture. Ground it in what is visibly happening: how many characters there are, their poses, clothing, expressions and the setting. Use the names above only to say who they are. Do not add characters, change clothing, poses or actions, or invent canon lore.");
+	} else if (!m_scene.isEmpty()) {
+		// The writing pass receives the scene the vision pass read, never the raw tags alone.
+		text += QStringLiteral("Observed scene:\n") + m_scene + QStringLiteral("\n\nWrite the story of that scene. Follow those observations exactly: do not add characters, change clothing, poses or actions, and do not contradict anything marked uncertain.");
+	} else {
+		m_visionFallback = true;
+		text += QStringLiteral("The picture itself is not available, so write from this metadata only. Ground the scene in the tags that describe setting, poses and clothing, and do not describe details they do not support.");
+	}
 
 	QJsonArray content;
 	content.append(QJsonObject {{"type", "text"}, {"text", text}});
@@ -364,12 +585,14 @@ void PictureStory::send(bool withPicture)
 		});
 	}
 	const QJsonObject body {
-		{"model", m_model},
+		{"model", modelToUse},
 		{"max_tokens", 1000},
 		{"messages", QJsonArray {
 			QJsonObject {
 				{"role", "system"},
-				{"content", QStringLiteral("You write the story a picture implies. Close third person or second person, present tense, 150-250 words, concrete sensory detail. No lists, no headings, no framing, no disclaimer, and never mention tags or that you are an AI. When the tags say the picture is explicit, write the adult content as explicitly as the picture suggests; otherwise follow the mood it creates.")},
+				{"content", m_sceneStage
+					? QStringLiteral("You describe pictures factually and briefly, for someone who cannot see them. Only state what is visible, and mark anything unclear as uncertain. No story, no speculation, no names that were not given to you.")
+					: QStringLiteral("You write the story a picture implies. Close third person or second person, present tense, 150-250 words, concrete sensory detail. No lists, no headings, no framing, no disclaimer, and never mention tags or that you are an AI. When the tags say the picture is explicit, write the adult content as explicitly as the picture suggests; otherwise follow the mood it creates.")},
 			},
 			QJsonObject {{"role", "user"}, {"content", content}},
 		}},
@@ -377,7 +600,7 @@ void PictureStory::send(bool withPicture)
 
 	m_reply = m_manager->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
 	connect(m_reply, &QNetworkReply::finished, this, &PictureStory::finished);
-	log(QStringLiteral("Story: asked %1 for %2").arg(m_model, m_key), Logger::Info);
+	log(QStringLiteral("Story: asked %1 for %2").arg(modelToUse, m_key), Logger::Info);
 }
 
 void PictureStory::finished()
@@ -399,7 +622,16 @@ void PictureStory::finished()
 		text = messageText(choices.first().toObject().value("message").toObject()).trimmed();
 	}
 	if (!text.isEmpty()) {
-		emit ready(key, text);
+		if (m_sceneStage) {
+			// The scene is now the evidence the prose pass writes from.
+			m_scene = text;
+			m_sceneStage = false;
+			m_usedPicture = true;
+			m_visionFallback = false;
+			send(false);
+			return;
+		}
+		emit ready(m_key, text);
 		return;
 	}
 
@@ -407,19 +639,35 @@ void PictureStory::finished()
 	if (error.isEmpty()) {
 		error = reply->errorString();
 	}
-	// A provider that cannot take the picture answers 400/404/415/422; the tags alone still make a story.
-	const bool pictureRefused = !m_retried && (!m_pictureUrl.isEmpty() || !m_localDataUrl.isEmpty())
-		&& (status == 400 || status == 404 || status == 415 || status == 422);
-	if (pictureRefused) {
-		m_retried = true;
-		m_visionFallback = true;
-		log(QStringLiteral("Story: %1 refused the picture (%2), retrying from tags").arg(m_model).arg(status), Logger::Warning);
-		send(false);
-		return;
-	}
+
+	// Every failure keeps its own meaning: a 404 is a wrong model, not a picture the provider refused.
+	Error kind = Error::Provider;
+	QString message = error.isEmpty() ? tr("The AI provider returned no story.") : error;
 	if (status == 401 || status == 403) {
-		error = tr("The AI provider rejected the API key.");
+		kind = Error::Config;
+		message = tr("The AI provider rejected the API key.");
+	} else if (status == 404) {
+		kind = Error::InvalidModel;
+		message = tr("The model or endpoint was not found (HTTP 404): %1. Check the model id in AI story settings.").arg(error);
+	} else if (status == 429) {
+		kind = Error::RateLimited;
+		message = tr("The provider is limiting requests right now; try again in a moment.");
+	} else if (status == 400 || status == 415 || status == 422) {
+		if (m_pictureAttached) {
+			kind = Error::ImageRejected;
+			message = tr("The provider would not accept the picture (HTTP %1). This model may not read images. Choose a vision model, or write from tags only.").arg(status);
+		} else {
+			kind = Error::InvalidModel;
+			message = tr("The provider rejected the request (HTTP %1): %2").arg(status).arg(error);
+		}
 	}
-	log(QStringLiteral("Story: %1 failed (%2): %3").arg(m_model).arg(status).arg(error), Logger::Warning);
-	emit failed(key, error.isEmpty() ? tr("The AI provider returned no story.") : error);
+
+	log(QStringLiteral("Story: %1 failed (%2): %3").arg(m_model).arg(status).arg(message), Logger::Warning);
+	fail(kind, message);
+}
+
+void PictureStory::fail(Error kind, const QString &message)
+{
+	m_error = kind;
+	emit failed(m_key, message);
 }

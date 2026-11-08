@@ -4,6 +4,7 @@
 #include <QObject>
 #include <QSharedPointer>
 #include <QString>
+#include <QStringList>
 
 
 class Image;
@@ -15,20 +16,32 @@ class QUrl;
 /**
  * Writes the story behind a picture with an OpenAI-compatible chat API (OpenRouter by default).
  *
- * Settings: `Story/baseUrl` and `Story/model` in the profile settings, the API key in its own
- * `story-key.dat` file so it is never written into a profile backup. Keyless localhost servers
+ * Settings: `Story/baseUrl`, `Story/model`, `Story/writerModel` and `Story/quality` in the profile settings, the API
+ * key in its own `story-key.dat` file so it is never written into a profile backup. Keyless localhost servers
  * (LM Studio, llama.cpp, Ollama's OpenAI endpoint) work without a key.
  *
- * The picture's tags, title and source are always sent; the picture itself is sent when it can be
- * reached (remote URL) or read (local import), downscaled first. A provider that refuses the image
- * is retried once from the tags alone.
+ * The picture itself is sent whenever a copy can be read or a URL exists, so the answer rests on what is visible.
+ * A tags-only story only happens when the caller asks for one. Quality mode reads the scene first and writes from
+ * that description instead of asking for prose in a single shot.
  */
 class PictureStory : public QObject
 {
 	Q_OBJECT
 
 	public:
-		explicit PictureStory(Profile *profile, QObject *parent = nullptr);
+		/** Why a request stopped, so the caller can offer the right recovery instead of one generic error. */
+		enum class Error {
+			None,
+			Config,
+			NoPicture,
+			InvalidModel,
+			ImageRejected,
+			RateLimited,
+			Provider,
+			Cancelled,
+		};
+
+		explicit PictureStory(Profile *profile, QObject *parent = nullptr, QNetworkAccessManager *manager = nullptr);
 		~PictureStory() override;
 
 		/** Ready to send: a valid base URL, and either an API key or a local (keyless) server. */
@@ -46,40 +59,68 @@ class PictureStory : public QObject
 		/** Why the current settings cannot be used, empty when they can. */
 		static QString settingsProblem(Profile *profile);
 
+		static bool quality(Profile *profile);
+		static void setQuality(Profile *profile, bool quality);
+		/** Model used for the writing pass in quality mode; empty means "the same model". */
+		static QString writerModel(Profile *profile);
+		static void setWriterModel(Profile *profile, const QString &model);
+		/** True when the vision model is resolved from the provider's list instead of the settings field. */
+		static bool autoModel(Profile *profile);
+		static void setAutoModel(Profile *profile, bool automatic);
+		/** The free vision model the last automatic lookup chose; empty when there is none yet. */
+		static QString cachedAutoModel(Profile *profile);
+		static void setCachedAutoModel(Profile *profile, const QString &model);
+
 		/**
 		 * Asks for one picture's story; emits ready() or failed() once.
 		 * `localPath` is used for imported pictures that have no public URL.
+		 * `allowTagsOnly` is the caller's explicit "write from tags alone" choice: without it a picture that cannot be
+		 * sent is an error, never a quiet tags-only story.
 		 */
-		void generate(const QSharedPointer<Image> &image, const QString &localPath = {});
+		void generate(const QSharedPointer<Image> &image, const QString &localPath = {}, bool allowTagsOnly = false);
 		void abort();
 		bool busy() const;
-		/** Whether the last request actually carried the picture, or was answered from the tags alone. */
+		/** Whether the story rests on the picture itself (sent directly, or read by the vision pass). */
 		bool usedPicture() const;
-		/** True when the provider refused the picture and the story was written from tags only. */
+		/** True when the caller asked for a tags-only story after the picture could not be used. */
 		bool visionFallback() const;
+		Error errorKind() const;
+		/** The model the last request actually went to (the resolved one when it was chosen automatically). */
+		QString modelUsed() const;
 		/** The picture encoded for a vision request, downscaled and bounded; empty when it cannot be read. */
 		static QString imageDataUrl(const QString &path);
+		/** Story-relevant tags first, budgeted, so actions and clothing are not lost behind a long general list. */
+		static QStringList prioritizedTags(const QStringList &tags, int budget = 60);
 
 	signals:
 		void ready(const QString &key, const QString &text);
 		void failed(const QString &key, const QString &error);
 
 	private:
+		void resolveAutoModel();
+		void startRequest();
 		void send(bool withPicture);
 		void finished();
+		void fail(Error kind, const QString &message);
+		QString metadataBlock(const Image &image) const;
+
 		Profile *m_profile;
 		QNetworkAccessManager *m_manager;
 		QNetworkReply *m_reply = nullptr;
 		QSharedPointer<Image> m_image;
 		QString m_key;
 		QString m_prompt;
+		QString m_scene;
 		QString m_pictureUrl;
 		QString m_localDataUrl;
 		QString m_model;
-		QString m_baseUrl;
-		bool m_retried = false;
+		bool m_allowTagsOnly = false;
+		bool m_quality = false;
+		bool m_sceneStage = false;
+		bool m_pictureAttached = false;
 		bool m_usedPicture = false;
 		bool m_visionFallback = false;
+		Error m_error = Error::None;
 };
 
 #endif // PICTURE_STORY_H

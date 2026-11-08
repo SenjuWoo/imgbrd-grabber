@@ -7,6 +7,7 @@
 
 class Image;
 class Profile;
+class QCheckBox;
 class QLabel;
 class QLineEdit;
 class QPlainTextEdit;
@@ -30,10 +31,11 @@ class StoryDialog : public QDialog
 		static void writeForFavorites(Profile *profile, QWidget *parent);
 
 	private:
-		void generate();
+		void generate(bool tagsOnly = false);
 		void showSettings(bool visible);
 		void saveSettings();
 		void setStory(const QString &text, const QString &model);
+		void pickVisionModel();
 
 		Profile *m_profile;
 		QSharedPointer<Image> m_image;
@@ -45,7 +47,11 @@ class StoryDialog : public QDialog
 		QLineEdit *m_baseUrl;
 		QLineEdit *m_apiKey;
 		QLineEdit *m_model;
+		QLineEdit *m_writerModel;
+		QCheckBox *m_quality;
+		QCheckBox *m_auto;
 		QPushButton *m_generate;
+		QPushButton *m_tagsOnly;
 };
 
 #endif // STORY_DIALOG_H
