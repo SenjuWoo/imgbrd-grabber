@@ -81,10 +81,21 @@ class Site : public QObject
 		QUrl fixUrl(const QString &url, const QUrl &old = QUrl()) const;
 		void setRequestHeaders(QNetworkRequest &request) const;
 		Profile *getProfile() { return m_profile; }
-		/** Tells listeners this site answered 429/503 and the request retries after `seconds`. */
-		void notifyRateLimited(int seconds) { m_lastRateLimit = QDateTime::currentMSecsSinceEpoch(); emit rateLimited(this, seconds); }
-		/** Milliseconds since this site last answered 429/503, or -1 when that has not happened this session. */
-		qint64 msSinceRateLimit() const { return m_lastRateLimit < 0 ? -1 : QDateTime::currentMSecsSinceEpoch() - m_lastRateLimit; }
+		/**
+		 * Tells listeners this site answered 429/503 and every request of the site waits until the limit ends.
+		 * The gate only ever moves later, so a burst of limited requests shares one wait instead of each
+		 * retrying (or giving up) on its own schedule.
+		 */
+		void notifyRateLimited(int seconds)
+		{
+			const qint64 until = QDateTime::currentMSecsSinceEpoch() + qint64(qMax(0, seconds)) * 1000;
+			if (until > m_rateLimitUntil) {
+				m_rateLimitUntil = until;
+				emit rateLimited(this, seconds);
+			}
+		}
+		/** Milliseconds until the site's shared rate-limit wait ends; 0 when requests may go out at once. */
+		qint64 rateLimitRemaining() const { return qMax<qint64>(0, m_rateLimitUntil - QDateTime::currentMSecsSinceEpoch()); }
 
 		// Api
 		const QList<Api*> &getApis() const;
@@ -121,7 +132,8 @@ class Site : public QObject
 		QString m_name;
 		QString m_url;
 		QString m_userAgent;
-		qint64 m_lastRateLimit = -1;
+		// Epoch milliseconds until the site may be asked again after a 429/503/509; shared by every request.
+		qint64 m_rateLimitUntil = 0;
 		SourceEngine *m_sourceEngine;
 		QList<QNetworkCookie> m_cookies;
 		MixedSettings *m_settings;

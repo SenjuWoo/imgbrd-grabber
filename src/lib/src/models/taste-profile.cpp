@@ -251,6 +251,18 @@ QSet<QString> TagBackground::vocabulary() const
 	return result;
 }
 
+QStringList TagBackground::websites() const
+{
+	QStringList result;
+	for (auto it = m_posts.constBegin(); it != m_posts.constEnd(); ++it) {
+		if (it.value() > 0) {
+			result.append(it.key());
+		}
+	}
+	std::sort(result.begin(), result.end());
+	return result;
+}
+
 double TagBackground::posts(const QString &website) const
 {
 	if (!website.isEmpty()) {
@@ -514,8 +526,14 @@ void TasteProfile::learnSynonyms(const TagBackground &background, const QHash<QS
 		}
 	}
 	// Where each liked tag, under any of its names, shows up in sampled posts: it can be searched there too.
+	QStringList websites = m_siteWeights.keys();
+	for (const QString &website : background.websites()) {
+		if (!websites.contains(website)) {
+			websites.append(website);
+		}
+	}
 	for (auto it = m_tags.constBegin(); it != m_tags.constEnd(); ++it) {
-		for (const QString &website : m_siteWeights.keys()) {
+		for (const QString &website : std::as_const(websites)) {
 			const double share = it->weight > 0 ? background.share(website, it.key()) : 0;
 			if (share > 0) {
 				m_variantShares[it.key()].insert(website, share);
@@ -629,20 +647,25 @@ TasteProfile TasteProfile::build(const QList<LibraryEntry> &entries, const QHash
 	for (const QString &name : sortedKeys(termWeight)) {
 		const QString type = types.value(name);
 		double weight = 0;
+		bool known = false;
 		if (contrast) {
 			// General tags depend on each site's vocabulary ("1girls" vs "1girl"): compare them only where they were rated.
 			const double frequency = background.frequency(name, crossSiteType(type) ? QHash<QString, double>() : profile.m_sites.value(name));
-			if (frequency < 0) {
-				profile.m_tags.insert(name, {name, type, 0, documentFrequency.value(name)}); // Unknown until those sites are sampled.
-				continue;
+			if (frequency >= 0) {
+				known = true;
+				// Lift: a theme in 20% of ratings but 1% of posts says far more than breasts in 60% of both.
+				const double base = std::max(frequency, 0.5 / sampled);
+				const double lift = std::clamp(std::log(termWeight.value(name) / totalWeight / base), -2.0, 6.0);
+				const double confidence = 1.0 - std::exp(-documentFrequency.value(name) / 3.0);
+				// Rarer in ratings than on the sites is not dislike ("solo" in a third of them): only hiding and tuning lower a tag.
+				weight = lift > 0 ? confidence * lift * typeBoost(type) : 0;
 			}
-			// Lift: a theme in 20% of ratings but 1% of posts says far more than breasts in 60% of both.
-			const double base = std::max(frequency, 0.5 / sampled);
-			const double lift = std::clamp(std::log(termWeight.value(name) / totalWeight / base), -2.0, 6.0);
-			const double confidence = 1.0 - std::exp(-documentFrequency.value(name) / 3.0);
-			// Rarer in ratings than on the sites is not dislike ("solo" in a third of them): only hiding and tuning lower a tag.
-			weight = lift > 0 ? confidence * lift * typeBoost(type) : 0;
-		} else {
+		}
+		if (!known) {
+			// The sources these ratings came from are not sampled yet (or not at all): weigh the tag by how
+			// often it was rated instead of dropping it. A taste profile that only knows tags of sampled
+			// sources stays empty for hours while Discover learns the sources, which is what "no taste
+			// detected" looked like.
 			// Ubiquitous liked tags still matter a little; one-off general tags are mostly noise.
 			const bool singleton = documentFrequency.value(name) < 2 && !crossSiteType(type) && termWeight.value(name) < 3.0;
 			weight = termWeight.value(name) / totalWeight * (0.3 + inverse(name)) * typeBoost(type);

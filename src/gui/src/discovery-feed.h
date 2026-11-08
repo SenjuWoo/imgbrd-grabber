@@ -94,6 +94,10 @@ class DiscoveryFeed : public QObject
 		const TasteTuning &tuning() const;
 		void setTuning(const TasteTuning &tuning);
 		static QString statePath(const QString &profileDirectory);
+		/** Pictures already shown, kept out of the feed until the repeat window ends. */
+		int seenCount() const;
+		/** When pictures shown before may come back, in words: the cutoff the feed applies. */
+		QString repeatHint() const;
 
 	signals:
 		void itemsReady(const QList<DiscoveryItem> &items);

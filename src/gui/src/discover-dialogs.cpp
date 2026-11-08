@@ -122,6 +122,11 @@ DiscoverTasteDialog::DiscoverTasteDialog(DiscoveryFeed *feed, QWidget *parent)
 	m_seenHours->setValue(tuning.seenHours);
 	m_seenHours->setToolTip(tr("A picture Discover showed stays out of the feed for this long, then may come back in case you missed it. Never = it is not shown again."));
 	form->addRow(tr("Show again after"), m_seenHours);
+	auto *seenHint = new QLabel(tr("This is the cutoff: with Never, a picture shown once is gone for good; otherwise it is hidden for this long and may return afterwards. "
+		"%n picture(s) are waiting out that window now.", "", feed->seenCount()), this);
+	seenHint->setObjectName("discoverSeenHint");
+	seenHint->setWordWrap(true);
+	form->addRow(QString(), seenHint);
 	layout->addLayout(form);
 	connect(m_variety, &QComboBox::currentIndexChanged, this, &DiscoverTasteDialog::updateVariety);
 	updateVariety();

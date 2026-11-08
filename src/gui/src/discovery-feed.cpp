@@ -168,6 +168,25 @@ bool DiscoveryFeed::isSeen(const QString &key) const
 	return it != m_seen.constEnd() && (m_tuning.seenHours <= 0 || *it + qint64(m_tuning.seenHours) * 3600 > QDateTime::currentSecsSinceEpoch());
 }
 
+int DiscoveryFeed::seenCount() const
+{
+	int count = 0;
+	for (auto it = m_seen.constBegin(); it != m_seen.constEnd(); ++it) {
+		if (!it.key().startsWith(Md5Prefix)) {
+			++count;
+		}
+	}
+	return count;
+}
+
+QString DiscoveryFeed::repeatHint() const
+{
+	if (m_tuning.seenHours <= 0) {
+		return tr("Pictures you have seen never come back (change that in Tune taste).");
+	}
+	return tr("Seen pictures come back after %n hour(s).", "", m_tuning.seenHours);
+}
+
 void DiscoveryFeed::pruneSeen()
 {
 	// Past the window a picture may come back; with "never" only the size cap forgets the oldest.
@@ -270,7 +289,21 @@ const TasteProfile &DiscoveryFeed::taste()
 void DiscoveryFeed::rebuildTaste()
 {
 	m_tasteDirty = false;
-	m_taste = TasteProfile::build(m_profile->library()->entries(m_scope), m_dislikedTags, QDateTime::currentDateTimeUtc(), m_background, m_tuning);
+	// Tags the user blacklisted are taste evidence too. Ranking them down keeps searches and candidates out
+	// of topics already filtered, without hiding anything the blacklist does not already hide.
+	QHash<QString, double> disliked = m_dislikedTags;
+	for (const QString &line : m_profile->getBlacklist().toString().split('\n', Qt::SkipEmptyParts)) {
+		// Only single-tag lines: a line of several tags is an AND filter whose parts alone mean something else.
+		const QStringList parts = line.split(' ', Qt::SkipEmptyParts);
+		if (parts.size() != 1) {
+			continue;
+		}
+		const QString name = TasteProfile::normalize(parts.first());
+		if (!name.isEmpty() && !name.contains(':') && !name.contains('/') && !name.contains('*') && !disliked.contains(name)) {
+			disliked.insert(name, 2);
+		}
+	}
+	m_taste = TasteProfile::build(m_profile->library()->ratedEntries(m_scope), disliked, QDateTime::currentDateTimeUtc(), m_background, m_tuning);
 	m_visualSeeds.clear();
 	if (m_encoder != nullptr) {
 		const auto &vectors = m_recommendations->vectors();
@@ -519,16 +552,22 @@ void DiscoveryFeed::fetchMore()
 	QStringList sampleSources;
 	QStringList unsampled;
 	for (const QString &source : sources) {
-		// Only sources with ratings matter for how distinctive a rated tag is.
-		if (!m_unsampleable.contains(source) && m_taste.siteWeights().value(source) > 0) {
-			sampleSources.append(source);
-			if (m_background.posts(source) < WellSampled) {
-				unsampled.append(source);
-			}
+		if (m_unsampleable.contains(source)) {
+			continue;
+		}
+		// Every selected source is worth knowing: its frequencies tell which of its tags are distinctive,
+		// so a taste learned on one site matches the tags the others use too.
+		sampleSources.append(source);
+		if (m_background.posts(source) < WellSampled) {
+			unsampled.append(source);
 		}
 	}
 	if (!unsampled.isEmpty()) {
-		sampleSources = unsampled; // Well-known sources would only spend their rate limit on samples.
+		// Well-known sources would only spend their rate limit on samples; sources with ratings teach the most.
+		std::stable_sort(unsampled.begin(), unsampled.end(), [this](const QString &left, const QString &right) {
+			return m_taste.siteWeights().value(left) > m_taste.siteWeights().value(right);
+		});
+		sampleSources = unsampled;
 	}
 	const int samples = m_taste.isEmpty() || sampleSources.isEmpty() ? 0 : (!unsampled.isEmpty() ? std::min<int>(2, int(unsampled.size())) : (m_batch % 3 == 2 ? 1 : 0));
 	++m_batch;
@@ -574,7 +613,7 @@ void DiscoveryFeed::fetchMore()
 		connect(request, &Page::httpsRedirect, this, [this](Page *result) { pageFinished(result, false); });
 	}
 	if (m_pages.isEmpty()) {
-		emit statusChanged(tr("You've reached the end of these topics. Refresh for new ones."));
+		emit statusChanged(tr("You've reached the end of these topics (%n picture(s) already seen).", "", seenCount()) + ' ' + repeatHint());
 		return;
 	}
 	setBusy(true);
@@ -906,7 +945,7 @@ void DiscoveryFeed::finishBatch()
 
 	const QString visual = m_encoder == nullptr ? QStringLiteral("off") : (m_visualSeeds.isEmpty() ? QStringLiteral("on, but no rated Library picture is indexed") : QStringLiteral("on, %1 rated Library pictures").arg(m_visualSeeds.size()));
 	log(QStringLiteral("Discover: batch %1 showed %2 pictures, %3 ranked by look too (local AI %4)").arg(m_batch).arg(m_batchEmitted).arg(m_batchVisual).arg(visual), Logger::Info);
-	QString status = m_batchEmitted == 0 ? tr("No new pictures in this batch.") : QString();
+	QString status = m_batchEmitted == 0 ? tr("No new pictures in this batch.") + ' ' + repeatHint() : QString();
 	if (!m_failedSources.isEmpty()) {
 		status += (status.isEmpty() ? QString() : QStringLiteral(" ")) + tr("%1 did not respond.").arg(m_failedSources.join(", "));
 	}

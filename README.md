@@ -10,6 +10,16 @@ An all-in-one image searcher, downloader and personal picture Library. Search do
 
 *Discover with generated demo artwork. Pictures stay clean until you select one; then ♥ Like, ★ Favorite, Download and Not interested appear on it.*
 
+## What's new in 7.22
+
+- **Rate limits no longer drop results.** When a source answers 429, 503 or 509, every request of that source now waits out the same limit and retries, spread slightly so they do not arrive together. Before, the first request waited and the others were discarded, so a search that spanned several APIs or pages came back nearly empty.
+- **An empty page falls through to the next API.** A source whose API answers a valid page with no pictures (because it does not understand a tag) no longer ends the search: Grabber asks that site's next API before giving up.
+- **Discover learns sooner.** Tags learned from your likes and favorites count before the sources they came from are sampled, sources you never rated are sampled too, and tags your blacklist already hides count as negative evidence. A profile no longer looks empty until every source has been sampled.
+- **Faster taste rebuild.** Rebuilding the taste profile reads only liked and favorited pictures, not every thumbnail in the Library.
+- **AI stories.** Right-click a picture in Discover or Library ▸ *AI story…* writes a short story from the picture and its tags with any OpenAI-compatible API (OpenRouter by default: set the base URL, key and model in the window). Stories are kept with your profile. Library ▸ *Write stories for favorites…* writes them for every favorite that has none.
+- **Seen pictures are explained.** Discover's subtitle and status say how many pictures were already shown and when they may come back, or that they never will, and Tune taste says it next to the setting.
+- **Security.** File names built from tags or titles can no longer climb out of the save folder with `..`, and site-provided names, ratings and authors are escaped before they are drawn as rich text.
+
 ## What's new in 7.21
 
 - **Import a folder you love.** Library ▸ Import… ▸ *Choose folder of favorites* imports a folder and marks every picture ♥ Loved after you confirm the count, with **Undo**. Pictures that were already liked or favorited keep their rating.

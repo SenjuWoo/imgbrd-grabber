@@ -55,6 +55,12 @@ class LibraryStore : public QObject
 		bool backupTo(const QString &path);
 		bool restoreFrom(const QString &path);
 		QList<LibraryEntry> entries(qint64 collection = 0);
+		/**
+		 * Liked or favorited pictures only, without thumbnails or local files: what a taste profile reads.
+		 * Loading the whole Library (metadata and previews of every picture) for each rating change was the
+		 * slow part of rebuilding it.
+		 */
+		QList<LibraryEntry> ratedEntries(qint64 collection = 0);
 		LibraryEntry entry(const QString &key, qint64 collection = 0);
 		bool setLiked(const QString &key, bool liked, qint64 collection = 0);
 		bool setFavorite(const QString &key, bool favorite, qint64 collection = 0);

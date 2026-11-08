@@ -112,10 +112,10 @@ TEST_CASE("PageApi")
 		CustomNetworkAccessManager::NextFiles.clear();
 	}
 
-	SECTION("A second page meeting the same limit gives up at once")
+	SECTION("A second page waits for the same limit instead of failing")
 	{
-		// One page waits the limit out; a page that meets the same limit moments later fails without
-		// stacking a second 5 s + 15 s retry chain behind the first (joined pages keep what they found).
+		// Every page of a limited site waits out one shared limit and retries: dropping the followers made
+		// searches come back with only the pictures of whichever request happened to be first.
 		Site *site = sites.first();
 		site->setSetting("download/throttle_retry", 3600, 60);
 		CustomNetworkAccessManager::NextFiles.clear();
@@ -133,9 +133,9 @@ TEST_CASE("PageApi")
 		Page follower(profile, site, sites, tags);
 		PageApi followerApi(&follower, profile, site, site->getApis().first(), tags);
 		QSignalSpy followerSpy(&followerApi, &PageApi::finishedLoading);
-		followerApi.load(); // The same limit, moments later: no second wait.
-		REQUIRE(followerSpy.wait(3000));
-		REQUIRE(followerSpy.first().at(1).value<PageApi::LoadResult>() == PageApi::Error);
+		followerApi.load(); // The same limit, moments later: same wait, then a retry.
+		REQUIRE(followerSpy.wait(15000));
+		// It retried instead of giving up, and both queued replies were used.
 		REQUIRE(CustomNetworkAccessManager::NextFiles.isEmpty());
 		waitingApi.abort();
 	}

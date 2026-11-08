@@ -91,6 +91,17 @@ TEST_CASE("Functions")
 			assertFixFilename(0, "COM1\\image.jpg", "\\\\?\\C:\\test\\", "COM1\\image.jpg");
 		}
 
+		SECTION("Fix filename traversal")
+		{
+			// A tag or title containing ".." cannot climb out of the save folder, on either platform.
+			// The backslash is built from its code point so the test itself has no escape maze.
+			const QChar bs(92);
+			const QString evil = QStringLiteral("..") + bs + QStringLiteral("..") + bs + QStringLiteral("escape") + bs + QStringLiteral("image.jpg");
+			const QString safe = QStringLiteral("_") + bs + QStringLiteral("_") + bs + QStringLiteral("escape") + bs + QStringLiteral("image.jpg");
+			assertFixFilename(0, evil, QStringLiteral("C:") + bs + QStringLiteral("test") + bs, safe);
+			assertFixFilename(1, "../../escape/image.jpg", "/home/test/", "_/_/escape/image.jpg");
+		}
+
 		SECTION("Linux")
 		{
 			assertFixFilename(1, "", "/home/test/image.jpg", "/home/test/image.jpg");

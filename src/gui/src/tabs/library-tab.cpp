@@ -35,6 +35,7 @@
 #include <numeric>
 #include "downloader/download-queue.h"
 #include "downloader/image-downloader.h"
+#include "ai/story-dialog.h"
 #include "image-library-actions.h"
 #include "main-window.h"
 #include "models/image.h"
@@ -882,6 +883,14 @@ void LibraryTab::imageMenu(const QStringList &selected, const QPoint &globalPosi
 				QMessageBox::warning(this, tr("Library"), m_store->lastError());
 			}
 		});
+		menu.addAction(tr("AI story…"), this, [this, entry]() {
+			auto image = QSharedPointer<Image>::create(m_profile);
+			if (!image->read(entry.image, m_profile->getSites())) {
+				QMessageBox::warning(this, tr("Story"), tr("This picture has no metadata to write a story from."));
+				return;
+			}
+			StoryDialog(m_profile, image, this).exec();
+		});
 		if (m_collection > 0) {
 			menu.addAction(tr("Use as collection cover"), this, [this, key]() {
 				if (!m_store->setCollectionCover(m_collection, key)) {
@@ -918,6 +927,8 @@ void LibraryTab::imageMenu(const QStringList &selected, const QPoint &globalPosi
 		});
 	}
 	menu.addAction(tr("Remove from Library…"), this, [this, selected]() { removeFromLibrary(selected); });
+	menu.addSeparator();
+	menu.addAction(tr("Write stories for favorites…"), this, [this]() { StoryDialog::writeForFavorites(m_profile, this); });
 	menu.exec(globalPosition);
 }
 

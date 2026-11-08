@@ -79,6 +79,9 @@ class TagBackground
 		/** Every tag seen on a sampled source. */
 		QSet<QString> vocabulary() const;
 
+		/** Sources with at least one sampled post. */
+		QStringList websites() const;
+
 		QJsonObject toJson() const;
 		static TagBackground fromJson(const QJsonObject &json);
 

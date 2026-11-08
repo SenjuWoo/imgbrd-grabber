@@ -20,6 +20,7 @@
 #include <QToolButton>
 #include <QVBoxLayout>
 #include "discover-dialogs.h"
+#include "ai/story-dialog.h"
 #include "discovery-feed.h"
 #include "main-window.h"
 #include "models/image.h"
@@ -345,22 +346,23 @@ void HomeTab::updateScopes()
 void HomeTab::updateHeader()
 {
 	const auto &taste = m_feed->taste();
+	const auto &tuning = m_feed->tuning();
+	const QString repeat = tuning.seenHours <= 0 ? tr("seen pictures never come back") : tr("seen pictures return after %1 h").arg(tuning.seenHours);
 	if (taste.isEmpty()) {
-		m_subtitle->setText(tr("Fresh pictures from your sources. Like ♥ or favorite ★ what you enjoy and Discover learns your taste."));
+		m_subtitle->setText(tr("Fresh pictures from your sources. Like ♥ or favorite ★ what you enjoy and Discover learns your taste. %1 · %n already seen", "", m_feed->seenCount()).arg(repeat));
 		return;
 	}
 	QString text = tr("Tuned to %n favorite(s)", "", taste.favorites()) + tr(" and %n like(s)", "", taste.likes());
 	if (m_feed->visualActive()) {
 		text += tr(" · smart visual matching on");
 	}
-	const auto &tuning = m_feed->tuning();
 	if (!tuning.focus.isEmpty()) {
 		text += tr(" · focus: %1").arg(tuning.focus.join(", "));
 	}
 	if (tuning.variety != TasteTuning::Balanced) {
 		text += tuning.variety == TasteTuning::Familiar ? tr(" · familiar picks") : tr(" · adventurous picks");
 	}
-	m_subtitle->setText(text + tr(" · favorites count 3× more"));
+	m_subtitle->setText(text + tr(" · favorites count 3× more · %1 · %n already seen", "", m_feed->seenCount()).arg(repeat));
 }
 
 void HomeTab::updateChips()
@@ -493,7 +495,12 @@ void HomeTab::addItems(const QList<DiscoveryItem> &items)
 		if (size.isValid() && !size.isEmpty()) {
 			details.append(QStringLiteral("%1 × %2").arg(size.width()).arg(size.height()));
 		}
-		tile.tooltip = details.join('\n');
+		QStringList escaped;
+		for (const QString &detail : details) {
+			escaped.append(detail.toHtmlEscaped());
+		}
+		// Site titles and tags must not become markup; <br> keeps the lines without Qt's non-breaking spaces.
+		tile.tooltip = escaped.join(QStringLiteral("<br>"));
 		tile.badge = item.image->isVideo() ? QStringLiteral("▶") : (!item.image->isAnimated().isEmpty() ? QStringLiteral("GIF") : QString());
 		tiles.append(tile);
 	}
@@ -636,6 +643,7 @@ void HomeTab::showMenu(const QStringList &keys, const QPoint &position)
 	if (keys.size() == 1 && image) {
 		menu.addSeparator();
 		menu.addAction(tr("Why this picture?"), this, [this, key]() { explain(key); })->setEnabled(m_items.contains(key));
+		menu.addAction(tr("AI story…"), this, [this, image]() { StoryDialog(m_profile, image, this).exec(); });
 		QStringList best;
 		const auto &taste = m_feed->taste();
 		QStringList tags = image->tagsString();

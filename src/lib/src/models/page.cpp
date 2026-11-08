@@ -153,6 +153,15 @@ void Page::loadFinished(PageApi *api, PageApi::LoadResult status)
 
 	QString eventLabel = QStringLiteral("%1 (%2)").arg(m_site->url(), m_siteApis[m_currentApi]->getName());
 	if (status == PageApi::LoadResult::Ok) {
+		// A site's API can answer a valid page with no pictures when it does not understand a tag (silently
+		// dropped conditions) while another API of the same site does. Trying it costs one request, and only
+		// on the first page: later pages are empty because the results end there.
+		const bool anotherApi = m_currentApi < m_pageApis.count() - 1;
+		if (anotherApi && api->images().isEmpty() && api->page() <= 1 && !m_query.tags.isEmpty()) {
+			log(QStringLiteral("[%1] %2 returned no pictures. Retry using %3.").arg(m_site->url(), m_siteApis[m_currentApi]->getName(), m_siteApis[m_currentApi + 1]->getName()), Logger::Warning);
+			fallback();
+			return;
+		}
 		Analytics::getInstance().sendEvent("Page load", "Success", eventLabel);
 		emit finishedLoading(this);
 	} else {

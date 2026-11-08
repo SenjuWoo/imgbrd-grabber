@@ -144,7 +144,10 @@ TEST_CASE("Taste profile weighs tags by how much more often they appear in ratin
 	REQUIRE(profile.weight("male") == 0);
 	REQUIRE(profile.weight("anthro") == 0);
 	REQUIRE(profile.avoidedTags(10).isEmpty());
-	REQUIRE(profile.weight("site_vocabulary") == 0);
+	// A tag only seen on an unsampled source still weighs something: the ratings are evidence even
+	// before the site is sampled, just less than a measured contrast.
+	REQUIRE(profile.weight("site_vocabulary") > 0);
+	REQUIRE(profile.weight("site_vocabulary") < profile.weight("vibrator"));
 	REQUIRE(profile.score({"vibrator", "breasts"}) > profile.score({"breasts", "1girl"}));
 	REQUIRE(profile.score({"breasts", "anthro"}) < profile.score({"breasts"}));
 	REQUIRE(profile.siteWeights().value("rule34.xxx") > 0);

@@ -1,7 +1,9 @@
 #include "models/page-api.h"
 // #include <QtConcurrentRun>
+#include <QRandomGenerator>
 #include <QTimer>
 #include <QtMath>
+#include <climits>
 #include <utility>
 #include "functions.h"
 #include "image.h"
@@ -271,14 +273,10 @@ void PageApi::parse()
 	const int statusCode = m_reply->attribute(QNetworkRequest::HttpStatusCodeAttribute).toInt();
 	if (statusCode == 429 || statusCode == 503 || statusCode == 509) {
 		QString retryReason;
-		// One request per site waits the limit out. A page that meets the same limit moments after another
-		// page already did gives up at once: its own 5 s + 15 s chain would only freeze the search longer.
-		const qint64 sinceLimit = m_site->msSinceRateLimit();
-		const bool followsAnother = m_rateLimitRetries == 0 && sinceLimit >= 0 && sinceLimit < 3000;
-		if (followsAnother) {
-			retryReason = QStringLiteral("another request of this site is already waiting out the same limit");
-		}
-		if (followsAnother || NetworkFollow::takeRetry(&m_rateLimitRetries, &retryReason) == NetworkFollow::Action::Stop) {
+		// Every request of the site waits out the same limit. Giving up here used to lose most pictures of a
+		// search: the other APIs and pages of a limited site answered 429/503 within seconds of each other and
+		// were dropped, so only the first request ever came back. Waiting a shared delay costs seconds, not results.
+		if (NetworkFollow::takeRetry(&m_rateLimitRetries, &retryReason) == NetworkFollow::Action::Stop) {
 			log(QStringLiteral("[%1][%2] Giving up after rate limit (%3): %4").arg(m_site->url(), m_format, QString::number(statusCode), retryReason), Logger::Warning);
 			m_errors.append(retryReason);
 			setReply(nullptr);
@@ -287,18 +285,29 @@ void PageApi::parse()
 			emit finishedLoading(this, LoadResult::Error);
 			return;
 		}
-		log(QStringLiteral("[%1][%2] Limit reached (%3). New try.").arg(m_site->url(), m_format, QString::number(statusCode)), Logger::Warning);
 		// Wait inside this page only (5 s, then 15 s, at most the retry delay of the site). The shared Retry queue spaced every
 		// retry of a site 60 s apart, so one search stood behind all earlier ones, aborted or not, and looked hung.
 		const int waitSeconds = qMin(m_site->setting("download/throttle_retry", 60).toInt(), 5 * int(qPow(3, m_rateLimitRetries - 1)));
 		m_site->notifyRateLimited(waitSeconds);
+		// Spread the requests that waited for the same limit so their retries do not all arrive at once.
+		const qint64 waitMs = qMin<qint64>(INT_MAX, m_site->rateLimitRemaining() + QRandomGenerator::global()->bounded(1500));
+		log(QStringLiteral("[%1][%2] Limit reached (%3). New try in %4 s.").arg(m_site->url(), m_format, QString::number(statusCode)).arg(double(waitMs) / 1000, 0, 'f', 1), Logger::Warning);
 		setReply(nullptr);
 		if (m_retryTimer == nullptr) {
 			m_retryTimer = new QTimer(this);
 			m_retryTimer->setSingleShot(true);
-			connect(m_retryTimer, &QTimer::timeout, this, [this]() { load(false, true); });
+			connect(m_retryTimer, &QTimer::timeout, this, [this]() {
+				// Another request of the same site may have moved the limit further out; wait for that
+				// instead of asking again into a closed gate.
+				const qint64 remaining = m_site->rateLimitRemaining();
+				if (remaining > 0) {
+					m_retryTimer->start(int(qMin<qint64>(INT_MAX, remaining + 250)));
+					return;
+				}
+				load(false, true);
+			});
 		}
-		m_retryTimer->start(waitSeconds * 1000);
+		m_retryTimer->start(int(waitMs));
 		return;
 	}
 

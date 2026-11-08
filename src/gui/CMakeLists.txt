@@ -80,6 +80,7 @@ add_definitions(-DCONTRIBUTORS="${CONTRIBUTORS}")
 file(GLOB SOURCES
 	"src/main/main.cpp"
 	"src/*.cpp"
+	"src/ai/*.cpp"
 	"src/batch/*.cpp"
 	"src/custom-buttons/*.cpp"
 	"src/docks/*.cpp"

@@ -4,6 +4,7 @@
 #include <QDesktopServices>
 #include <QSignalMapper>
 #include "functions.h"
+#include "ai/story-dialog.h"
 #include "image-library-actions.h"
 #include "main-window.h"
 #include "models/image.h"
@@ -43,6 +44,9 @@ ImageContextMenu::ImageContextMenu(QSettings *settings, QSharedPointer<Image> im
 
 	// MD5 search
 	addAction(QIcon(":/images/icons/hash.png"), tr("Search MD5"), this, SLOT(searchMd5()));
+
+	// AI story behind the picture
+	addAction(tr("AI story…"), this, [this]() { StoryDialog(m_image->getProfile(), m_image, this).exec(); });
 }
 
 

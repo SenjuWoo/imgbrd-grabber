@@ -376,6 +376,37 @@ QList<LibraryEntry> LibraryStore::entries(qint64 collection)
 	return result;
 }
 
+QList<LibraryEntry> LibraryStore::ratedEntries(qint64 collection)
+{
+	QList<LibraryEntry> result;
+	if (!m_ready) {
+		return result;
+	}
+	const QString scope = collection > 0 ? "m" : "i";
+	QString sql = "SELECT i.key,i.metadata," + scope + ".liked," + scope + ".favorite,i.saved_at FROM images i";
+	if (collection > 0) {
+		sql += " JOIN members m ON m.image_key=i.key WHERE m.collection_id=? AND (m.liked=1 OR m.favorite=1)";
+	} else {
+		sql += " WHERE i.liked=1 OR i.favorite=1";
+	}
+	sql += " ORDER BY i.saved_at DESC,i.key";
+	QSqlQuery query(m_database);
+	query.prepare(sql);
+	if (collection > 0) {
+		query.addBindValue(collection);
+	}
+	if (!query.exec()) {
+		m_error = query.lastError().text();
+		return result;
+	}
+	while (query.next()) {
+		result.append({ query.value(0).toString(), QJsonDocument::fromJson(query.value(1).toByteArray()).object(), {},
+						query.value(2).toBool(), query.value(3).toBool(), {}, query.value(4).toString(), 0 });
+	}
+	query.finish();
+	return result;
+}
+
 LibraryEntry LibraryStore::entry(const QString &key, qint64 collection)
 {
 	LibraryEntry result;

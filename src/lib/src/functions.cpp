@@ -710,6 +710,10 @@ QString fixFilenameLinux(const QString &fn, const QString &path, int maxLength, 
 
 	// Fix directories (each part cannot be more than 255 bytes)
 	for (QString &part : parts) {
+		// A tag or file name can contain ".." and would climb out of the save folder.
+		if (part == "." || part == "..") {
+			part = QLatin1String("_");
+		}
 		cutStringToUtf8Bytes(part, 255);
 	}
 
@@ -786,6 +790,11 @@ QString fixFilenameWindows(const QString &fn, const QString &path, int maxLength
 
 	// Fix directories
 	for (QString &part : parts) {
+		// A tag or file name can contain ".." and would climb out of the save folder.
+		if (part == "." || part == "..") {
+			part = QLatin1String("_");
+		}
+
 		// A part cannot be one in the forbidden list
 		if (invalidChars && forbidden.contains(part, Qt::CaseInsensitive)) {
 			part = part + "!";
