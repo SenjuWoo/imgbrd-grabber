@@ -763,9 +763,10 @@ QString fixFilenameWindows(const QString &fn, const QString &path, int maxLength
 	maxLength = maxLength == 0 ? MAX_PATH : maxLength;
 	QString filename = (path + fn).trimmed();
 
-	// Don't do anything when given the "\\?\" prefix (https://stackoverflow.com/questions/21194530/what-does-mean-when-prepended-to-a-file-path)
-	if (filename.startsWith(R"(\\?\)")) {
-		return fn;
+	// An extended-length save folder ("\\?\C:\...") is legitimate and stays supported, but the generated
+	// name still has to be validated: returning it untouched let a ".." in a tag climb above the folder.
+	if (path.startsWith(R"(\\?\)")) {
+		return fn.isEmpty() ? fn : fixFilenameWindows(fn, QString(), maxLength, invalidChars);
 	}
 
 	// Drive

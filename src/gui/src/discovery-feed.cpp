@@ -236,6 +236,24 @@ void DiscoveryFeed::appendSeenForever(const QStringList &keys) const
 	}
 }
 
+void DiscoveryFeed::forgetSeenForever(const QStringList &keys)
+{
+	bool changed = false;
+	for (const QString &key : qAsConst(keys)) {
+		changed = m_seenForever.remove(key) || changed;
+	}
+	if (!changed) {
+		return;
+	}
+	// Rewrite from what is left: an entry the user asked to forget goes, every other one stays.
+	const QString path = seenForeverPath();
+	QStringList lines(m_seenForever.cbegin(), m_seenForever.cend());
+	lines.sort();
+	if (ensureFileParent(path)) {
+		safeWriteFile(path, (lines.join('\n') + '\n').toUtf8());
+	}
+}
+
 void DiscoveryFeed::resetSeen()
 {
 	// The deliberate reset the setting promises: forget both the timed window and the permanent set.
@@ -507,13 +525,21 @@ void DiscoveryFeed::restore(const QStringList &keys)
 			continue;
 		}
 		m_hidden.removeAll(key);
-		for (const QString &tag : m_hiddenRecords.take(key).penalized) {
+		const HiddenRecord record = m_hiddenRecords.take(key);
+		for (const QString &tag : record.penalized) {
 			auto it = m_dislikedTags.find(tag);
 			if (it != m_dislikedTags.end() && (*it -= 1) <= 0) {
 				m_dislikedTags.erase(it);
 			}
 		}
 		m_seen.remove(key);
+		// With "Never" the key is in the permanent set instead, and would otherwise stay blocked.
+		QStringList forgotten {key};
+		const QString md5 = record.image.value("md5").toString();
+		if (!md5.isEmpty()) {
+			forgotten.append(Md5Prefix + md5);
+		}
+		forgetSeenForever(forgotten);
 		// Restored before the next batch flushed it: it must not be marked seen behind the user's back.
 		m_pendingSeen.removeIf([&key](const QPair<QString, QString> &pending) { return pending.first == key; });
 	}

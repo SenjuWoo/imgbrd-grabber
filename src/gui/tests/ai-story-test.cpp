@@ -89,3 +89,34 @@ TEST_CASE("A profile backup carries the stories but never the AI key", "[gui][st
 	REQUIRE(settings.open(QIODevice::ReadOnly));
 	REQUIRE_FALSE(settings.readAll().contains("sk-secret-value"));
 }
+
+TEST_CASE("A backup of an old profile drops a key still sitting in settings.ini", "[gui][story]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	Profile profile(directory.path());
+	profile.getSettings()->setValue("Story/baseUrl", "https://openrouter.ai/api/v1");
+	profile.getSettings()->setValue("Story/apiKey", "sk-legacy-value");
+	profile.getSettings()->sync();
+
+	// The backup is taken before AI Stories is ever opened, so nothing has migrated the key yet.
+	QTemporaryDir backup;
+	const QString zip = QDir(backup.path()).filePath("backup.zip");
+	REQUIRE(saveBackup(&profile, zip));
+	const QString unpacked = QDir(backup.path()).filePath("unpacked");
+	REQUIRE(QDir().mkpath(unpacked));
+	REQUIRE(unzipFile(zip, unpacked));
+
+	QFile settings(QDir(unpacked).filePath("settings.ini"));
+	REQUIRE(settings.open(QIODevice::ReadOnly));
+	const QByteArray contents = settings.readAll();
+	REQUIRE_FALSE(contents.contains("sk-legacy-value"));
+	REQUIRE_FALSE(contents.contains("Story/apiKey"));
+	// The rest of the configuration is still there to restore.
+	REQUIRE(contents.contains("openrouter.ai"));
+
+	// The live profile keeps working, and opening the story settings moves the key out of settings.ini.
+	REQUIRE(PictureStory::apiKey(&profile) == "sk-legacy-value");
+	REQUIRE_FALSE(profile.getSettings()->contains("Story/apiKey"));
+	REQUIRE(QFile::exists(QDir(directory.path()).filePath("story-key.dat")));
+}

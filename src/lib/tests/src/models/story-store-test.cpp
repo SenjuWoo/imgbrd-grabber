@@ -1,5 +1,6 @@
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QTemporaryDir>
@@ -74,4 +75,51 @@ TEST_CASE("Stories survive a damaged store instead of being overwritten by it", 
 	large.setStory("k99999", "One more.", "m");
 	REQUIRE(StoryStore(directory.path()).contains("k0"));
 	REQUIRE(StoryStore(directory.path()).count() == 6006);
+}
+
+TEST_CASE("A store larger than the old 32 MB cap is read instead of discarded", "[story]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QString path = QDir(directory.path()).filePath("stories.json");
+	// A single story file just above the old 32 MB cap: written as raw bytes so the test stays fast.
+	{
+		QFile file(path);
+		REQUIRE(file.open(QIODevice::WriteOnly));
+		file.write(R"({"k0":{"text":")");
+		file.write(QByteArray(33 * 1024 * 1024, 'x'));
+		file.write(R"(","model":"m","at":"2026-01-01T00:00:00Z"}})");
+	}
+	REQUIRE(QFileInfo(path).size() > 32 * 1024 * 1024);
+
+	StoryStore store(directory.path());
+	REQUIRE(store.count() == 1);
+	REQUIRE(store.story("k0").size() == 33 * 1024 * 1024);
+}
+
+TEST_CASE("A store that cannot be moved aside is never overwritten", "[story]")
+{
+#ifdef Q_OS_WIN
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QString path = QDir(directory.path()).filePath("stories.json");
+	{
+		QFile file(path);
+		REQUIRE(file.open(QIODevice::WriteOnly));
+		file.write("{broken");
+	}
+
+	// A second handle keeps the file open, so Windows refuses the rename to stories.json.corrupt-*.
+	QFile lock(path);
+	REQUIRE(lock.open(QIODevice::ReadOnly));
+	StoryStore store(directory.path());
+	REQUIRE(store.count() == 0);
+	store.setStory("a", "This must not land on disk.", "m");
+	lock.close();
+
+	QFile check(path);
+	REQUIRE(check.open(QIODevice::ReadOnly));
+	REQUIRE(check.readAll() == QByteArray("{broken"));
+	REQUIRE(QDir(directory.path()).entryList(QStringList {"stories.json.corrupt-*"}, QDir::Files).isEmpty());
+#endif
 }

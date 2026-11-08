@@ -35,7 +35,8 @@ class PictureStory : public QObject
 		static bool configured(Profile *profile);
 		static QString baseUrl(Profile *profile);
 		static QString apiKey(Profile *profile);
-		static void setApiKey(Profile *profile, const QString &key);
+		/** Writes the key to its own file; false when it could not be written. */
+		static bool setApiKey(Profile *profile, const QString &key);
 		static QString model(Profile *profile);
 		static void configure(Profile *profile, const QString &baseUrl, const QString &apiKey, const QString &model);
 		/** `baseUrl` with the chat endpoint appended and trailing slashes removed; empty when unusable. */

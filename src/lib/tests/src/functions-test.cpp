@@ -101,7 +101,8 @@ TEST_CASE("Functions")
 			assertFixFilename(0, "folder...\\image.jpg", "C:\\test\\", "folder\\image.jpg");
 			assertFixFilename(0, "COM1\\image.jpg", "C:\\test\\", "COM1!\\image.jpg");
 			assertFixFilename(0, "com1\\image.jpg", "C:\\test\\", "com1!\\image.jpg");
-			assertFixFilename(0, "COM1\\image.jpg", "\\\\?\\C:\\test\\", "COM1\\image.jpg");
+			// Extended-length folders are supported, but the name under them is still validated.
+			assertFixFilename(0, "COM1\\image.jpg", QStringLiteral(R"(\\?\C:	est\)"), "COM1!\\image.jpg");
 		}
 
 		SECTION("Fix filename traversal")
@@ -136,6 +137,11 @@ TEST_CASE("Functions")
 			assertContainedFilename(1, "folder/../../escape.jpg", "/home/test/");
 			assertFixFilename(1, "forest/night/image.jpg", "/home/test/", "forest/night/image.jpg");
 			assertFixFilename(1, "forêt/été.jpg", "/home/test/", "forêt/été.jpg");
+
+			// An extended-length save folder is supported, and the name under it is still validated.
+			const QString extended = QStringLiteral("\\\\?\\C:") + bs + "test" + bs;
+			assertContainedFilename(0, path({"..", "..", "escape.jpg"}), extended);
+			assertFixFilename(0, path({"forest", "image.jpg"}), extended, path({"forest", "image.jpg"}));
 		}
 
 		SECTION("Linux")

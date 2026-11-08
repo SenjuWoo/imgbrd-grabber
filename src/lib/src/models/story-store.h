@@ -32,7 +32,7 @@ class StoryStore
 	private:
 		void load() const;
 		void save() const;
-		void keepUnreadable() const;
+		bool keepUnreadable() const;
 
 		struct Story
 		{
@@ -43,6 +43,8 @@ class StoryStore
 		QString m_path;
 		mutable QHash<QString, Story> m_stories;
 		mutable bool m_loaded = false;
+		// The file could not be read or moved aside: writing would destroy stories we never saw.
+		mutable bool m_saveBlocked = false;
 };
 
 #endif // STORY_STORE_H

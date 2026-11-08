@@ -129,6 +129,7 @@ class DiscoveryFeed : public QObject
 		void saveState() const;
 		void pruneSeen();
 		void appendSeenForever(const QStringList &keys) const;
+		void forgetSeenForever(const QStringList &keys);
 		QString seenForeverPath() const;
 		void rebuildTaste();
 		void pageFinished(Page *page, bool success);

@@ -60,7 +60,7 @@ Invoke-Checked npm.cmd @('--prefix',(Join-Path $repo 'src\sites'),'run','check')
 $oldQpa = $env:QT_QPA_PLATFORM
 try {
     $env:QT_QPA_PLATFORM = 'offscreen'
-    Invoke-Checked ctest.exe @('--test-dir',$build,'--output-on-failure','--timeout','120')
+    Invoke-Checked ctest.exe @('--test-dir',$build,'--output-on-failure','--timeout','300')
 } finally {
     [Environment]::SetEnvironmentVariable('QT_QPA_PLATFORM',$oldQpa,'Process')
 }

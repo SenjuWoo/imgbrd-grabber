@@ -92,29 +92,35 @@ QString PictureStory::apiKey(Profile *profile)
 		}
 	}
 
-	// Older builds kept the key in the settings, and settings are part of profile backups: move it out once.
+	// Older builds kept the key in the settings, and settings are part of profile backups: move it out once,
+	// and only drop the old copy when the new file really holds it.
 	const QString legacy = setting(profile, "Story/apiKey");
-	if (!legacy.isEmpty()) {
-		setApiKey(profile, legacy);
+	if (!legacy.isEmpty() && setApiKey(profile, legacy)) {
 		profile->getSettings()->remove("Story/apiKey");
 		profile->getSettings()->sync();
 	}
 	return legacy;
 }
 
-void PictureStory::setApiKey(Profile *profile, const QString &key)
+bool PictureStory::setApiKey(Profile *profile, const QString &key)
 {
 	const QString path = QDir(profile->getPath()).filePath(KeyFile);
 	if (key.trimmed().isEmpty()) {
 		QFile::remove(path);
-		return;
+		return true;
 	}
 	QFile file(path);
-	if (file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
-		file.write(key.trimmed().toUtf8());
+	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
+		log(QStringLiteral("Story: could not save the API key to `%1`").arg(path), Logger::Warning);
+		return false;
 	}
+	if (file.write(key.trimmed().toUtf8()) < 0) {
+		return false;
+	}
+	file.close();
 	// The file holds a secret: readable by its owner only where the platform allows it.
 	QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
+	return true;
 }
 
 QString PictureStory::model(Profile *profile)

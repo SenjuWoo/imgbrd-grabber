@@ -560,6 +560,46 @@ TEST_CASE("Discover lets users say what is not interesting, undo it and restore 
 	REQUIRE(legacy.dismissedCount() == 1);
 }
 
+TEST_CASE("Restoring a hidden picture forgets it from the permanent history too", "[library][home][discovery]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = jsonDanbooru(profile.data());
+
+	// "Never" with two pictures already remembered, one of which is then hidden and restored.
+	auto image = QSharedPointer<Image>::create(site, QMap<QString, QString> {{"id", "960"}, {"md5", QString(32, 'd')}, {"file_url", "https://test.invalid/960.png"}, {"tags", "forest"}}, profile.data());
+	const QString key = LibraryStore::imageKey(*image);
+	{
+		QFile seen(QDir(profile->getPath()).filePath("discover-seen.txt"));
+		REQUIRE(seen.open(QIODevice::WriteOnly));
+		seen.write((key + "\nkeyOther\n").toUtf8());
+	}
+	const QJsonObject state {{"tuning", QJsonObject {{"seenHours", 0}}}};
+	QFile stateFile(DiscoveryFeed::statePath(profile->getPath()));
+	REQUIRE(stateFile.open(QIODevice::WriteOnly));
+	stateFile.write(QJsonDocument(state).toJson());
+	stateFile.close();
+
+	DiscoveryFeed feed(profile.data(), nullptr);
+	REQUIRE(feed.isSeen(key));
+	feed.dismiss(key, {"forest"}, true, image);
+	REQUIRE(feed.isHidden(key));
+	feed.restore({key});
+
+	// It may come back now, and the rest of the history is untouched.
+	REQUIRE_FALSE(feed.isSeen(key));
+	REQUIRE(feed.isSeen("keyOther"));
+
+	// Both facts survive a restart: the restored one is gone from the file, the other is still in it.
+	DiscoveryFeed reloaded(profile.data(), nullptr);
+	REQUIRE_FALSE(reloaded.isSeen(key));
+	REQUIRE(reloaded.isSeen("keyOther"));
+	QFile check(QDir(profile->getPath()).filePath("discover-seen.txt"));
+	REQUIRE(check.open(QIODevice::ReadOnly));
+	REQUIRE(check.readAll().contains("keyOther"));
+}
+
 TEST_CASE("Discover's Never keeps a shown picture out for good, past the 30 000 record cap", "[library][home][discovery]")
 {
 	QTemporaryDir directory;

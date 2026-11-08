@@ -101,6 +101,29 @@ bool saveBackup(Profile *profile, const QString &filePath)
 		}
 	}
 
+	// A key kept in settings.ini by an older build is stripped from the copy: a backup must never carry it,
+	// even when AI Stories was never opened to migrate it.
+	QTemporaryDir scrubbed;
+	if (scrubbed.isValid()) {
+		const QString settingsSource = profile->getPath() + "/settings.ini";
+		if (zipFiles.contains(settingsSource)) {
+			const QString copyPath = scrubbed.filePath("settings.ini");
+			if (QFile::copy(settingsSource, copyPath)) {
+				QSettings copy(copyPath, QSettings::IniFormat);
+				if (copy.contains("Story/apiKey")) {
+					copy.remove("Story/apiKey");
+					copy.sync();
+				}
+				zipFiles.remove(settingsSource);
+				zipFiles.insert(copyPath, "settings.ini");
+			}
+		}
+	}
+	// Never pack the key file itself, whatever the list above holds.
+	for (auto it = zipFiles.begin(); it != zipFiles.end();) {
+		it = it.value().endsWith(QLatin1String("story-key.dat")) ? zipFiles.erase(it) : std::next(it);
+	}
+
 	QTemporaryDir librarySnapshot;
 	if (!librarySnapshot.isValid() || !profile->library()->backupTo(librarySnapshot.filePath("library.sqlite"))
 		|| !backupDirectoryFiles(profile->getPath() + "/library-media", "library-media/", zipFiles)) {
