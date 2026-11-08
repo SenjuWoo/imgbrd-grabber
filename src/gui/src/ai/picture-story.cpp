@@ -11,6 +11,7 @@
 #include <QNetworkAccessManager>
 #include <QNetworkReply>
 #include <QNetworkRequest>
+#include <QSaveFile>
 #include <QSettings>
 #include <QTimer>
 #include <QUrl>
@@ -19,6 +20,7 @@
 #include "models/library-store.h"
 #include "models/profile.h"
 #include "models/site.h"
+#include "tags/tag.h"
 
 
 namespace
@@ -109,15 +111,21 @@ bool PictureStory::setApiKey(Profile *profile, const QString &key)
 		QFile::remove(path);
 		return true;
 	}
-	QFile file(path);
+	const QByteArray bytes = key.trimmed().toUtf8();
+	// Written through a save file: a partial write must not look like a stored key.
+	QSaveFile file(path);
 	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) {
 		log(QStringLiteral("Story: could not save the API key to `%1`").arg(path), Logger::Warning);
 		return false;
 	}
-	if (file.write(key.trimmed().toUtf8()) < 0) {
+	if (file.write(bytes) != bytes.size()) {
+		file.cancelWriting();
 		return false;
 	}
-	file.close();
+	if (!file.commit()) {
+		log(QStringLiteral("Story: could not finish writing the API key to `%1`").arg(path), Logger::Warning);
+		return false;
+	}
 	// The file holds a secret: readable by its owner only where the platform allows it.
 	QFile::setPermissions(path, QFileDevice::ReadOwner | QFileDevice::WriteOwner);
 	return true;
@@ -188,6 +196,16 @@ bool PictureStory::busy() const
 	return m_reply != nullptr;
 }
 
+bool PictureStory::usedPicture() const
+{
+	return m_usedPicture;
+}
+
+bool PictureStory::visionFallback() const
+{
+	return m_visionFallback;
+}
+
 void PictureStory::abort()
 {
 	if (m_reply != nullptr) {
@@ -240,13 +258,58 @@ void PictureStory::generate(const QSharedPointer<Image> &image, const QString &l
 	}
 	m_model = model(m_profile);
 	m_pictureUrl = pictureUrl(*image);
-	// An imported picture has no public URL, so its own file is sent instead, resized first.
-	m_localDataUrl = m_pictureUrl.isEmpty() ? imageDataUrl(localPath) : QString();
+	// A downloaded copy on disk is preferred even when the picture has a URL: hotlink-blocked or
+	// login-only URLs would otherwise leave the model answering from the tags alone.
+	m_localDataUrl = imageDataUrl(localPath);
+	m_usedPicture = false;
+	m_visionFallback = false;
+
+	// Names first: who a character is and which series they come from cannot be seen in the picture, so
+	// those tags are never dropped for space. Technical noise is left out entirely.
+	QStringList characters, series, artists, general;
+	for (const Tag &tag : image->tags()) {
+		const QString type = tag.type().name();
+		if (tag.text().isEmpty()) {
+			continue;
+		}
+		if (type == QLatin1String("character")) {
+			characters.append(tag.text());
+		} else if (type == QLatin1String("copyright")) {
+			series.append(tag.text());
+		} else if (type == QLatin1String("artist")) {
+			artists.append(tag.text());
+		} else if (type != QLatin1String("metadata")) {
+			general.append(tag.text());
+		}
+	}
+	if (characters.isEmpty() && series.isEmpty() && general.isEmpty()) {
+		// Older Library entries carry no tag types: use the plain list without the usual noise.
+		static const QStringList noise {
+			QStringLiteral("highres"), QStringLiteral("absurdres"), QStringLiteral("lowres"),
+			QStringLiteral("commentary"), QStringLiteral("commentary_request"), QStringLiteral("translated"),
+			QStringLiteral("translation_request"), QStringLiteral("tagme"),
+		};
+		for (const QString &tag : image->tagsString()) {
+			if (!noise.contains(tag)) {
+				general.append(tag);
+			}
+		}
+	}
+	general.removeDuplicates();
+	general = general.mid(0, 60);
 
 	QStringList lines;
-	const QStringList tags = image->tagsString();
-	if (!tags.isEmpty()) {
-		lines.append(QStringLiteral("Tags: ") + tags.mid(0, 80).join(' '));
+	if (!characters.isEmpty()) {
+		lines.append(QStringLiteral("Characters: ") + characters.join(", "));
+	}
+	if (!series.isEmpty()) {
+		lines.append(QStringLiteral("Series: ") + series.join(", "));
+	}
+	if (!artists.isEmpty()) {
+		lines.append(QStringLiteral("Artist: ") + artists.join(", "));
+	}
+	if (!general.isEmpty()) {
+		lines.append(QStringLiteral("Tags: ") + general.join(' '));
 	}
 	if (!image->name().isEmpty()) {
 		lines.append(QStringLiteral("Title: ") + image->name());
@@ -258,8 +321,6 @@ void PictureStory::generate(const QSharedPointer<Image> &image, const QString &l
 	if (size.isValid() && !size.isEmpty()) {
 		lines.append(QStringLiteral("Size: %1x%2").arg(size.width()).arg(size.height()));
 	}
-	lines.append(QString());
-	lines.append(QStringLiteral("Write the story behind this picture."));
 	m_prompt = lines.join('\n');
 
 	const QString problem = settingsProblem(m_profile);
@@ -282,11 +343,21 @@ void PictureStory::send(bool withPicture)
 	request.setRawHeader("X-Title", "Grabber");
 	request.setTransferTimeout(TimeoutMs);
 
-	QJsonArray content;
-	content.append(QJsonObject {{"type", "text"}, {"text", m_prompt}});
-	// A local import travels as data; a downloaded picture stays a URL the provider fetches itself.
+	// A local copy travels as data; otherwise the provider fetches the URL itself.
 	const QString picture = !m_localDataUrl.isEmpty() ? m_localDataUrl : m_pictureUrl;
-	if (withPicture && !picture.isEmpty()) {
+	const bool pictured = withPicture && !picture.isEmpty();
+	m_usedPicture = pictured;
+
+	// The instruction says which evidence the answer stands on, so a tags-only result is never dressed up
+	// as something the model actually saw.
+	QString text = m_prompt + QStringLiteral("\n\n");
+	text += pictured
+		? QStringLiteral("Write the story behind this picture. Ground it in what is visibly happening: how many characters there are, their poses, clothing, expressions and the setting. Use the names above only to say who they are. Do not add characters, change clothing, poses or actions, or invent canon lore.")
+		: QStringLiteral("The picture itself is not available, so write from this metadata only. Ground the scene in the tags that describe setting, poses and clothing, and do not describe details they do not support.");
+
+	QJsonArray content;
+	content.append(QJsonObject {{"type", "text"}, {"text", text}});
+	if (pictured) {
 		content.append(QJsonObject {
 			{"type", "image_url"},
 			{"image_url", QJsonObject {{"url", picture}}},
@@ -341,6 +412,7 @@ void PictureStory::finished()
 		&& (status == 400 || status == 404 || status == 415 || status == 422);
 	if (pictureRefused) {
 		m_retried = true;
+		m_visionFallback = true;
 		log(QStringLiteral("Story: %1 refused the picture (%2), retrying from tags").arg(m_model).arg(status), Logger::Warning);
 		send(false);
 		return;

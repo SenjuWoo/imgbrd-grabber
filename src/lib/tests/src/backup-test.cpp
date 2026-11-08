@@ -407,6 +407,36 @@ TEST_CASE("Library restore rolls back when insertion fails", "[library][backup]"
 }
 
 
+TEST_CASE("A settings copy for a backup never keeps the legacy AI key", "[backup]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	Profile profile(directory.path());
+	QSettings *settings = profile.getSettings();
+	settings->setValue("Story/apiKey", "sk-never-in-a-backup");
+	settings->setValue("Story/baseUrl", "https://openrouter.ai/api/v1");
+	settings->setValue("General/language", "fr");
+	settings->sync();
+
+	const QString source = QDir(directory.path()).filePath("settings.ini");
+	QTemporaryDir out;
+	const QString copy = out.filePath("settings.ini");
+	REQUIRE(copySettingsWithoutStoryKey(source, copy));
+
+	const QSettings scrubbed(copy, QSettings::IniFormat);
+	REQUIRE_FALSE(scrubbed.contains("Story/apiKey"));
+	// Every other setting survives.
+	REQUIRE(scrubbed.value("Story/baseUrl").toString() == "https://openrouter.ai/api/v1");
+	REQUIRE(scrubbed.value("General/language").toString() == "fr");
+	// The profile's own file is left alone.
+	REQUIRE(profile.getSettings()->contains("Story/apiKey"));
+
+	// A copy that cannot be written is reported as a failure, never as a silent success.
+	REQUIRE_FALSE(copySettingsWithoutStoryKey(source, out.filePath("missing/settings.ini")));
+	REQUIRE_FALSE(copySettingsWithoutStoryKey(out.filePath("absent.ini"), out.filePath("copy.ini")));
+	REQUIRE_FALSE(QFile::exists(out.filePath("copy.ini")));
+}
+
 TEST_CASE("Library restores a damaged catalog while preserving its exact bytes", "[library][backup]")
 {
 	QTemporaryDir directory;

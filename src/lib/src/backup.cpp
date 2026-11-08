@@ -66,6 +66,34 @@ namespace
 	}
 }
 
+bool copySettingsWithoutStoryKey(const QString &source, const QString &destination)
+{
+	// Unreadable source: there is no way to prove the copy is free of the key.
+	const QSettings original(source, QSettings::IniFormat);
+	if (original.status() != QSettings::NoError) {
+		return false;
+	}
+	if (!QFile::copy(source, destination)) {
+		return false;
+	}
+	{
+		QSettings copy(destination, QSettings::IniFormat);
+		copy.remove("Story/apiKey");
+		copy.sync();
+		if (copy.status() != QSettings::NoError) {
+			QFile::remove(destination);
+			return false;
+		}
+	}
+	// Read it back: a clean sync still has to leave a file that does not contain the key.
+	const QSettings verify(destination, QSettings::IniFormat);
+	if (verify.status() != QSettings::NoError || verify.contains("Story/apiKey")) {
+		QFile::remove(destination);
+		return false;
+	}
+	return true;
+}
+
 bool saveBackup(Profile *profile, const QString &filePath)
 {
 	QHash<QString, QString> files;
@@ -101,22 +129,28 @@ bool saveBackup(Profile *profile, const QString &filePath)
 		}
 	}
 
-	// A key kept in settings.ini by an older build is stripped from the copy: a backup must never carry it,
-	// even when AI Stories was never opened to migrate it.
+	// A key kept in settings.ini by an older build must never leave in a backup, even when AI Stories was
+	// never opened to migrate it. Failing to sanitize aborts the backup instead of packaging the original.
+	const QString settingsSource = profile->getPath() + "/settings.ini";
 	QTemporaryDir scrubbed;
-	if (scrubbed.isValid()) {
-		const QString settingsSource = profile->getPath() + "/settings.ini";
-		if (zipFiles.contains(settingsSource)) {
-			const QString copyPath = scrubbed.filePath("settings.ini");
-			if (QFile::copy(settingsSource, copyPath)) {
-				QSettings copy(copyPath, QSettings::IniFormat);
-				if (copy.contains("Story/apiKey")) {
-					copy.remove("Story/apiKey");
-					copy.sync();
-				}
-				zipFiles.remove(settingsSource);
-				zipFiles.insert(copyPath, "settings.ini");
+	if (zipFiles.contains(settingsSource)) {
+		const QSettings live(settingsSource, QSettings::IniFormat);
+		if (live.status() != QSettings::NoError) {
+			log("Backup: settings.ini cannot be read; backup aborted", Logger::Error);
+			return false;
+		}
+		if (live.contains("Story/apiKey")) {
+			if (!scrubbed.isValid()) {
+				log("Backup: could not create a temporary folder to remove the AI key", Logger::Error);
+				return false;
 			}
+			const QString copyPath = scrubbed.filePath("settings.ini");
+			if (!copySettingsWithoutStoryKey(settingsSource, copyPath)) {
+				log("Backup: could not copy settings.ini without the AI key; backup aborted", Logger::Error);
+				return false;
+			}
+			zipFiles.remove(settingsSource);
+			zipFiles.insert(copyPath, "settings.ini");
 		}
 	}
 	// Never pack the key file itself, whatever the list above holds.

@@ -560,6 +560,48 @@ TEST_CASE("Discover lets users say what is not interesting, undo it and restore 
 	REQUIRE(legacy.dismissedCount() == 1);
 }
 
+TEST_CASE("A restore that cannot be saved keeps the picture in the seen history", "[library][home][discovery]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = jsonDanbooru(profile.data());
+
+	auto image = QSharedPointer<Image>::create(site, QMap<QString, QString> {{"id", "961"}, {"md5", QString(32, 'e')}, {"file_url", "https://test.invalid/961.png"}, {"tags", "forest"}}, profile.data());
+	const QString key = LibraryStore::imageKey(*image);
+	const QString seenPath = QDir(profile->getPath()).filePath("discover-seen.txt");
+	{
+		QFile seen(seenPath);
+		REQUIRE(seen.open(QIODevice::WriteOnly));
+		seen.write((key + "\nkeyOther\n").toUtf8());
+	}
+	QFile stateFile(DiscoveryFeed::statePath(profile->getPath()));
+	REQUIRE(stateFile.open(QIODevice::WriteOnly));
+	stateFile.write(QJsonDocument(QJsonObject {{"tuning", QJsonObject {{"seenHours", 0}}}}).toJson());
+	stateFile.close();
+
+	DiscoveryFeed feed(profile.data(), nullptr);
+	REQUIRE(feed.isSeen(key));
+	feed.dismiss(key, {"forest"}, true, image);
+
+	// A second handle on the history file makes the rewrite fail: the picture must stay hidden and seen,
+	// not look restored while the file still remembers it.
+	QFile lock(seenPath);
+	REQUIRE(lock.open(QIODevice::ReadOnly));
+	feed.restore({key});
+	REQUIRE(feed.isHidden(key));
+	REQUIRE(feed.isSeen(key));
+	lock.close();
+
+	// Once the file can be written, the same restore goes through and survives a restart.
+	feed.restore({key});
+	REQUIRE_FALSE(feed.isHidden(key));
+	REQUIRE_FALSE(feed.isSeen(key));
+	DiscoveryFeed reloaded(profile.data(), nullptr);
+	REQUIRE_FALSE(reloaded.isSeen(key));
+	REQUIRE(reloaded.isSeen("keyOther"));
+}
+
 TEST_CASE("Restoring a hidden picture forgets it from the permanent history too", "[library][home][discovery]")
 {
 	QTemporaryDir directory;

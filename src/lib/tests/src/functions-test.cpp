@@ -102,7 +102,7 @@ TEST_CASE("Functions")
 			assertFixFilename(0, "COM1\\image.jpg", "C:\\test\\", "COM1!\\image.jpg");
 			assertFixFilename(0, "com1\\image.jpg", "C:\\test\\", "com1!\\image.jpg");
 			// Extended-length folders are supported, but the name under them is still validated.
-			assertFixFilename(0, "COM1\\image.jpg", QStringLiteral(R"(\\?\C:	est\)"), "COM1!\\image.jpg");
+			assertFixFilename(0, "COM1\\image.jpg", QStringLiteral(R"(\\?\C:\test\)"), "COM1!\\image.jpg");
 		}
 
 		SECTION("Fix filename traversal")

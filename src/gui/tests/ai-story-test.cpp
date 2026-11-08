@@ -1,5 +1,6 @@
 #include <QDir>
 #include <QFile>
+#include <QImage>
 #include <QSettings>
 #include <QTemporaryDir>
 #include <QUrl>
@@ -55,7 +56,14 @@ TEST_CASE("AI story settings allow a keyless localhost server and keep the key o
 	PictureStory::configure(&profile, "https://openrouter.ai/api/v1", "secret", "openrouter/auto");
 	REQUIRE(PictureStory::apiKey(&profile) == "secret");
 	REQUIRE_FALSE(profile.getSettings()->contains("Story/apiKey"));
-	REQUIRE(QFile::exists(QDir(directory.path()).filePath("story-key.dat")));
+	const QString keyPath = QDir(directory.path()).filePath("story-key.dat");
+	REQUIRE(QFile::exists(keyPath));
+	// Written exactly once, with no leftover bytes from an earlier key.
+	{
+		QFile stored(keyPath);
+		REQUIRE(stored.open(QIODevice::ReadOnly));
+		REQUIRE(stored.readAll() == QByteArray("secret"));
+	}
 
 	// A legacy key in the settings is moved out once and then ignored there.
 	profile.getSettings()->remove("Story/apiKey");
@@ -65,6 +73,29 @@ TEST_CASE("AI story settings allow a keyless localhost server and keep the key o
 	REQUIRE(PictureStory::apiKey(&profile) == "legacy");
 	REQUIRE_FALSE(profile.getSettings()->contains("Story/apiKey"));
 	REQUIRE(PictureStory::apiKey(&profile) == "legacy");
+}
+
+TEST_CASE("A picture sent to a vision model is resized and keeps its proportions", "[gui][story]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QString path = QDir(directory.path()).filePath("large.png");
+	QImage image(2000, 1000, QImage::Format_RGB32);
+	image.fill(Qt::darkGreen);
+	REQUIRE(image.save(path));
+
+	const QString dataUrl = PictureStory::imageDataUrl(path);
+	REQUIRE(dataUrl.startsWith("data:image/jpeg;base64,"));
+	const QImage decoded = QImage::fromData(QByteArray::fromBase64(dataUrl.mid(dataUrl.indexOf(',') + 1).toLatin1()));
+	REQUIRE(decoded.size() == QSize(1024, 512));
+
+	// Nothing readable to send is reported as nothing, so the request is never built with an empty image.
+	REQUIRE(PictureStory::imageDataUrl(QDir(directory.path()).filePath("missing.png")).isEmpty());
+	QFile broken(QDir(directory.path()).filePath("broken.png"));
+	REQUIRE(broken.open(QIODevice::WriteOnly));
+	broken.write("not an image");
+	broken.close();
+	REQUIRE(PictureStory::imageDataUrl(broken.fileName()).isEmpty());
 }
 
 TEST_CASE("A profile backup carries the stories but never the AI key", "[gui][story]")

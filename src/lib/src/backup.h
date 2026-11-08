@@ -24,4 +24,11 @@ bool saveBackup(Profile *profile, const QString &filePath);
  */
 bool loadBackup(Profile *profile, const QString &filePath);
 
+/**
+ * Copies `settings.ini` to `destination` without the legacy `Story/apiKey`, leaving every other setting
+ * as it was. Returns false when the source cannot be read, the copy cannot be written, or the written
+ * copy still contains the key.
+ */
+bool copySettingsWithoutStoryKey(const QString &source, const QString &destination);
+
 #endif // BACKUP_H

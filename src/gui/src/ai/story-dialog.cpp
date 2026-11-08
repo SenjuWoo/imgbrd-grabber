@@ -88,7 +88,13 @@ StoryDialog::StoryDialog(Profile *profile, const QSharedPointer<Image> &image, Q
 	connect(buttons, &QDialogButtonBox::rejected, this, &QDialog::reject);
 	connect(m_story, &PictureStory::ready, this, [this](const QString &key, const QString &text) {
 		setStory(text, PictureStory::model(m_profile));
-		m_status->setText(tr("Written by %1.").arg(PictureStory::model(m_profile)));
+		if (m_story->usedPicture()) {
+			m_status->setText(tr("Written from the picture and its tags by %1.").arg(PictureStory::model(m_profile)));
+		} else if (m_story->visionFallback()) {
+			m_status->setText(tr("The provider refused the picture, so this story was written from tags only by %1.").arg(PictureStory::model(m_profile)));
+		} else {
+			m_status->setText(tr("No picture was available for this one, so this story was written from tags only by %1.").arg(PictureStory::model(m_profile)));
+		}
 		m_generate->setEnabled(true);
 		Q_UNUSED(key)
 	});

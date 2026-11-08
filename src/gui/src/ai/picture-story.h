@@ -53,6 +53,12 @@ class PictureStory : public QObject
 		void generate(const QSharedPointer<Image> &image, const QString &localPath = {});
 		void abort();
 		bool busy() const;
+		/** Whether the last request actually carried the picture, or was answered from the tags alone. */
+		bool usedPicture() const;
+		/** True when the provider refused the picture and the story was written from tags only. */
+		bool visionFallback() const;
+		/** The picture encoded for a vision request, downscaled and bounded; empty when it cannot be read. */
+		static QString imageDataUrl(const QString &path);
 
 	signals:
 		void ready(const QString &key, const QString &text);
@@ -61,7 +67,6 @@ class PictureStory : public QObject
 	private:
 		void send(bool withPicture);
 		void finished();
-		static QString imageDataUrl(const QString &path);
 		Profile *m_profile;
 		QNetworkAccessManager *m_manager;
 		QNetworkReply *m_reply = nullptr;
@@ -73,6 +78,8 @@ class PictureStory : public QObject
 		QString m_model;
 		QString m_baseUrl;
 		bool m_retried = false;
+		bool m_usedPicture = false;
+		bool m_visionFallback = false;
 };
 
 #endif // PICTURE_STORY_H
