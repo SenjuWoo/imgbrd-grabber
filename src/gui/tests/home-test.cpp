@@ -584,16 +584,20 @@ TEST_CASE("A restore that cannot be saved keeps the picture in the seen history"
 	REQUIRE(feed.isSeen(key));
 	feed.dismiss(key, {"forest"}, true, image);
 
-	// A second handle on the history file makes the rewrite fail: the picture must stay hidden and seen,
-	// not look restored while the file still remembers it.
-	QFile lock(seenPath);
-	REQUIRE(lock.open(QIODevice::ReadOnly));
+	// A directory in place of the history file makes the rewrite fail on every platform: the picture must
+	// stay hidden and seen, not look restored while the file still remembers it.
+	REQUIRE(QFile::remove(seenPath));
+	REQUIRE(QDir().mkpath(seenPath));
 	feed.restore({key});
 	REQUIRE(feed.isHidden(key));
 	REQUIRE(feed.isSeen(key));
-	lock.close();
 
-	// Once the file can be written, the same restore goes through and survives a restart.
+	// Once the file can be written again, the same restore goes through and survives a restart.
+	REQUIRE(QDir(seenPath).removeRecursively());
+	{
+		QFile recreated(seenPath);
+		REQUIRE(recreated.open(QIODevice::WriteOnly));
+	}
 	feed.restore({key});
 	REQUIRE_FALSE(feed.isHidden(key));
 	REQUIRE_FALSE(feed.isSeen(key));
