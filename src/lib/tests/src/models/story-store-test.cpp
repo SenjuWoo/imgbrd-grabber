@@ -99,27 +99,27 @@ TEST_CASE("A store larger than the old 32 MB cap is read instead of discarded", 
 
 TEST_CASE("A store that cannot be moved aside is never overwritten", "[story]")
 {
-#ifdef Q_OS_WIN
-	QTemporaryDir directory;
-	REQUIRE(directory.isValid());
-	const QString path = QDir(directory.path()).filePath("stories.json");
-	{
-		QFile file(path);
-		REQUIRE(file.open(QIODevice::WriteOnly));
-		file.write("{broken");
-	}
+	#ifdef Q_OS_WIN
+		QTemporaryDir directory;
+		REQUIRE(directory.isValid());
+		const QString path = QDir(directory.path()).filePath("stories.json");
+		{
+			QFile file(path);
+			REQUIRE(file.open(QIODevice::WriteOnly));
+			file.write("{broken");
+		}
 
-	// A second handle keeps the file open, so Windows refuses the rename to stories.json.corrupt-*.
-	QFile lock(path);
-	REQUIRE(lock.open(QIODevice::ReadOnly));
-	StoryStore store(directory.path());
-	REQUIRE(store.count() == 0);
-	store.setStory("a", "This must not land on disk.", "m");
-	lock.close();
+		// A second handle keeps the file open, so Windows refuses the rename to stories.json.corrupt-*.
+		QFile lock(path);
+		REQUIRE(lock.open(QIODevice::ReadOnly));
+		StoryStore store(directory.path());
+		REQUIRE(store.count() == 0);
+		store.setStory("a", "This must not land on disk.", "m");
+		lock.close();
 
-	QFile check(path);
-	REQUIRE(check.open(QIODevice::ReadOnly));
-	REQUIRE(check.readAll() == QByteArray("{broken"));
-	REQUIRE(QDir(directory.path()).entryList(QStringList {"stories.json.corrupt-*"}, QDir::Files).isEmpty());
-#endif
+		QFile check(path);
+		REQUIRE(check.open(QIODevice::ReadOnly));
+		REQUIRE(check.readAll() == QByteArray("{broken"));
+		REQUIRE(QDir(directory.path()).entryList(QStringList {"stories.json.corrupt-*"}, QDir::Files).isEmpty());
+	#endif
 }

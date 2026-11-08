@@ -16,8 +16,7 @@ namespace
 
 StoryStore::StoryStore(const QString &profileDirectory)
 	: m_path(QDir(profileDirectory).filePath("stories.json"))
-{
-}
+{}
 
 // A file we cannot read is kept next to the new one instead of being overwritten, so a damaged store
 // can still be recovered by hand. The caller closes the file first: Windows refuses to rename an open one.

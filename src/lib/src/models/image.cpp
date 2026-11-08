@@ -1160,8 +1160,8 @@ QString Image::tooltip() const
 	return QStringLiteral("%1%2%3%4%5%6%7%8%9")
 		.arg(m_tags.isEmpty() ? " " : tr("<b>Tags:</b> %1<br/><br/>").arg(TagStylist(m_profile).stylished(m_tags, false, false, m_settings->value("Viewer/tagOrder", "type").toString()).join(' ')))
 		.arg(m_id == 0 ? " " : tr("<b>ID:</b> %1<br/>").arg(m_id))
-		// Site-provided fields are escaped: a tooltip renders anything that looks like HTML, and a post's
-		// name or author must not be able to draw its own markup over the real details.
+	    // Site-provided fields are escaped: a tooltip renders anything that looks like HTML, and a post's
+	    // name or author must not be able to draw its own markup over the real details.
 		.arg(m_name.isEmpty() ? " " : tr("<b>Name:</b> %1<br/>").arg(m_name.toHtmlEscaped()))
 		.arg(rating.isEmpty() ? " " : tr("<b>Rating:</b> %1<br/>").arg(rating.toHtmlEscaped()))
 		.arg(!score.isEmpty() ? tr("<b>Score:</b> %1<br/>").arg(score.toHtmlEscaped()) : " ")
