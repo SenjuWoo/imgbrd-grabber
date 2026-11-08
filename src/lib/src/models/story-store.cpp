@@ -9,14 +9,21 @@
 
 namespace
 {
-	// Stories are a few hundred characters each; the cap only stops the file from growing without bound.
-	constexpr int MaxStories = 5000;
+	// Stories are a few hundred characters each; a file this big is not a story store we wrote.
 	constexpr qint64 MaxFileSize = 32 * 1024 * 1024;
 }
 
 StoryStore::StoryStore(const QString &profileDirectory)
 	: m_path(QDir(profileDirectory).filePath("stories.json"))
 {
+}
+
+// A file we cannot read is kept next to the new one instead of being overwritten, so a damaged store
+// can still be recovered by hand.
+void StoryStore::keepUnreadable() const
+{
+	const QString backup = m_path + QStringLiteral(".corrupt-") + QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd-HHmmss"));
+	QFile::rename(m_path, backup);
 }
 
 QString StoryStore::story(const QString &key) const
@@ -55,16 +62,6 @@ void StoryStore::setStory(const QString &key, const QString &text, const QString
 		return;
 	}
 	load();
-	if (!m_stories.contains(key) && m_stories.size() >= MaxStories) {
-		// Forget the oldest story rather than the newest one the user asked for.
-		QString oldest;
-		for (auto it = m_stories.constBegin(); it != m_stories.constEnd(); ++it) {
-			if (oldest.isEmpty() || it->at < m_stories.value(oldest).at) {
-				oldest = it.key();
-			}
-		}
-		m_stories.remove(oldest);
-	}
 	m_stories.insert(key, {text.trimmed(), model, QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs)});
 	save();
 }
@@ -84,10 +81,22 @@ void StoryStore::load() const
 	}
 	m_loaded = true;
 	QFile file(m_path);
-	if (!file.open(QIODevice::ReadOnly) || file.size() > MaxFileSize) {
+	if (!file.exists()) {
 		return;
 	}
-	const auto root = QJsonDocument::fromJson(file.readAll()).object();
+	if (!file.open(QIODevice::ReadOnly) || file.size() > MaxFileSize) {
+		keepUnreadable();
+		return;
+	}
+	QJsonParseError error {};
+	const QJsonDocument document = QJsonDocument::fromJson(file.readAll(), &error);
+	if (error.error != QJsonParseError::NoError || !document.isObject()) {
+		// Keep what is there instead of letting the next save overwrite it with an empty store.
+		file.close();
+		keepUnreadable();
+		return;
+	}
+	const auto root = document.object();
 	for (auto it = root.constBegin(); it != root.constEnd(); ++it) {
 		const auto entry = it.value().toObject();
 		const QString text = entry.value("text").toString();

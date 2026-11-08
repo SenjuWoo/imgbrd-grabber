@@ -8,6 +8,7 @@
 #include <QLineEdit>
 #include <QListWidget>
 #include <QLocale>
+#include <QMessageBox>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSpinBox>
@@ -127,6 +128,16 @@ DiscoverTasteDialog::DiscoverTasteDialog(DiscoveryFeed *feed, QWidget *parent)
 	seenHint->setObjectName("discoverSeenHint");
 	seenHint->setWordWrap(true);
 	form->addRow(QString(), seenHint);
+	auto *forget = new QPushButton(tr("Forget shown pictures…"), this);
+	forget->setObjectName("discoverForgetSeen");
+	forget->setToolTip(tr("Starts the feed fresh: the pictures Discover already showed may appear again."));
+	connect(forget, &QPushButton::clicked, this, [this, feed, seenHint]() {
+		if (QMessageBox::question(this, tr("Discover"), tr("Forget every picture Discover has shown? Pictures you already saw may then appear again.")) == QMessageBox::Yes) {
+			feed->resetSeen();
+			seenHint->setText(tr("Discover forgot the pictures it showed; the feed starts fresh."));
+		}
+	});
+	form->addRow(QString(), forget);
 	layout->addLayout(form);
 	connect(m_variety, &QComboBox::currentIndexChanged, this, &DiscoverTasteDialog::updateVariety);
 	updateVariety();

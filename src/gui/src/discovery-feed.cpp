@@ -113,6 +113,18 @@ void DiscoveryFeed::ratingChanged()
 
 void DiscoveryFeed::loadState()
 {
+	// The permanent set lives in its own file, one shown key per line, so "Never" has no size cap and
+	// does not depend on the JSON state being readable. ("forever" is a macro in the Windows headers.)
+	QFile remembered(seenForeverPath());
+	if (remembered.open(QIODevice::ReadOnly | QIODevice::Text) && remembered.size() <= 64 * 1024 * 1024) {
+		while (!remembered.atEnd()) {
+			const QByteArray line = remembered.readLine().trimmed();
+			if (!line.isEmpty()) {
+				m_seenForever.insert(QString::fromUtf8(line));
+			}
+		}
+	}
+
 	QFile file(statePath(m_profile->getPath()));
 	if (!file.open(QIODevice::ReadOnly) || file.size() > 16 * 1024 * 1024) {
 		return;
@@ -164,8 +176,12 @@ void DiscoveryFeed::loadState()
 
 bool DiscoveryFeed::isSeen(const QString &key) const
 {
+	// "Never" also covers pictures recorded before the setting changed and pictures shown since.
+	if (m_tuning.seenHours <= 0) {
+		return m_seenForever.contains(key) || m_seen.contains(key);
+	}
 	const auto it = m_seen.constFind(key);
-	return it != m_seen.constEnd() && (m_tuning.seenHours <= 0 || *it + qint64(m_tuning.seenHours) * 3600 > QDateTime::currentSecsSinceEpoch());
+	return it != m_seen.constEnd() && *it + qint64(m_tuning.seenHours) * 3600 > QDateTime::currentSecsSinceEpoch();
 }
 
 int DiscoveryFeed::seenCount() const
@@ -174,6 +190,14 @@ int DiscoveryFeed::seenCount() const
 	for (auto it = m_seen.constBegin(); it != m_seen.constEnd(); ++it) {
 		if (!it.key().startsWith(Md5Prefix)) {
 			++count;
+		}
+	}
+	// The permanent set stores plain keys and md5 aliases together; aliases start with "md5:" too.
+	if (m_tuning.seenHours <= 0) {
+		for (auto it = m_seenForever.constBegin(); it != m_seenForever.constEnd(); ++it) {
+			if (!it->startsWith(Md5Prefix)) {
+				++count;
+			}
 		}
 	}
 	return count;
@@ -187,12 +211,65 @@ QString DiscoveryFeed::repeatHint() const
 	return tr("Seen pictures come back after %n hour(s).", "", m_tuning.seenHours);
 }
 
+QString DiscoveryFeed::seenForeverPath() const
+{
+	return QFileInfo(statePath(m_profile->getPath())).dir().filePath(QStringLiteral("discover-seen.txt"));
+}
+
+void DiscoveryFeed::appendSeenForever(const QStringList &keys) const
+{
+	if (keys.isEmpty()) {
+		return;
+	}
+	const QString path = seenForeverPath();
+	if (!ensureFileParent(path)) {
+		return;
+	}
+	QFile file(path);
+	if (!file.open(QIODevice::Append | QIODevice::Text)) {
+		log(QStringLiteral("Discover: could not remember %1 seen picture(s) in `%2`").arg(keys.size()).arg(path), Logger::Warning);
+		return;
+	}
+	for (const QString &key : keys) {
+		file.write(key.toUtf8());
+		file.write("\n");
+	}
+}
+
+void DiscoveryFeed::resetSeen()
+{
+	// The deliberate reset the setting promises: forget both the timed window and the permanent set.
+	m_seen.clear();
+	m_seenForever.clear();
+	m_pendingSeen.clear();
+	m_shownMd5.clear();
+	QFile::remove(seenForeverPath());
+	saveState();
+	emit statusChanged(tr("Discover forgot every picture it showed; the feed starts fresh."));
+}
+
 void DiscoveryFeed::pruneSeen()
 {
-	// Past the window a picture may come back; with "never" only the size cap forgets the oldest.
+	// Past the window a picture may come back; with "never" nothing may come back at all.
 	const qint64 now = QDateTime::currentSecsSinceEpoch();
+	if (m_tuning.seenHours <= 0) {
+		// Move the timed records into the permanent set instead of letting the size cap forget them.
+		if (!m_seen.isEmpty()) {
+			QStringList moved;
+			moved.reserve(m_seen.size());
+			for (auto it = m_seen.constBegin(); it != m_seen.constEnd(); ++it) {
+				if (!m_seenForever.contains(it.key())) {
+					m_seenForever.insert(it.key());
+					moved.append(it.key());
+				}
+			}
+			m_seen.clear();
+			appendSeenForever(moved);
+		}
+		return;
+	}
 	for (auto it = m_seen.begin(); it != m_seen.end();) {
-		it = m_tuning.seenHours > 0 && *it + qint64(m_tuning.seenHours) * 3600 <= now ? m_seen.erase(it) : std::next(it);
+		it = *it + qint64(m_tuning.seenHours) * 3600 <= now ? m_seen.erase(it) : std::next(it);
 	}
 	if (m_seen.size() > MaxSeen) {
 		QList<qint64> times = m_seen.values();

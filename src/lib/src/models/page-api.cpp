@@ -162,6 +162,16 @@ void PageApi::load(bool rateLimit, bool force)
 		}
 	}
 
+	// A request that starts while the site is cooling down waits for the deadline the limited request
+	// set instead of spending a request that is certain to be refused. force is used by the retry timer
+	// and by redirects, which already waited or answer a request that is still in flight.
+	const qint64 cooldown = m_site->rateLimitRemaining();
+	if (cooldown > 0 && !force) {
+		m_loading = false;
+		retryTimer()->start(int(qMin<qint64>(INT_MAX, cooldown + 250)));
+		return;
+	}
+
 	if (m_url.isEmpty() && !m_errors.isEmpty()) {
 		for (const QString &err : qAsConst(m_errors)) {
 			log(QStringLiteral("[%1][%2] %3").arg(m_site->url(), m_format, err), Logger::Warning);
@@ -199,6 +209,25 @@ void PageApi::load(bool rateLimit, bool force)
 		: m_site->get(m_url, type, QUrl(), "", nullptr, m_headers));
 	connect(m_reply, &NetworkReply::finished, this, &PageApi::parse);
 }
+QTimer *PageApi::retryTimer()
+{
+	if (m_retryTimer == nullptr) {
+		m_retryTimer = new QTimer(this);
+		m_retryTimer->setSingleShot(true);
+		connect(m_retryTimer, &QTimer::timeout, this, [this]() {
+			// Another request of the same site may have moved the limit further out; wait for that
+			// instead of asking again into a closed gate.
+			const qint64 remaining = m_site->rateLimitRemaining();
+			if (remaining > 0) {
+				m_retryTimer->start(int(qMin<qint64>(INT_MAX, remaining + 250)));
+				return;
+			}
+			load(false, true);
+		});
+	}
+	return m_retryTimer;
+}
+
 void PageApi::abort()
 {
 	if (m_retryTimer != nullptr) {
@@ -287,27 +316,19 @@ void PageApi::parse()
 		}
 		// Wait inside this page only (5 s, then 15 s, at most the retry delay of the site). The shared Retry queue spaced every
 		// retry of a site 60 s apart, so one search stood behind all earlier ones, aborted or not, and looked hung.
-		const int waitSeconds = qMin(m_site->setting("download/throttle_retry", 60).toInt(), 5 * int(qPow(3, m_rateLimitRetries - 1)));
+		int waitSeconds = qMin(m_site->setting("download/throttle_retry", 60).toInt(), 5 * int(qPow(3, m_rateLimitRetries - 1)));
+		// The server may say how long to wait; a sensible number wins over the guessed backoff.
+		bool retryAfterOk = false;
+		const int retryAfter = m_reply->rawHeader("Retry-After").trimmed().toInt(&retryAfterOk);
+		if (retryAfterOk && retryAfter > 0) {
+			waitSeconds = qMax(waitSeconds, qMin(retryAfter, 300));
+		}
 		m_site->notifyRateLimited(waitSeconds);
 		// Spread the requests that waited for the same limit so their retries do not all arrive at once.
 		const qint64 waitMs = qMin<qint64>(INT_MAX, m_site->rateLimitRemaining() + QRandomGenerator::global()->bounded(1500));
 		log(QStringLiteral("[%1][%2] Limit reached (%3). New try in %4 s.").arg(m_site->url(), m_format, QString::number(statusCode)).arg(double(waitMs) / 1000, 0, 'f', 1), Logger::Warning);
 		setReply(nullptr);
-		if (m_retryTimer == nullptr) {
-			m_retryTimer = new QTimer(this);
-			m_retryTimer->setSingleShot(true);
-			connect(m_retryTimer, &QTimer::timeout, this, [this]() {
-				// Another request of the same site may have moved the limit further out; wait for that
-				// instead of asking again into a closed gate.
-				const qint64 remaining = m_site->rateLimitRemaining();
-				if (remaining > 0) {
-					m_retryTimer->start(int(qMin<qint64>(INT_MAX, remaining + 250)));
-					return;
-				}
-				load(false, true);
-			});
-		}
-		m_retryTimer->start(int(waitMs));
+		retryTimer()->start(int(waitMs));
 		return;
 	}
 

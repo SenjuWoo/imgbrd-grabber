@@ -10,7 +10,8 @@
  * AI-written stories for Library pictures, kept in the profile ("stories.json").
  * A story is text only: keyed by the Library picture's own key, so it survives restarts and is
  * shown again when the picture is opened. Lives beside discover.json so no Library schema change
- * is needed and older versions can still open the Library.
+ * is needed and older versions can still open the Library. There is no size cap: a story is only
+ * removed when its picture is, and an unreadable file is moved aside instead of overwritten.
  */
 class StoryStore
 {
@@ -31,6 +32,7 @@ class StoryStore
 	private:
 		void load() const;
 		void save() const;
+		void keepUnreadable() const;
 
 		struct Story
 		{

@@ -48,6 +48,19 @@ void assertFixFilename(int platform, const QString &filename, const QString &pat
 	REQUIRE(actual == expected);
 }
 
+/** The result must stay a relative name under the save folder, whatever the tokens contained. */
+void assertContainedFilename(int platform, const QString &filename, const QString &path)
+{
+	const QString actual = platform == 1 ? fixFilenameLinux(filename, path) : fixFilenameWindows(filename, path);
+	const QChar backslash(92);
+	REQUIRE_FALSE(actual.startsWith('/'));
+	REQUIRE_FALSE(actual.startsWith(backslash));
+	REQUIRE_FALSE(actual.contains(QStringLiteral("..") + backslash));
+	REQUIRE_FALSE(actual.contains(QStringLiteral("../")));
+	REQUIRE_FALSE(actual.endsWith(QStringLiteral("/..")));
+	REQUIRE_FALSE(actual.endsWith(QStringLiteral("\\..")));
+}
+
 static QByteArray readFile(const QString &path)
 {
 	QFile f(path);
@@ -93,13 +106,36 @@ TEST_CASE("Functions")
 
 		SECTION("Fix filename traversal")
 		{
-			// A tag or title containing ".." cannot climb out of the save folder, on either platform.
 			// The backslash is built from its code point so the test itself has no escape maze.
 			const QChar bs(92);
-			const QString evil = QStringLiteral("..") + bs + QStringLiteral("..") + bs + QStringLiteral("escape") + bs + QStringLiteral("image.jpg");
-			const QString safe = QStringLiteral("_") + bs + QStringLiteral("_") + bs + QStringLiteral("escape") + bs + QStringLiteral("image.jpg");
-			assertFixFilename(0, evil, QStringLiteral("C:") + bs + QStringLiteral("test") + bs, safe);
+			const QString folder = QStringLiteral("C:") + bs + QStringLiteral("test") + bs;
+			const auto path = [bs](std::initializer_list<QString> parts) {
+				return QStringList(parts).join(bs);
+			};
+
+			// Plain traversal, and the padded forms Windows would only normalize to ".." after the check.
+			assertContainedFilename(0, path({"..", "..", "escape.jpg"}), folder);
+			assertContainedFilename(0, path({"folder", " .. ", "escape.jpg"}), folder);
+			assertContainedFilename(0, path({"folder", ".. ", "escape.jpg"}), folder);
+			assertContainedFilename(0, path({"folder", " ... ", "escape.jpg"}), folder);
+			assertContainedFilename(0, path({".", "escape.jpg"}), folder);
+			// Absolute and drive/UNC-looking names stay relative to the save folder.
+			assertContainedFilename(0, QStringLiteral("C:/escape.jpg"), folder);
+			assertContainedFilename(0, QStringLiteral("//server/share/escape.jpg"), folder);
+			assertContainedFilename(0, path({"", "", "server", "share", "escape.jpg"}), folder);
+
+			// Legitimate subfolders, unicode and reserved names keep working.
+			assertFixFilename(0, path({"forest", "night", "image.jpg"}), folder, path({"forest", "night", "image.jpg"}));
+			assertFixFilename(0, "forêt/été.jpg", folder, QStringLiteral("forêt_été.jpg"));
+			assertFixFilename(0, path({"CON", "image.jpg"}), folder, path({"CON!", "image.jpg"}));
+			assertFixFilename(0, QStringLiteral("a") + QString(200, 'b') + ".jpg", folder, QStringLiteral("a") + QString(200, 'b') + ".jpg");
+			assertContainedFilename(0, QString(400, 'c') + ".jpg", folder);
+
+			// Linux: ".." is traversal there too, while spaces around a name are legal.
 			assertFixFilename(1, "../../escape/image.jpg", "/home/test/", "_/_/escape/image.jpg");
+			assertContainedFilename(1, "folder/../../escape.jpg", "/home/test/");
+			assertFixFilename(1, "forest/night/image.jpg", "/home/test/", "forest/night/image.jpg");
+			assertFixFilename(1, "forêt/été.jpg", "/home/test/", "forêt/été.jpg");
 		}
 
 		SECTION("Linux")

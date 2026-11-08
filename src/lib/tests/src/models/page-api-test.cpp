@@ -134,10 +134,42 @@ TEST_CASE("PageApi")
 		PageApi followerApi(&follower, profile, site, site->getApis().first(), tags);
 		QSignalSpy followerSpy(&followerApi, &PageApi::finishedLoading);
 		followerApi.load(); // The same limit, moments later: same wait, then a retry.
-		REQUIRE(followerSpy.wait(15000));
+		REQUIRE(followerSpy.wait(30000));
 		// It retried instead of giving up, and both queued replies were used.
 		REQUIRE(CustomNetworkAccessManager::NextFiles.isEmpty());
 		waitingApi.abort();
+	}
+
+	SECTION("A new request waits for a cooldown another request started")
+	{
+		// Starting a search on a site that is visibly cooling down used to send the request anyway and get a
+		// 429 back. It now waits for the same deadline, so a search costs one wait instead of two failures.
+		Site *site = sites.first();
+		site->setSetting("download/throttle_retry", 3600, 60);
+		CustomNetworkAccessManager::NextFiles.clear();
+		CustomNetworkAccessManager::NextFiles.enqueue("429");
+
+		QStringList tags = QStringList() << "test";
+		Page limited(profile, site, sites, tags);
+		PageApi limitedApi(&limited, profile, site, site->getApis().first(), tags);
+		limitedApi.load(); // 429: starts the site's cooldown.
+		QTest::qWait(300);
+		REQUIRE(site->rateLimitRemaining() > 0);
+
+		// The queue is empty now: a request sent during the cooldown would fail at once with an error.
+		Page fresh(profile, site, sites, tags);
+		PageApi freshApi(&fresh, profile, site, site->getApis().first(), tags);
+		QSignalSpy spy(&freshApi, &PageApi::finishedLoading);
+		freshApi.load();
+		QTest::qWait(300);
+		REQUIRE(spy.isEmpty());
+		REQUIRE(CustomNetworkAccessManager::NextFiles.isEmpty());
+
+		// Aborting cancels the wait at once.
+		freshApi.abort();
+		REQUIRE_FALSE(spy.wait(300));
+		limitedApi.abort();
+		CustomNetworkAccessManager::NextFiles.clear();
 	}
 }
 

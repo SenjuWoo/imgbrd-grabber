@@ -98,6 +98,8 @@ class DiscoveryFeed : public QObject
 		int seenCount() const;
 		/** When pictures shown before may come back, in words: the cutoff the feed applies. */
 		QString repeatHint() const;
+		/** Forgets every picture Discover has shown, so the feed starts fresh. */
+		void resetSeen();
 
 	signals:
 		void itemsReady(const QList<DiscoveryItem> &items);
@@ -126,6 +128,8 @@ class DiscoveryFeed : public QObject
 		void loadState();
 		void saveState() const;
 		void pruneSeen();
+		void appendSeenForever(const QStringList &keys) const;
+		QString seenForeverPath() const;
 		void rebuildTaste();
 		void pageFinished(Page *page, bool success);
 		void emitGroup(int group, bool force);
@@ -174,6 +178,9 @@ class DiscoveryFeed : public QObject
 		QSet<QString> m_shownMd5;
 		// Pictures already shown: key (and "md5:<md5>" so another source's copy counts too) -> when, in epoch seconds.
 		QHash<QString, qint64> m_seen;
+		// With "Never", shown pictures move here and to discover-seen.txt: a set has no size cap, so an old
+		// picture cannot come back just because the timed map had to forget its oldest entries.
+		QSet<QString> m_seenForever;
 		// Shown but not yet marked seen: they count once the next batch is asked for (key, md5).
 		QList<QPair<QString, QString>> m_pendingSeen;
 		QStringList m_hidden;

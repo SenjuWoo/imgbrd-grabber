@@ -2,6 +2,7 @@
 #include <QApplication>
 #include <QClipboard>
 #include <QDialogButtonBox>
+#include <QFileInfo>
 #include <QFormLayout>
 #include <QHBoxLayout>
 #include <QLabel>
@@ -10,6 +11,7 @@
 #include <QPlainTextEdit>
 #include <QProgressDialog>
 #include <QPushButton>
+#include <QSet>
 #include <QVBoxLayout>
 #include "ai/picture-story.h"
 #include "models/image.h"
@@ -17,6 +19,21 @@
 #include "models/profile.h"
 #include "models/story-store.h"
 #include "ui/toast.h"
+
+
+namespace
+{
+	/** The local file behind a Library picture, for imports that have no public URL to send. */
+	QString localPathFor(Profile *profile, const QString &key, qint64 collection = 0)
+	{
+		for (const QString &path : profile->library()->entry(key, collection).localPaths) {
+			if (QFileInfo::exists(path)) {
+				return path;
+			}
+		}
+		return {};
+	}
+}
 
 
 StoryDialog::StoryDialog(Profile *profile, const QSharedPointer<Image> &image, QWidget *parent)
@@ -89,7 +106,7 @@ StoryDialog::StoryDialog(Profile *profile, const QSharedPointer<Image> &image, Q
 	} else if (PictureStory::configured(profile)) {
 		generate();
 	} else {
-		m_status->setText(tr("Add your AI base URL and API key under AI settings, then write a story."));
+		m_status->setText(PictureStory::settingsProblem(profile));
 	}
 	showSettings(!PictureStory::configured(profile));
 }
@@ -123,13 +140,13 @@ void StoryDialog::generate()
 	saveSettings();
 	if (!PictureStory::configured(m_profile)) {
 		showSettings(true);
-		m_status->setText(tr("Add your AI base URL and API key first."));
+		m_status->setText(PictureStory::settingsProblem(m_profile));
 		return;
 	}
 	showSettings(false);
 	m_generate->setEnabled(false);
 	m_status->setText(tr("Writing…"));
-	m_story->generate(m_image);
+	m_story->generate(m_image, localPathFor(m_profile, m_key));
 }
 
 
@@ -142,16 +159,26 @@ namespace
 			StoryBatch(Profile *profile, QWidget *parent)
 				: QObject(parent), m_profile(profile), m_parent(parent), m_store(profile->getPath()), m_writer(new PictureStory(profile, this))
 			{
+				// Favorites can be set on the whole Library and inside a collection: take both, once each.
 				StoryStore store(profile->getPath());
-				for (const auto &entry : profile->library()->ratedEntries(0)) {
-					if (!entry.favorite || entry.image.isEmpty() || store.contains(entry.key)) {
-						continue;
+				QSet<QString> collected;
+				const auto add = [this, &store, &collected](qint64 collection) {
+					for (const auto &entry : m_profile->library()->ratedEntries(collection)) {
+						if (!entry.favorite || entry.image.isEmpty() || store.contains(entry.key) || collected.contains(entry.key)) {
+							continue;
+						}
+						auto image = QSharedPointer<Image>::create(m_profile);
+						if (image->read(entry.image, m_profile->getSites())) {
+							collected.insert(entry.key);
+							m_keys.append(entry.key);
+							m_paths.append(localPathFor(m_profile, entry.key, collection));
+							m_images.append(image);
+						}
 					}
-					auto image = QSharedPointer<Image>::create(profile);
-					if (image->read(entry.image, profile->getSites())) {
-						m_keys.append(entry.key);
-						m_images.append(image);
-					}
+				};
+				add(0);
+				for (const auto &collection : m_profile->library()->collections()) {
+					add(collection.id);
 				}
 			}
 
@@ -204,7 +231,7 @@ namespace
 					m_progress->setValue(m_index);
 				}
 				// m_index only moves in ready(), so the story is saved under the picture it was written for.
-				m_writer->generate(m_images.at(m_index));
+				m_writer->generate(m_images.at(m_index), m_paths.value(m_index));
 			}
 
 			Profile *m_profile;
@@ -213,6 +240,7 @@ namespace
 			PictureStory *m_writer;
 			QProgressDialog *m_progress = nullptr;
 			QStringList m_keys;
+			QStringList m_paths;
 			QList<QSharedPointer<Image>> m_images;
 			int m_index = 0;
 			bool m_stopped = false;
@@ -222,7 +250,7 @@ namespace
 void StoryDialog::writeForFavorites(Profile *profile, QWidget *parent)
 {
 	if (!PictureStory::configured(profile)) {
-		QMessageBox::information(parent, tr("Story"), tr("Add your AI base URL and API key in the story window first."));
+		QMessageBox::information(parent, tr("Story"), PictureStory::settingsProblem(profile));
 		return;
 	}
 	auto *batch = new StoryBatch(profile, parent);

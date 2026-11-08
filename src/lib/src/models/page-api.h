@@ -115,6 +115,7 @@ class PageApi : public QObject
 		QSet<QString> m_redirectsSeen;
 		int m_redirectHops = 0;
 		int m_rateLimitRetries = 0;
+		QTimer *retryTimer(); // Single-shot timer that asks again once the site's shared cooldown ends.
 		QTimer *m_retryTimer = nullptr; // Waits before asking again after a rate limit, outside the shared request queue.
 
 		// Sources with a fixed page size join several of their pages to fill a larger requested one.

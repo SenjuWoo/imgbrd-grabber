@@ -560,6 +560,58 @@ TEST_CASE("Discover lets users say what is not interesting, undo it and restore 
 	REQUIRE(legacy.dismissedCount() == 1);
 }
 
+TEST_CASE("Discover's Never keeps a shown picture out for good, past the 30 000 record cap", "[library][home][discovery]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+
+	// A profile that chose Never, with more shown pictures than the timed history holds (30 000).
+	QJsonObject seenAt;
+	for (int i = 0; i < 30050; ++i) {
+		seenAt.insert("key" + QString::number(i), double(1));
+	}
+	const QJsonObject state {
+		{"tuning", QJsonObject {{"seenHours", 0}}},
+		{"seenAt", seenAt},
+	};
+	QFile stateFile(DiscoveryFeed::statePath(profile->getPath()));
+	REQUIRE(stateFile.open(QIODevice::WriteOnly));
+	stateFile.write(QJsonDocument(state).toJson());
+	stateFile.close();
+
+	DiscoveryFeed feed(profile.data(), nullptr);
+	// The oldest record used to be forgotten by the cap; "Never" means it stays.
+	REQUIRE(feed.isSeen("key0"));
+	REQUIRE(feed.seenCount() == 30050);
+
+	// It survives a restart, from its own file rather than the JSON map.
+	DiscoveryFeed reloaded(profile.data(), nullptr);
+	REQUIRE(reloaded.isSeen("key0"));
+	REQUIRE(reloaded.seenCount() == 30050);
+
+	// Forgetting is a deliberate action, and it sticks.
+	reloaded.resetSeen();
+	REQUIRE_FALSE(reloaded.isSeen("key0"));
+	REQUIRE(reloaded.seenCount() == 0);
+	DiscoveryFeed after(profile.data(), nullptr);
+	REQUIRE_FALSE(after.isSeen("key0"));
+
+	// A timed window still expires on its own: 48 h of history, one record from a week ago.
+	QJsonObject old;
+	old.insert("keyOld", double(QDateTime::currentSecsSinceEpoch() - 8 * 24 * 3600));
+	const QJsonObject timed {
+		{"tuning", QJsonObject {{"seenHours", 48}}},
+		{"seenAt", old},
+	};
+	QFile timedFile(DiscoveryFeed::statePath(profile->getPath()));
+	REQUIRE(timedFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+	timedFile.write(QJsonDocument(timed).toJson());
+	timedFile.close();
+	DiscoveryFeed window(profile.data(), nullptr);
+	REQUIRE_FALSE(window.isSeen("keyOld"));
+}
+
 TEST_CASE("The taste dialog explains Discover and edits focus, variety and tag preferences", "[library][home][discovery]")
 {
 	QTemporaryDir directory;

@@ -742,6 +742,13 @@ QString fixFilenameLinux(const QString &fn, const QString &path, int maxLength, 
 	QString suffix = fi.suffix();
 	filename = (fi.path() != "." ? fi.path() + "/" : QString()) + fi.completeBaseName().left(245) + (suffix.isEmpty() ? QString() : "." + fi.suffix());
 
+	// Whatever the tokens held, the result stays a relative name under the save folder.
+	if (!fn.isEmpty()) {
+		while (filename.startsWith('/')) {
+			filename.remove(0, 1);
+		}
+	}
+
 	return filename;
 }
 
@@ -790,19 +797,23 @@ QString fixFilenameWindows(const QString &fn, const QString &path, int maxLength
 
 	// Fix directories
 	for (QString &part : parts) {
-		// A tag or file name can contain ".." and would climb out of the save folder.
-		if (part == "." || part == "..") {
+		// Windows ignores trailing spaces and periods, so " .. " or "..  " would pass a check made on the
+		// raw part and only become ".." later. Normalize first, then replace anything that is only dots.
+		const QString original = part.trimmed();
+		part = original;
+		while (part.endsWith('.')) {
+			part.chop(1);
+			part = part.trimmed();
+		}
+		// Empty parts are left alone (a path-only template keeps its trailing separator); a part that was
+		// nothing but dots would be a relative path, so it becomes a plain name instead.
+		if (!original.isEmpty() && part.count('.') == part.length()) {
 			part = QLatin1String("_");
 		}
 
 		// A part cannot be one in the forbidden list
 		if (invalidChars && forbidden.contains(part, Qt::CaseInsensitive)) {
 			part = part + "!";
-		}
-
-		// A part cannot finish by a period
-		while (invalidChars && part.endsWith('.')) {
-			part = part.left(part.length() - 1).trimmed();
 		}
 
 		// A part cannot start or finish with a space
@@ -838,6 +849,10 @@ QString fixFilenameWindows(const QString &fn, const QString &path, int maxLength
 	filename = drive + filename + (!ext.isEmpty() ? "." + ext : QString());
 	if (!fn.isEmpty()) {
 		filename = filename.right(filename.length() - index - 1);
+		// Whatever the tokens held, the result stays a relative name under the save folder.
+		while (filename.startsWith(sep) || filename.startsWith('/')) {
+			filename.remove(0, 1);
+		}
 	}
 
 	return filename;
