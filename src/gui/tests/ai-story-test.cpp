@@ -669,6 +669,32 @@ TEST_CASE("An aborted generation answers nothing and sends nothing more", "[gui]
 	REQUIRE(failed.count() == 0);
 }
 
+TEST_CASE("A model that only thought is reported as such, not as a missing story", "[gui][story]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> owned(makeLibraryProfile(directory.path()));
+	Profile &profile = *owned;
+	prepareStory(&profile);
+
+	const QString path = QDir(directory.path()).filePath("picture.png");
+	QImage picture(24, 24, QImage::Format_RGB32);
+	picture.fill(Qt::gray);
+	REQUIRE(picture.save(path));
+
+	// What a free reasoning model returns when the token budget runs out inside its thinking.
+	FakeNetwork network;
+	network.answers = {R"({"choices":[{"message":{"content":null,"reasoning":"Considering the picture... "},"finish_reason":"length"}]})"};
+	PictureStory story(&profile, nullptr, &network);
+	QSignalSpy failed(&story, &PictureStory::failed);
+	story.generate(taggedImage(&profile), path);
+	spinUntil([&]() { return failed.count() > 0; });
+
+	REQUIRE(failed.count() == 1);
+	REQUIRE(story.errorKind() == PictureStory::Error::Provider);
+	REQUIRE(failed.first().at(1).toString().contains("whole answer budget"));
+}
+
 TEST_CASE("The model list is read for free vision models only", "[gui][story]")
 {
 	const QByteArray json = R"({"data":[

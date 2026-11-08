@@ -711,7 +711,8 @@ void PictureStory::send(bool withPicture)
 	}
 	const QJsonObject body {
 		{"model", modelToUse},
-		{"max_tokens", 1000},
+		// Free models often reason before answering; a small budget can be spent entirely on that, leaving no story.
+		{"max_tokens", 2000},
 		{"messages", QJsonArray {
 			QJsonObject {
 				{"role", "system"},
@@ -750,8 +751,11 @@ void PictureStory::finished()
 
 	QString text;
 	const auto choices = root.value("choices").toArray();
+	QString reasoning;
 	if (!choices.isEmpty()) {
-		text = messageText(choices.first().toObject().value("message").toObject()).trimmed();
+		const QJsonObject message = choices.first().toObject().value("message").toObject();
+		text = messageText(message).trimmed();
+		reasoning = message.value("reasoning").toString();
 	}
 	if (!text.isEmpty()) {
 		if (m_sceneStage) {
@@ -770,6 +774,12 @@ void PictureStory::finished()
 	QString error = root.value("error").toObject().value("message").toString();
 	if (error.isEmpty()) {
 		error = reply->errorString();
+	}
+	// A reasoning model that answered nothing but its own thinking: say so instead of "no story".
+	if (text.isEmpty() && !reasoning.isEmpty() && status == 200) {
+		log(QStringLiteral("Story: %1 spent the whole budget on reasoning").arg(m_model), Logger::Warning);
+		fail(Error::Provider, tr("The model used its whole answer budget thinking and returned no story. Try again, or choose a model that writes without a long reasoning pass."));
+		return;
 	}
 
 	// Every failure keeps its own meaning: a 404 is a wrong model, not a picture the provider refused.
