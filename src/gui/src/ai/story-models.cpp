@@ -50,14 +50,15 @@ QList<StoryModel> StoryModelCatalog::parse(const QByteArray &json)
 			const QString modality = architecture.value("modality").toString();
 			model.images = modality.contains(QLatin1String("image"));
 		}
-		// A model that only answers with pictures cannot write a story.
+		// Output capability is its own flag: a model that only answers with pictures or embeddings cannot
+		// write a story, whatever it accepts as input.
 		const QJsonArray outputs = architecture.value("output_modalities").toArray();
 		if (!outputs.isEmpty()) {
 			bool writesText = false;
 			for (const QJsonValue &output : outputs) {
 				writesText = writesText || output.toString() == QLatin1String("text");
 			}
-			model.images = model.images && writesText;
+			model.text = writesText;
 		}
 
 		const QJsonObject pricing = object.value("pricing").toObject();

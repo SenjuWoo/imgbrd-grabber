@@ -42,24 +42,34 @@ namespace
 	// A stored automatic choice is reused for a week; the provider's catalogue changes, its ids less so.
 	constexpr qint64 AutoModelMaxAge = 7 * 24 * 3600;
 
-	// Automatic choices are cached per role: a vision model for stories with a picture, a text model for tags only.
-	QString cachedChoice(Profile *profile, const char *idKey)
+	// Automatic choices are cached per role, each with its own provider identity: resolving a text model must
+	// never make a vision model from another provider look current, or the other way round.
+	struct ChoiceCache
+	{
+		const char *id;
+		const char *base;
+		const char *at;
+	};
+	const ChoiceCache VisionChoice {"Story/autoModelId", "Story/autoModelBase", "Story/autoModelAt"};
+	const ChoiceCache TextChoice {"Story/autoTextId", "Story/autoTextBase", "Story/autoTextAt"};
+
+	QString cachedChoice(Profile *profile, const ChoiceCache &keys)
 	{
 		const QSettings *settings = profile->getSettings();
-		const qint64 chosen = settings->value("Story/autoModelAt", 0).toLongLong();
-		const QString base = settings->value("Story/autoModelBase").toString();
+		const qint64 chosen = settings->value(keys.at, 0).toLongLong();
+		const QString base = settings->value(keys.base).toString();
 		if (chosen <= 0 || QDateTime::currentSecsSinceEpoch() - chosen > AutoModelMaxAge || base != PictureStory::baseUrl(profile)) {
 			return {};
 		}
-		return settings->value(idKey).toString().trimmed();
+		return settings->value(keys.id).toString().trimmed();
 	}
 
-	void storeChoice(Profile *profile, const char *idKey, const QString &model)
+	void storeChoice(Profile *profile, const ChoiceCache &keys, const QString &model)
 	{
 		QSettings *settings = profile->getSettings();
-		settings->setValue(idKey, model.trimmed());
-		settings->setValue("Story/autoModelBase", model.isEmpty() ? QString() : PictureStory::baseUrl(profile));
-		settings->setValue("Story/autoModelAt", model.isEmpty() ? 0 : QDateTime::currentSecsSinceEpoch());
+		settings->setValue(keys.id, model.trimmed());
+		settings->setValue(keys.base, model.isEmpty() ? QString() : PictureStory::baseUrl(profile));
+		settings->setValue(keys.at, model.isEmpty() ? 0 : QDateTime::currentSecsSinceEpoch());
 	}
 
 	QString setting(Profile *profile, const QString &name)
@@ -228,22 +238,22 @@ void PictureStory::setAutoModel(Profile *profile, bool automatic)
 
 QString PictureStory::cachedAutoModel(Profile *profile)
 {
-	return cachedChoice(profile, "Story/autoModelId");
+	return cachedChoice(profile, VisionChoice);
 }
 
 void PictureStory::setCachedAutoModel(Profile *profile, const QString &model)
 {
-	storeChoice(profile, "Story/autoModelId", model);
+	storeChoice(profile, VisionChoice, model);
 }
 
 QString PictureStory::cachedAutoTextModel(Profile *profile)
 {
-	return cachedChoice(profile, "Story/autoTextId");
+	return cachedChoice(profile, TextChoice);
 }
 
 void PictureStory::setCachedAutoTextModel(Profile *profile, const QString &model)
 {
-	storeChoice(profile, "Story/autoTextId", model);
+	storeChoice(profile, TextChoice, model);
 }
 
 QString PictureStory::preferredModel(Profile *profile)
@@ -260,7 +270,8 @@ QString PictureStory::chooseModel(const QList<StoryModel> &models, bool needVisi
 {
 	QList<StoryModel> eligible;
 	for (const StoryModel &model : models) {
-		if (!model.free || (needVision && !model.images)) {
+		// Both modes need a model that writes text; only the picture path also needs one that reads images.
+		if (!model.free || !model.text || (needVision && !model.images)) {
 			continue;
 		}
 		// An explicit choice outranks any guessing.

@@ -695,6 +695,68 @@ TEST_CASE("A model that only thought is reported as such, not as a missing story
 	REQUIRE(failed.first().at(1).toString().contains("whole answer budget"));
 }
 
+TEST_CASE("A cached model from one provider never serves another", "[gui][story]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	Profile profile(directory.path());
+	prepareStory(&profile);
+	REQUIRE(PictureStory::baseUrl(&profile) == "https://openrouter.test/api/v1");
+
+	// Provider A resolves a vision model.
+	PictureStory::setCachedAutoModel(&profile, "vendor/a-vision");
+	REQUIRE(PictureStory::cachedAutoModel(&profile) == "vendor/a-vision");
+
+	// Switching provider invalidates both roles.
+	PictureStory::configure(&profile, "https://provider-b.test/v1", "test-key", "vendor/manual");
+	REQUIRE(PictureStory::cachedAutoModel(&profile).isEmpty());
+	REQUIRE(PictureStory::cachedAutoTextModel(&profile).isEmpty());
+
+	// B resolves a text model; that must not make A's vision id look current.
+	PictureStory::setCachedAutoTextModel(&profile, "vendor/b-text");
+	REQUIRE(PictureStory::cachedAutoTextModel(&profile) == "vendor/b-text");
+	REQUIRE(PictureStory::cachedAutoModel(&profile).isEmpty());
+
+	// The reverse order: A caches text, B resolves vision, A's text id stays out.
+	PictureStory::configure(&profile, "https://openrouter.test/api/v1", "test-key", "vendor/manual");
+	REQUIRE(PictureStory::cachedAutoTextModel(&profile).isEmpty());
+	PictureStory::setCachedAutoTextModel(&profile, "vendor/a-text");
+	PictureStory::configure(&profile, "https://provider-b.test/v1", "test-key", "vendor/manual");
+	PictureStory::setCachedAutoModel(&profile, "vendor/b-vision");
+	REQUIRE(PictureStory::cachedAutoModel(&profile) == "vendor/b-vision");
+	REQUIRE(PictureStory::cachedAutoTextModel(&profile).isEmpty());
+}
+
+TEST_CASE("Only models that write text can be chosen for a story", "[gui][story]")
+{
+	StoryModel writer;
+	writer.id = "vendor/text";
+	writer.free = true;
+	writer.context = 4000;
+	StoryModel painter;
+	painter.id = "vendor/image-out";
+	painter.free = true;
+	painter.images = true;
+	painter.text = false;
+	StoryModel embedder;
+	embedder.id = "vendor/embed";
+	embedder.free = true;
+	embedder.text = false;
+	embedder.context = 8000;
+	StoryModel seer;
+	seer.id = "vendor/vision-vl";
+	seer.free = true;
+	seer.images = true;
+	seer.context = 2000;
+	const QList<StoryModel> models {painter, embedder, writer, seer};
+
+	// A text model for tags-only, a vision model when a picture is sent, never an image-output or embedding one.
+	REQUIRE(PictureStory::chooseModel(models, false) == "vendor/text");
+	REQUIRE(PictureStory::chooseModel(models, true) == "vendor/vision-vl");
+	REQUIRE(PictureStory::chooseModel({painter, embedder}, false).isEmpty());
+	REQUIRE(PictureStory::chooseModel({painter, embedder}, true).isEmpty());
+}
+
 TEST_CASE("The model list is read for free vision models only", "[gui][story]")
 {
 	const QByteArray json = R"({"data":[
@@ -713,7 +775,8 @@ TEST_CASE("The model list is read for free vision models only", "[gui][story]")
 	// A model that only produces images is not a story writer.
 	for (const StoryModel &model : models) {
 		if (model.id == "vendor/image-out") {
-			REQUIRE_FALSE(model.images);
+			REQUIRE(model.images);
+			REQUIRE_FALSE(model.text);
 		}
 	}
 	// Nothing free and capable leaves paid models at the back, never picked automatically.

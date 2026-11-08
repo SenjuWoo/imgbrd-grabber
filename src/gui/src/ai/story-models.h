@@ -15,7 +15,10 @@ struct StoryModel
 {
 	QString id;
 	QString name;
+	/** Takes an image as input. */
 	bool images = false;
+	/** Answers with text; false for embedding-only or image-output models. */
+	bool text = true;
 	bool free = false;
 	int context = 0;
 };
