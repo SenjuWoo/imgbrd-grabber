@@ -93,7 +93,17 @@ void StoryModelCatalog::fetch()
 		m_reply = nullptr;
 	}
 
-	const QUrl url(PictureStory::endpoint(PictureStory::baseUrl(m_profile)).toString() + QStringLiteral("/models"));
+	// The list lives under the same API root as the chat endpoint; a key must not leave over plain http.
+	const QString problem = PictureStory::settingsProblem(m_profile);
+	if (!problem.isEmpty()) {
+		emit failed(problem);
+		return;
+	}
+	const QUrl url = PictureStory::modelsEndpoint(PictureStory::baseUrl(m_profile));
+	if (url.isEmpty()) {
+		emit failed(tr("The AI base URL is not a usable http(s) address."));
+		return;
+	}
 	QNetworkRequest request(url);
 	const QString key = PictureStory::apiKey(m_profile);
 	if (!key.isEmpty()) {

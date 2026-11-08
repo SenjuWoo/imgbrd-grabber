@@ -223,6 +223,7 @@ namespace
 			explicit FakeNetwork(QObject *parent = nullptr) : QNetworkAccessManager(parent) {}
 
 			QList<QByteArray> bodies;
+			QList<QUrl> urls;
 			QList<QByteArray> answers;
 			int status = 200;
 
@@ -230,6 +231,7 @@ namespace
 			QNetworkReply *createRequest(Operation, const QNetworkRequest &request, QIODevice *outgoing) override
 			{
 				bodies.append(outgoing != nullptr ? outgoing->readAll() : QByteArray());
+				urls.append(request.url());
 				// A failing status answers with an error body: a 429 that also carried a story would be a lie.
 				QByteArray answer = status >= 400
 					? QByteArray(R"({"error":{"message":"Request refused"}})")
@@ -464,6 +466,135 @@ TEST_CASE("Story tags keep actions and clothing ahead of the budget", "[gui][sto
 
 	// A budget still caps the whole list, and duplicates never double up.
 	REQUIRE(PictureStory::prioritizedTags(QStringList {"smile", "smile", "forest"}, 2).size() == 2);
+}
+
+TEST_CASE("The model list lives beside the chat endpoint, not under it", "[gui][story]")
+{
+	const QString base = QStringLiteral("https://openrouter.ai/api/v1");
+	REQUIRE(PictureStory::modelsEndpoint(base).toString() == "https://openrouter.ai/api/v1/models");
+	REQUIRE(PictureStory::endpoint(base).toString() == "https://openrouter.ai/api/v1/chat/completions");
+
+	// Trailing slashes and a pasted chat endpoint name the same API root.
+	const QString slashed = QStringLiteral("https://openrouter.ai/api/v1/");
+	REQUIRE(PictureStory::modelsEndpoint(slashed).toString() == "https://openrouter.ai/api/v1/models");
+	const QString pasted = QStringLiteral("https://openrouter.ai/api/v1/chat/completions");
+	REQUIRE(PictureStory::modelsEndpoint(pasted).toString() == "https://openrouter.ai/api/v1/models");
+	REQUIRE(PictureStory::endpoint(pasted).toString() == "https://openrouter.ai/api/v1/chat/completions");
+
+	// A local server keeps its own root.
+	REQUIRE(PictureStory::modelsEndpoint(QStringLiteral("http://localhost:1234/v1")).toString() == "http://localhost:1234/v1/models");
+	REQUIRE(PictureStory::modelsEndpoint(QStringLiteral("not a url")).isEmpty());
+
+	// The catalogue asks that exact URL, with the key, and nothing else.
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	Profile profile(directory.path());
+	prepareStory(&profile);
+	FakeNetwork network;
+	network.answers = {R"({"data":[{"id":"vendor/free-vision","architecture":{"input_modalities":["text","image"],"output_modalities":["text"]},"pricing":{"prompt":"0","completion":"0"}}]})"};
+	StoryModelCatalog catalog(&profile, nullptr, &network);
+	QSignalSpy ready(&catalog, &StoryModelCatalog::ready);
+	catalog.fetch();
+	spinUntil([&]() { return ready.count() > 0; });
+	REQUIRE(ready.count() == 1);
+	REQUIRE(network.urls.size() == 1);
+	REQUIRE(network.urls.first().toString() == "https://openrouter.test/api/v1/models");
+}
+
+TEST_CASE("A manual model is the model that is asked, and a cached automatic one is not", "[gui][story]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> owned(makeLibraryProfile(directory.path()));
+	Profile &profile = *owned;
+	prepareStory(&profile);
+
+	const QString path = QDir(directory.path()).filePath("picture.png");
+	QImage picture(32, 32, QImage::Format_RGB32);
+	picture.fill(Qt::darkCyan);
+	REQUIRE(picture.save(path));
+
+	// Manual: exactly what the user typed.
+	PictureStory::setAutoModel(&profile, false);
+	PictureStory::configure(&profile, "https://openrouter.test/api/v1", "test-key", "vendor/manual-model");
+	FakeNetwork manual;
+	PictureStory first(&profile, nullptr, &manual);
+	QSignalSpy ready(&first, &PictureStory::ready);
+	first.generate(taggedImage(&profile), path);
+	spinUntil([&]() { return ready.count() > 0; });
+	REQUIRE(manual.bodies.size() == 1);
+	REQUIRE(manual.bodies.first().contains("\"model\":\"vendor/manual-model\""));
+
+	// Automatic: the resolved free model, never the field's leftover value.
+	PictureStory::setAutoModel(&profile, true);
+	PictureStory::setCachedAutoModel(&profile, "vendor/free-vision");
+	FakeNetwork automatic;
+	PictureStory second(&profile, nullptr, &automatic);
+	QSignalSpy secondReady(&second, &PictureStory::ready);
+	second.generate(taggedImage(&profile), path);
+	spinUntil([&]() { return secondReady.count() > 0; });
+	REQUIRE(automatic.bodies.size() == 1);
+	REQUIRE(automatic.bodies.first().contains("\"model\":\"vendor/free-vision\""));
+
+	// A selection made for another provider is not reused.
+	REQUIRE(PictureStory::cachedAutoModel(&profile) == "vendor/free-vision");
+	PictureStory::configure(&profile, "https://other.invalid/v1", "test-key", "vendor/manual-model");
+	REQUIRE(PictureStory::cachedAutoModel(&profile).isEmpty());
+}
+
+TEST_CASE("Write from tags only never attaches the picture, even when one is available", "[gui][story]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> owned(makeLibraryProfile(directory.path()));
+	Profile &profile = *owned;
+	prepareStory(&profile);
+
+	// This picture has both a local file and a file URL: a tags-only story must still send neither.
+	const QString path = QDir(directory.path()).filePath("picture.png");
+	QImage picture(48, 48, QImage::Format_RGB32);
+	picture.fill(Qt::darkMagenta);
+	REQUIRE(picture.save(path));
+	auto image = taggedImage(&profile);
+	REQUIRE_FALSE(image->url().isEmpty());
+
+	FakeNetwork network;
+	PictureStory story(&profile, nullptr, &network);
+	QSignalSpy ready(&story, &PictureStory::ready);
+	story.generate(image, path, true);
+	spinUntil([&]() { return ready.count() > 0; });
+
+	REQUIRE(ready.count() == 1);
+	REQUIRE(network.bodies.size() == 1);
+	REQUIRE_FALSE(network.bodies.first().contains("image_url"));
+	REQUIRE_FALSE(network.bodies.first().contains("base64"));
+	REQUIRE_FALSE(story.usedPicture());
+	REQUIRE(story.visionFallback());
+}
+
+TEST_CASE("An aborted generation answers nothing and sends nothing more", "[gui][story]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> owned(makeLibraryProfile(directory.path()));
+	Profile &profile = *owned;
+	prepareStory(&profile);
+
+	const QString path = QDir(directory.path()).filePath("picture.png");
+	QImage picture(24, 24, QImage::Format_RGB32);
+	picture.fill(Qt::black);
+	REQUIRE(picture.save(path));
+
+	FakeNetwork network;
+	PictureStory story(&profile, nullptr, &network);
+	QSignalSpy ready(&story, &PictureStory::ready);
+	QSignalSpy failed(&story, &PictureStory::failed);
+	story.generate(taggedImage(&profile), path);
+	// The answer is already queued; aborting must keep it from reaching the dialog.
+	story.abort();
+	spinUntil([&]() { return ready.count() + failed.count() > 0; }, 1500);
+	REQUIRE(ready.count() == 0);
+	REQUIRE(failed.count() == 0);
 }
 
 TEST_CASE("The model list is read for free vision models only", "[gui][story]")

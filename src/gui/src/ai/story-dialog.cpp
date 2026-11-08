@@ -76,7 +76,7 @@ StoryDialog::StoryDialog(Profile *profile, const QSharedPointer<Image> &image, Q
 	modelLayout->addWidget(m_model, 1);
 	modelLayout->addWidget(find);
 
-	m_auto = new QCheckBox(tr("Pick the best free vision model automatically"), m_settings);
+	m_auto = new QCheckBox(m_settings);
 	m_auto->setChecked(PictureStory::autoModel(profile));
 	m_quality = new QCheckBox(tr("Quality: read the scene first, then write from it"), m_settings);
 	m_quality->setChecked(PictureStory::quality(profile));
@@ -90,14 +90,29 @@ StoryDialog::StoryDialog(Profile *profile, const QSharedPointer<Image> &image, Q
 	form->addRow(QString(), m_quality);
 	form->addRow(tr("Writing model"), m_writerModel);
 
-	// An automatic choice makes the model field moot until the user turns it off again.
+	// An automatic choice makes the model field moot; a typed model is a decision and turns it off. The label
+	// always says which of the two is active, and which model automatic mode settled on.
 	const auto syncModelField = [this]() {
-		m_model->setEnabled(!m_auto->isChecked());
+		const bool automatic = m_auto->isChecked();
+		m_model->setEnabled(!automatic);
 		m_writerModel->setEnabled(m_quality->isChecked());
+		if (!automatic) {
+			m_auto->setText(tr("Manual model"));
+			return;
+		}
+		const QString cached = PictureStory::cachedAutoModel(m_profile);
+		m_auto->setText(cached.isEmpty()
+			? tr("Automatic: best free vision model (looked up on the first story)")
+			: tr("Automatic: best free vision model (currently %1)").arg(cached));
 	};
 	syncModelField();
 	connect(m_auto, &QCheckBox::toggled, this, syncModelField);
 	connect(m_quality, &QCheckBox::toggled, this, syncModelField);
+	connect(m_model, &QLineEdit::textEdited, this, [this](const QString &text) {
+		if (!text.trimmed().isEmpty() && m_auto->isChecked()) {
+			m_auto->setChecked(false);
+		}
+	});
 	connect(find, &QPushButton::clicked, this, &StoryDialog::pickVisionModel);
 
 	auto *buttons = new QDialogButtonBox(this);

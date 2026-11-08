@@ -1,7 +1,7 @@
 cmake_minimum_required(VERSION 3.16)
 
 if((NOT DEFINED VERSION) OR ((DEFINED NIGHTLY) AND (NIGHTLY MATCHES "1")))
-	set(VERSION "7.22.0")
+	set(VERSION "7.22.1")
 else()
 	string(REGEX REPLACE "^v" "" VERSION "${VERSION}")
 endif()

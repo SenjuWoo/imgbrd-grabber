@@ -193,7 +193,9 @@ bool PictureStory::autoModel(Profile *profile)
 {
 	// Local servers do not describe their models, so an automatic lookup cannot decide for them.
 	const bool automatic = !isLocal(endpoint(baseUrl(profile)));
-	return profile->getSettings()->value("Story/autoModel", automatic).toBool();
+	// A model typed by the user is a decision: automatic selection only starts as the default.
+	const bool typed = setting(profile, "Story/model") != DefaultModel && !setting(profile, "Story/model").isEmpty();
+	return profile->getSettings()->value("Story/autoModel", automatic && !typed).toBool();
 }
 
 void PictureStory::setAutoModel(Profile *profile, bool automatic)
@@ -205,7 +207,9 @@ QString PictureStory::cachedAutoModel(Profile *profile)
 {
 	const QSettings *settings = profile->getSettings();
 	const qint64 chosen = settings->value("Story/autoModelAt", 0).toLongLong();
-	if (chosen <= 0 || QDateTime::currentSecsSinceEpoch() - chosen > AutoModelMaxAge) {
+	// Another provider's free model is not this provider's free model.
+	if (chosen <= 0 || QDateTime::currentSecsSinceEpoch() - chosen > AutoModelMaxAge
+		|| setting(profile, "Story/autoModelBase") != baseUrl(profile)) {
 		return {};
 	}
 	return setting(profile, "Story/autoModelId");
@@ -215,10 +219,11 @@ void PictureStory::setCachedAutoModel(Profile *profile, const QString &model)
 {
 	QSettings *settings = profile->getSettings();
 	settings->setValue("Story/autoModelId", model.trimmed());
+	settings->setValue("Story/autoModelBase", model.isEmpty() ? QString() : baseUrl(profile));
 	settings->setValue("Story/autoModelAt", model.isEmpty() ? 0 : QDateTime::currentSecsSinceEpoch());
 }
 
-QUrl PictureStory::endpoint(const QString &baseUrl)
+QUrl PictureStory::baseEndpoint(const QString &baseUrl)
 {
 	QUrl url(baseUrl.trimmed());
 	if (!url.isValid() || url.host().isEmpty() || (url.scheme() != QLatin1String("http") && url.scheme() != QLatin1String("https"))) {
@@ -229,10 +234,31 @@ QUrl PictureStory::endpoint(const QString &baseUrl)
 	while (path.endsWith('/')) {
 		path.chop(1);
 	}
-	if (!path.endsWith(QLatin1String("/chat/completions"))) {
-		path += QLatin1String("/chat/completions");
+	// A pasted chat endpoint names the same API root, so the model list is still found from it.
+	if (path.endsWith(QLatin1String("/chat/completions"))) {
+		path.chop(QStringLiteral("/chat/completions").size());
 	}
 	url.setPath(path);
+	return url;
+}
+
+QUrl PictureStory::endpoint(const QString &baseUrl)
+{
+	QUrl url = baseEndpoint(baseUrl);
+	if (url.isEmpty()) {
+		return {};
+	}
+	url.setPath(url.path() + QLatin1String("/chat/completions"));
+	return url;
+}
+
+QUrl PictureStory::modelsEndpoint(const QString &baseUrl)
+{
+	QUrl url = baseEndpoint(baseUrl);
+	if (url.isEmpty()) {
+		return {};
+	}
+	url.setPath(url.path() + QLatin1String("/models"));
 	return url;
 }
 
@@ -299,6 +325,12 @@ QString PictureStory::modelUsed() const
 
 void PictureStory::abort()
 {
+	// Any reply or catalogue answer still in flight belongs to the previous run.
+	++m_generation;
+	if (m_catalog != nullptr) {
+		m_catalog->deleteLater();
+		m_catalog = nullptr;
+	}
 	if (m_reply != nullptr) {
 		QNetworkReply *reply = m_reply;
 		m_reply = nullptr;
@@ -498,9 +530,20 @@ void PictureStory::resolveAutoModel()
 		return;
 	}
 
-	auto *catalog = new StoryModelCatalog(m_profile, this);
-	connect(catalog, &StoryModelCatalog::ready, this, [this, catalog](const QList<StoryModel> &models) {
-		catalog->deleteLater();
+	// The catalogue leaves the machine with a key, so it obeys the same rules as a story request.
+	const QString problem = settingsProblem(m_profile);
+	if (!problem.isEmpty()) {
+		fail(Error::Config, problem);
+		return;
+	}
+
+	const int generation = m_generation;
+	m_catalog = new StoryModelCatalog(m_profile, this);
+	connect(m_catalog, &StoryModelCatalog::ready, this, [this, generation](const QList<StoryModel> &models) {
+		if (generation != m_generation) {
+			return;
+		}
+		m_catalog = nullptr;
 		for (const StoryModel &model : models) {
 			if (model.images && model.free) {
 				setCachedAutoModel(m_profile, model.id);
@@ -512,17 +555,21 @@ void PictureStory::resolveAutoModel()
 		}
 		fail(Error::InvalidModel, tr("No free model that reads images is listed by this provider right now. Pick one in AI story settings; a paid model is never chosen for you."));
 	});
-	connect(catalog, &StoryModelCatalog::failed, this, [this, catalog](const QString &error) {
-		catalog->deleteLater();
+	connect(m_catalog, &StoryModelCatalog::failed, this, [this, generation](const QString &error) {
+		if (generation != m_generation) {
+			return;
+		}
+		m_catalog = nullptr;
 		fail(Error::Provider, tr("Could not look up a free vision model: %1").arg(error));
 	});
-	catalog->fetch();
+	m_catalog->fetch();
 }
 
 void PictureStory::startRequest()
 {
+	// "Write from tags only" is an explicit mode: the picture is never attached, even when one is available.
 	const QString picture = !m_localDataUrl.isEmpty() ? m_localDataUrl : m_pictureUrl;
-	const bool pictured = !picture.isEmpty();
+	const bool pictured = !m_allowTagsOnly && !picture.isEmpty();
 	if (!pictured && !m_allowTagsOnly) {
 		fail(Error::NoPicture, tr("This picture has no file or address the provider could read. Download it first, or choose \"Write from tags only\"."));
 		return;
@@ -600,6 +647,8 @@ void PictureStory::send(bool withPicture)
 
 	m_reply = m_manager->post(request, QJsonDocument(body).toJson(QJsonDocument::Compact));
 	connect(m_reply, &QNetworkReply::finished, this, &PictureStory::finished);
+	// The writing pass may run on another model; the story is recorded against the one that wrote it.
+	m_model = modelToUse;
 	log(QStringLiteral("Story: asked %1 for %2").arg(modelToUse, m_key), Logger::Info);
 }
 

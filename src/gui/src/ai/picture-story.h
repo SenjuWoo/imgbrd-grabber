@@ -2,6 +2,7 @@
 #define PICTURE_STORY_H
 
 #include <QObject>
+#include <QPointer>
 #include <QSharedPointer>
 #include <QString>
 #include <QStringList>
@@ -12,6 +13,7 @@ class Profile;
 class QNetworkAccessManager;
 class QNetworkReply;
 class QUrl;
+class StoryModelCatalog;
 
 /**
  * Writes the story behind a picture with an OpenAI-compatible chat API (OpenRouter by default).
@@ -52,8 +54,12 @@ class PictureStory : public QObject
 		static bool setApiKey(Profile *profile, const QString &key);
 		static QString model(Profile *profile);
 		static void configure(Profile *profile, const QString &baseUrl, const QString &apiKey, const QString &model);
-		/** `baseUrl` with the chat endpoint appended and trailing slashes removed; empty when unusable. */
+		/** `baseUrl` normalised to the API root: no trailing slash, and a pasted chat endpoint stripped. */
+		static QUrl baseEndpoint(const QString &baseUrl);
+		/** The chat completions URL; empty when the base URL is unusable. */
 		static QUrl endpoint(const QString &baseUrl);
+		/** The model list URL, the same root the chat endpoint lives under. */
+		static QUrl modelsEndpoint(const QString &baseUrl);
 		/** Whether the endpoint is this machine, where a missing key and plain HTTP are fine. */
 		static bool isLocal(const QUrl &url);
 		/** Why the current settings cannot be used, empty when they can. */
@@ -107,6 +113,9 @@ class PictureStory : public QObject
 		Profile *m_profile;
 		QNetworkAccessManager *m_manager;
 		QNetworkReply *m_reply = nullptr;
+		QPointer<StoryModelCatalog> m_catalog;
+		// Bumped on every abort(): a reply or catalogue answer from an older run must never touch this one.
+		int m_generation = 0;
 		QSharedPointer<Image> m_image;
 		QString m_key;
 		QString m_prompt;
