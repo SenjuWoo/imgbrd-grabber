@@ -669,7 +669,7 @@ TEST_CASE("An aborted generation answers nothing and sends nothing more", "[gui]
 	REQUIRE(failed.count() == 0);
 }
 
-TEST_CASE("A model that only thought is reported as such, not as a missing story", "[gui][story]")
+TEST_CASE("A model that only thought is retried once with more room", "[gui][story]")
 {
 	QTemporaryDir directory;
 	REQUIRE(directory.isValid());
@@ -683,16 +683,31 @@ TEST_CASE("A model that only thought is reported as such, not as a missing story
 	REQUIRE(picture.save(path));
 
 	// What a free reasoning model returns when the token budget runs out inside its thinking.
+	const QByteArray thinking = R"({"choices":[{"message":{"content":null,"reasoning":"Considering the picture... "},"finish_reason":"length"}]})";
+
+	// One empty answer is retried with more room, and the retry is the story.
 	FakeNetwork network;
-	network.answers = {R"({"choices":[{"message":{"content":null,"reasoning":"Considering the picture... "},"finish_reason":"length"}]})"};
+	network.answers = {thinking, R"({"choices":[{"message":{"content":"A story at last."}}]})"};
 	PictureStory story(&profile, nullptr, &network);
+	QSignalSpy ready(&story, &PictureStory::ready);
 	QSignalSpy failed(&story, &PictureStory::failed);
 	story.generate(taggedImage(&profile), path);
-	spinUntil([&]() { return failed.count() > 0; });
+	spinUntil([&]() { return ready.count() + failed.count() > 0; });
+	REQUIRE(failed.count() == 0);
+	REQUIRE(ready.count() == 1);
+	REQUIRE(network.bodies.size() == 2);
+	REQUIRE(network.bodies.at(1).contains("\"max_tokens\":4000"));
 
-	REQUIRE(failed.count() == 1);
-	REQUIRE(story.errorKind() == PictureStory::Error::Provider);
-	REQUIRE(failed.first().at(1).toString().contains("whole answer budget"));
+	// Two empty answers are an error worth naming, not a silent "no story".
+	FakeNetwork stubborn;
+	stubborn.answers = {thinking, thinking};
+	PictureStory second(&profile, nullptr, &stubborn);
+	QSignalSpy secondFailed(&second, &PictureStory::failed);
+	second.generate(taggedImage(&profile), path);
+	spinUntil([&]() { return secondFailed.count() > 0; });
+	REQUIRE(secondFailed.count() == 1);
+	REQUIRE(second.errorKind() == PictureStory::Error::Provider);
+	REQUIRE(secondFailed.first().at(1).toString().contains("whole answer budget"));
 }
 
 TEST_CASE("A cached model from one provider never serves another", "[gui][story]")

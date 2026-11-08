@@ -144,6 +144,9 @@ class PictureStory : public QObject
 		bool m_quality = false;
 		bool m_sceneStage = false;
 		bool m_pictureAttached = false;
+		// Free reasoning models can spend a small budget entirely on thinking; one retry with more room fixes it.
+		int m_maxTokens = 2000;
+		bool m_budgetRetried = false;
 		bool m_usedPicture = false;
 		bool m_visionFallback = false;
 		Error m_error = Error::None;

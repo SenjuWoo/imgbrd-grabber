@@ -582,6 +582,8 @@ void PictureStory::generate(const QSharedPointer<Image> &image, const QString &l
 	m_sceneStage = false;
 	m_allowTagsOnly = allowTagsOnly;
 	m_quality = quality(m_profile);
+	m_budgetRetried = false;
+	m_maxTokens = 2000;
 	m_pictureUrl = pictureUrl(*image);
 	// A downloaded copy on disk is preferred even when the picture has a URL: hotlink-blocked or
 	// login-only URLs would otherwise leave the model answering from the tags alone.
@@ -723,7 +725,7 @@ void PictureStory::send(bool withPicture)
 	const QJsonObject body {
 		{"model", modelToUse},
 		// Free models often reason before answering; a small budget can be spent entirely on that, leaving no story.
-		{"max_tokens", 2000},
+		{"max_tokens", m_maxTokens},
 		{"messages", QJsonArray {
 			QJsonObject {
 				{"role", "system"},
@@ -786,9 +788,16 @@ void PictureStory::finished()
 	if (error.isEmpty()) {
 		error = reply->errorString();
 	}
-	// A reasoning model that answered nothing but its own thinking: say so instead of "no story".
+	// A reasoning model that answered nothing but its own thinking: give it one more chance with more room.
 	if (text.isEmpty() && !reasoning.isEmpty() && status == 200) {
-		log(QStringLiteral("Story: %1 spent the whole budget on reasoning").arg(m_model), Logger::Warning);
+		if (!m_budgetRetried) {
+			m_budgetRetried = true;
+			m_maxTokens = 4000;
+			log(QStringLiteral("Story: %1 spent the whole budget thinking, retrying with more room").arg(m_model), Logger::Warning);
+			send(m_pictureAttached);
+			return;
+		}
+		log(QStringLiteral("Story: %1 spent the whole budget on reasoning twice").arg(m_model), Logger::Warning);
 		fail(Error::Provider, tr("The model used its whole answer budget thinking and returned no story. Try again, or choose a model that writes without a long reasoning pass."));
 		return;
 	}
