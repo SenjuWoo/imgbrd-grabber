@@ -6,6 +6,7 @@
 #include <QSharedPointer>
 #include <QString>
 #include <QStringList>
+#include "ai/story-models.h"
 
 
 class Image;
@@ -76,6 +77,18 @@ class PictureStory : public QObject
 		/** The free vision model the last automatic lookup chose; empty when there is none yet. */
 		static QString cachedAutoModel(Profile *profile);
 		static void setCachedAutoModel(Profile *profile, const QString &model);
+		/** The free text model automatic mode uses for tags-only stories. */
+		static QString cachedAutoTextModel(Profile *profile);
+		static void setCachedAutoTextModel(Profile *profile, const QString &model);
+		/** A model id the user wants automatic selection to use when it is eligible. */
+		static QString preferredModel(Profile *profile);
+		static void setPreferredModel(Profile *profile, const QString &model);
+		/**
+		 * Picks from the provider's list: the preferred id when eligible, else a named heuristic (models that
+		 * advertise vision in their own id, then the larger context window). Provider metadata carries no quality
+		 * score, so this is a stable guess, not a ranking.
+		 */
+		static QString chooseModel(const QList<StoryModel> &models, bool needVision, const QString &preferred = {});
 
 		/**
 		 * Asks for one picture's story; emits ready() or failed() once.
@@ -93,6 +106,8 @@ class PictureStory : public QObject
 		Error errorKind() const;
 		/** The model the last request actually went to (the resolved one when it was chosen automatically). */
 		QString modelUsed() const;
+		/** The model that read the picture in quality mode; empty when no scene pass ran. */
+		QString visionModel() const;
 		/** The picture encoded for a vision request, downscaled and bounded; empty when it cannot be read. */
 		static QString imageDataUrl(const QString &path);
 		/** Story-relevant tags first, budgeted, so actions and clothing are not lost behind a long general list. */
@@ -103,7 +118,7 @@ class PictureStory : public QObject
 		void failed(const QString &key, const QString &error);
 
 	private:
-		void resolveAutoModel();
+		void resolveAutoModel(bool needVision);
 		void startRequest();
 		void send(bool withPicture);
 		void finished();
@@ -123,6 +138,8 @@ class PictureStory : public QObject
 		QString m_pictureUrl;
 		QString m_localDataUrl;
 		QString m_model;
+		QString m_visionModel;
+		QString m_writerModel;
 		bool m_allowTagsOnly = false;
 		bool m_quality = false;
 		bool m_sceneStage = false;

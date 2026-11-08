@@ -17,6 +17,7 @@ struct StoryModel
 	QString name;
 	bool images = false;
 	bool free = false;
+	int context = 0;
 };
 
 /**

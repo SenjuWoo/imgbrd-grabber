@@ -445,6 +445,78 @@ TEST_CASE("Quality mode reads the scene first and writes from it", "[gui][story]
 	REQUIRE(network.bodies.at(1).contains("Observed scene"));
 	REQUIRE(network.bodies.at(1).contains("one woman in a red dress"));
 	REQUIRE(story.usedPicture());
+	// Two models, two attributions: the scene came from one, the prose from the other.
+	REQUIRE(story.visionModel() == "vendor/vision-model");
+	REQUIRE(story.modelUsed() == "vendor/writer");
+}
+
+TEST_CASE("Automatic selection prefers a preference, then a vision name, then a larger context", "[gui][story]")
+{
+	StoryModel alpha;
+	alpha.id = "vendor/alpha";
+	alpha.free = true;
+	alpha.images = true;
+	alpha.context = 8000;
+	StoryModel beta;
+	beta.id = "vendor/beta-vl";
+	beta.free = true;
+	beta.images = true;
+	beta.context = 2000;
+	StoryModel gamma;
+	gamma.id = "vendor/gamma";
+	gamma.free = true;
+	gamma.images = true;
+	gamma.context = 32000;
+	StoryModel paid;
+	paid.id = "vendor/paid-vision";
+	paid.images = true;
+	paid.context = 200000;
+	StoryModel text;
+	text.id = "vendor/text";
+	text.free = true;
+	text.context = 50000;
+	const QList<StoryModel> models {alpha, beta, gamma, paid, text};
+
+	// A model that names vision in its id outranks alphabetical order and a bigger context window.
+	REQUIRE(PictureStory::chooseModel(models, true) == "vendor/beta-vl");
+	// An explicit choice outranks the guess.
+	REQUIRE(PictureStory::chooseModel(models, true, "vendor/gamma") == "vendor/gamma");
+	// A preference that is paid is not eligible, so the guess still decides and stays free.
+	REQUIRE(PictureStory::chooseModel(models, true, "vendor/paid-vision") == "vendor/beta-vl");
+	// Tags only may use any free text model.
+	REQUIRE(PictureStory::chooseModel(models, false) == "vendor/text");
+	// Nothing eligible means no answer, never a paid fallback.
+	REQUIRE(PictureStory::chooseModel({paid}, true).isEmpty());
+}
+
+TEST_CASE("Tags only resolves a free text model and never a vision one", "[gui][story]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> owned(makeLibraryProfile(directory.path()));
+	Profile &profile = *owned;
+	prepareStory(&profile);
+	PictureStory::setAutoModel(&profile, true);
+
+	FakeNetwork network;
+	network.answers = {
+		R"({"data":[{"id":"vendor/text-only","architecture":{"input_modalities":["text"],"output_modalities":["text"]},"pricing":{"prompt":"0","completion":"0"},"context_length":32000}]})",
+		R"({"choices":[{"message":{"content":"A story from the tags."}}]})",
+	};
+	PictureStory story(&profile, nullptr, &network);
+	QSignalSpy ready(&story, &PictureStory::ready);
+	QSignalSpy failed(&story, &PictureStory::failed);
+	// The picture has a URL, but tags-only must ignore it and must not need a model that can see.
+	story.generate(taggedImage(&profile), {}, true);
+	spinUntil([&]() { return ready.count() + failed.count() > 0; });
+
+	REQUIRE(failed.count() == 0);
+	REQUIRE(ready.count() == 1);
+	REQUIRE(network.bodies.size() == 2);
+	REQUIRE(network.urls.at(0).path().endsWith(QLatin1String("/models")));
+	REQUIRE(network.bodies.at(1).contains("\"model\":\"vendor/text-only\""));
+	REQUIRE_FALSE(network.bodies.at(1).contains("image_url"));
+	REQUIRE(PictureStory::cachedAutoTextModel(&profile) == "vendor/text-only");
 }
 
 TEST_CASE("Story tags keep actions and clothing ahead of the budget", "[gui][story]")

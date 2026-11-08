@@ -140,9 +140,11 @@ StoryDialog::StoryDialog(Profile *profile, const QSharedPointer<Image> &image, Q
 	connect(m_story, &PictureStory::ready, this, [this](const QString &key, const QString &text) {
 		setStory(text, m_story->modelUsed());
 		if (m_story->usedPicture()) {
-			m_status->setText(PictureStory::quality(m_profile)
-				? tr("Written from the scene read off the picture by %1.").arg(m_story->modelUsed())
-				: tr("Written from the picture and its tags by %1.").arg(m_story->modelUsed()));
+			const QString writer = m_story->modelUsed();
+			const QString vision = m_story->visionModel();
+			m_status->setText(PictureStory::quality(m_profile) && !vision.isEmpty() && vision != writer
+				? tr("Scene read by %1, story written by %2.").arg(vision, writer)
+				: tr("Written from the picture and its tags by %1.").arg(writer));
 		} else {
 			m_status->setText(tr("Written from tags only by %1, because no picture was sent.").arg(m_story->modelUsed()));
 		}

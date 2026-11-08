@@ -24,6 +24,9 @@
 #include "models/site.h"
 #include "tags/tag.h"
 
+#include <algorithm>
+#include <tuple>
+
 
 namespace
 {
@@ -38,6 +41,26 @@ namespace
 	const QString KeyFile = QStringLiteral("story-key.dat");
 	// A stored automatic choice is reused for a week; the provider's catalogue changes, its ids less so.
 	constexpr qint64 AutoModelMaxAge = 7 * 24 * 3600;
+
+	// Automatic choices are cached per role: a vision model for stories with a picture, a text model for tags only.
+	QString cachedChoice(Profile *profile, const char *idKey)
+	{
+		const QSettings *settings = profile->getSettings();
+		const qint64 chosen = settings->value("Story/autoModelAt", 0).toLongLong();
+		const QString base = settings->value("Story/autoModelBase").toString();
+		if (chosen <= 0 || QDateTime::currentSecsSinceEpoch() - chosen > AutoModelMaxAge || base != PictureStory::baseUrl(profile)) {
+			return {};
+		}
+		return settings->value(idKey).toString().trimmed();
+	}
+
+	void storeChoice(Profile *profile, const char *idKey, const QString &model)
+	{
+		QSettings *settings = profile->getSettings();
+		settings->setValue(idKey, model.trimmed());
+		settings->setValue("Story/autoModelBase", model.isEmpty() ? QString() : PictureStory::baseUrl(profile));
+		settings->setValue("Story/autoModelAt", model.isEmpty() ? 0 : QDateTime::currentSecsSinceEpoch());
+	}
 
 	QString setting(Profile *profile, const QString &name)
 	{
@@ -205,22 +228,65 @@ void PictureStory::setAutoModel(Profile *profile, bool automatic)
 
 QString PictureStory::cachedAutoModel(Profile *profile)
 {
-	const QSettings *settings = profile->getSettings();
-	const qint64 chosen = settings->value("Story/autoModelAt", 0).toLongLong();
-	// Another provider's free model is not this provider's free model.
-	if (chosen <= 0 || QDateTime::currentSecsSinceEpoch() - chosen > AutoModelMaxAge
-		|| setting(profile, "Story/autoModelBase") != baseUrl(profile)) {
-		return {};
-	}
-	return setting(profile, "Story/autoModelId");
+	return cachedChoice(profile, "Story/autoModelId");
 }
 
 void PictureStory::setCachedAutoModel(Profile *profile, const QString &model)
 {
-	QSettings *settings = profile->getSettings();
-	settings->setValue("Story/autoModelId", model.trimmed());
-	settings->setValue("Story/autoModelBase", model.isEmpty() ? QString() : baseUrl(profile));
-	settings->setValue("Story/autoModelAt", model.isEmpty() ? 0 : QDateTime::currentSecsSinceEpoch());
+	storeChoice(profile, "Story/autoModelId", model);
+}
+
+QString PictureStory::cachedAutoTextModel(Profile *profile)
+{
+	return cachedChoice(profile, "Story/autoTextId");
+}
+
+void PictureStory::setCachedAutoTextModel(Profile *profile, const QString &model)
+{
+	storeChoice(profile, "Story/autoTextId", model);
+}
+
+QString PictureStory::preferredModel(Profile *profile)
+{
+	return setting(profile, "Story/preferredModel");
+}
+
+void PictureStory::setPreferredModel(Profile *profile, const QString &model)
+{
+	profile->getSettings()->setValue("Story/preferredModel", model.trimmed());
+}
+
+QString PictureStory::chooseModel(const QList<StoryModel> &models, bool needVision, const QString &preferred)
+{
+	QList<StoryModel> eligible;
+	for (const StoryModel &model : models) {
+		if (!model.free || (needVision && !model.images)) {
+			continue;
+		}
+		// An explicit choice outranks any guessing.
+		if (!preferred.isEmpty() && model.id == preferred) {
+			return model.id;
+		}
+		eligible.append(model);
+	}
+	if (eligible.isEmpty()) {
+		return {};
+	}
+
+	// The provider publishes no quality score, so rank by what it does publish: for tags-only a text model first
+	// (cheaper and enough), then an id that names vision, then a larger context window, then a stable order.
+	auto rank = [needVision](const StoryModel &model) {
+		const QString id = model.id.toLower();
+		const bool named = id.contains(QLatin1String("vl")) || id.contains(QLatin1String("vision")) || id.contains(QLatin1String("omni"));
+		const int modality = (!needVision && !model.images) ? 0 : 1;
+		return std::make_tuple(modality, named ? 0 : 1, -model.context);
+	};
+	std::sort(eligible.begin(), eligible.end(), [&rank](const StoryModel &a, const StoryModel &b) {
+		const auto left = rank(a);
+		const auto right = rank(b);
+		return left == right ? a.id < b.id : left < right;
+	});
+	return eligible.first().id;
 }
 
 QUrl PictureStory::baseEndpoint(const QString &baseUrl)
@@ -321,6 +387,11 @@ PictureStory::Error PictureStory::errorKind() const
 QString PictureStory::modelUsed() const
 {
 	return m_model;
+}
+
+QString PictureStory::visionModel() const
+{
+	return m_visionModel;
 }
 
 void PictureStory::abort()
@@ -514,16 +585,17 @@ void PictureStory::generate(const QSharedPointer<Image> &image, const QString &l
 	}
 
 	if (autoModel(m_profile)) {
-		resolveAutoModel();
+		// Tags-only never needs a model that can see; it needs a model that can write.
+		resolveAutoModel(!m_allowTagsOnly);
 		return;
 	}
 	startRequest();
 }
 
-void PictureStory::resolveAutoModel()
+void PictureStory::resolveAutoModel(bool needVision)
 {
 	// A recent choice is reused; otherwise the provider's own list decides, and only a free model is taken.
-	const QString cached = cachedAutoModel(m_profile);
+	const QString cached = needVision ? cachedAutoModel(m_profile) : cachedAutoTextModel(m_profile);
 	if (!cached.isEmpty()) {
 		m_model = cached;
 		startRequest();
@@ -538,29 +610,35 @@ void PictureStory::resolveAutoModel()
 	}
 
 	const int generation = m_generation;
-	m_catalog = new StoryModelCatalog(m_profile, this);
-	connect(m_catalog, &StoryModelCatalog::ready, this, [this, generation](const QList<StoryModel> &models) {
+	// Same network manager as the story request: one place to cancel, and the catalogue is testable too.
+	m_catalog = new StoryModelCatalog(m_profile, this, m_manager);
+	connect(m_catalog, &StoryModelCatalog::ready, this, [this, generation, needVision](const QList<StoryModel> &models) {
 		if (generation != m_generation) {
 			return;
 		}
 		m_catalog = nullptr;
-		for (const StoryModel &model : models) {
-			if (model.images && model.free) {
-				setCachedAutoModel(m_profile, model.id);
-				m_model = model.id;
-				log(QStringLiteral("Story: automatic vision model is %1").arg(model.id), Logger::Info);
-				startRequest();
-				return;
-			}
+		const QString chosen = chooseModel(models, needVision, preferredModel(m_profile));
+		if (chosen.isEmpty()) {
+			fail(Error::InvalidModel, needVision
+				? tr("No free model that reads images is listed by this provider right now. Pick one in AI story settings; a paid model is never chosen for you.")
+				: tr("No free text model is listed by this provider right now. Pick one in AI story settings; a paid model is never chosen for you."));
+			return;
 		}
-		fail(Error::InvalidModel, tr("No free model that reads images is listed by this provider right now. Pick one in AI story settings; a paid model is never chosen for you."));
+		if (needVision) {
+			setCachedAutoModel(m_profile, chosen);
+		} else {
+			setCachedAutoTextModel(m_profile, chosen);
+		}
+		m_model = chosen;
+		log(QStringLiteral("Story: automatic %1 model is %2").arg(needVision ? QStringLiteral("vision") : QStringLiteral("text"), chosen), Logger::Info);
+		startRequest();
 	});
 	connect(m_catalog, &StoryModelCatalog::failed, this, [this, generation](const QString &error) {
 		if (generation != m_generation) {
 			return;
 		}
 		m_catalog = nullptr;
-		fail(Error::Provider, tr("Could not look up a free vision model: %1").arg(error));
+		fail(Error::Provider, tr("Could not look up a free model: %1").arg(error));
 	});
 	m_catalog->fetch();
 }
@@ -649,6 +727,11 @@ void PictureStory::send(bool withPicture)
 	connect(m_reply, &QNetworkReply::finished, this, &PictureStory::finished);
 	// The writing pass may run on another model; the story is recorded against the one that wrote it.
 	m_model = modelToUse;
+	if (m_sceneStage) {
+		m_visionModel = modelToUse;
+	} else {
+		m_writerModel = modelToUse;
+	}
 	log(QStringLiteral("Story: asked %1 for %2").arg(modelToUse, m_key), Logger::Info);
 }
 

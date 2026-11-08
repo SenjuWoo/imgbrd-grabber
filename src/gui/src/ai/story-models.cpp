@@ -34,6 +34,7 @@ QList<StoryModel> StoryModelCatalog::parse(const QByteArray &json)
 		StoryModel model;
 		model.id = object.value("id").toString();
 		model.name = object.value("name").toString(object.value("id").toString());
+		model.context = object.value("context_length").toInt();
 		if (model.id.isEmpty()) {
 			continue;
 		}
