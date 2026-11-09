@@ -91,6 +91,9 @@ class Page : public QObject
 			Pending,
 			Images,
 			Empty,
+			// An empty page, then a failing fallback: the site answered nothing readable, so "no results"
+			// cannot be claimed.
+			Inconclusive,
 			Failed,
 		};
 		Outcome m_outcome = Outcome::Pending;

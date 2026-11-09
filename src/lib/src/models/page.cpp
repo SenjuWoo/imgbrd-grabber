@@ -110,6 +110,7 @@ void Page::fallback(bool loadIfPossible)
 				emit finishedLoading(this);
 				return;
 			case Outcome::Pending:
+			case Outcome::Inconclusive:
 			case Outcome::Failed:
 			default:
 				break;
@@ -174,9 +175,10 @@ void Page::loadFinished(PageApi *api, PageApi::LoadResult status)
 
 	QString eventLabel = QStringLiteral("%1 (%2)").arg(m_site->url(), m_siteApis[m_currentApi]->getName());
 	if (status == PageApi::LoadResult::Ok) {
-		// Remember what the site said: pictures, or a valid page with nothing in it.
+		// Remember what the site said: pictures, or a valid page with nothing in it. A later empty
+		// answer cannot undo an earlier failure, so only a page that has not failed yet turns Empty.
 		if (api->images().isEmpty()) {
-			if (m_outcome != Outcome::Images) {
+			if (m_outcome == Outcome::Pending) {
 				m_outcome = Outcome::Empty;
 			}
 		} else {
@@ -194,9 +196,12 @@ void Page::loadFinished(PageApi *api, PageApi::LoadResult status)
 		Analytics::getInstance().sendEvent("Page load", "Success", eventLabel);
 		emit finishedLoading(this);
 	} else {
-		// A failed request only turns the page into a failure when nothing readable came back first.
+		// A failed request only turns the page into a failure when nothing readable came back first...
 		if (m_outcome == Outcome::Pending) {
 			m_outcome = Outcome::Failed;
+		} else if (m_outcome == Outcome::Empty) {
+			// ...and an empty answer followed by a failure cannot be confirmed as a real empty search.
+			m_outcome = Outcome::Inconclusive;
 		}
 		const QStringList &errors = api->errors();
 		if (errors.isEmpty() || !errors.first().contains("impossible")) {

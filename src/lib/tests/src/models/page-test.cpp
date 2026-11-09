@@ -164,6 +164,45 @@ TEST_CASE("Reloading an empty page stays terminal and does not hang")
 	CustomNetworkAccessManager::NextFiles.clear();
 }
 
+TEST_CASE("An empty page followed by a failed fallback is not a confirmed empty search")
+{
+	setupSource("Danbooru (2.0)");
+	setupSite("Danbooru (2.0)", "danbooru.donmai.us");
+	const QScopedPointer<Profile> profile(makeProfile());
+	auto *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	site->setAutoLogin(false);
+
+	QTemporaryFile xml;
+	REQUIRE(xml.open());
+	REQUIRE(xml.write(R"(<?xml version="1.0" encoding="UTF-8"?><posts type="array"></posts>)") > 0);
+	xml.flush();
+	// Not JSON at all: the second API fails after the first one answered with nothing.
+	QTemporaryFile broken;
+	REQUIRE(broken.open());
+	REQUIRE(broken.write(R"({ this is not json )") > 0);
+	broken.flush();
+	QTemporaryFile html;
+	REQUIRE(html.open());
+	REQUIRE(html.write(R"(<html><body><p>blocked</p></body></html>)") > 0);
+	html.flush();
+
+	CustomNetworkAccessManager::NextFiles.clear();
+	CustomNetworkAccessManager::NextFiles.enqueue(xml.fileName());
+	CustomNetworkAccessManager::NextFiles.enqueue(broken.fileName());
+	CustomNetworkAccessManager::NextFiles.enqueue(html.fileName());
+
+	Page page(profile.data(), site, {site}, QStringList{"painted_egg"});
+	QSignalSpy finished(&page, &Page::finishedLoading);
+	QSignalSpy failed(&page, &Page::failedLoading);
+	page.load();
+	// One source said nothing and another could not be read, so "no results" would be a claim nobody made.
+	REQUIRE(failed.wait());
+	REQUIRE(finished.count() == 0);
+	REQUIRE(!page.errors().isEmpty());
+	CustomNetworkAccessManager::NextFiles.clear();
+}
+
 TEST_CASE("The rate-limit budget belongs to the page and resets on a new load")
 {
 	setupSource("Danbooru (2.0)");
