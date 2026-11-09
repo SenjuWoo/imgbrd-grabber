@@ -197,7 +197,9 @@ TEST_CASE("An empty page followed by a failed fallback is not a confirmed empty 
 	QSignalSpy failed(&page, &Page::failedLoading);
 	page.load();
 	// One source said nothing and another could not be read, so "no results" would be a claim nobody made.
-	REQUIRE(failed.wait());
+	if (failed.isEmpty()) {
+		REQUIRE(failed.wait());
+	}
 	REQUIRE(finished.count() == 0);
 	REQUIRE(!page.errors().isEmpty());
 	CustomNetworkAccessManager::NextFiles.clear();

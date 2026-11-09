@@ -121,8 +121,7 @@ void Page::fallback(bool loadIfPossible)
 		return;
 	}
 
-	// A new attempt replaces the diagnostics of the previous one; the exhaustion branch above keeps them.
-	m_errors.clear();
+	// A new attempt keeps the diagnostics gathered so far: an inconclusive page must still explain itself.
 	m_currentApi++;
 	if (m_currentApi > 0) {
 		log(QStringLiteral("[%1] Loading using %2 failed. Retry using %3.").arg(m_site->url(), m_siteApis[m_currentApi - 1]->getName(), m_siteApis[m_currentApi]->getName()), Logger::Warning);
@@ -153,6 +152,7 @@ void Page::load(bool rateLimit)
 	// A caller starting a load gets a fresh budget and a fresh outcome; an API fallback keeps both.
 	m_rateLimitDeadline = 0;
 	m_outcome = Outcome::Pending;
+	m_errors.clear();
 	loadApi(rateLimit);
 }
 void Page::loadApi(bool rateLimit)
@@ -174,47 +174,55 @@ void Page::loadFinished(PageApi *api, PageApi::LoadResult status)
 	}
 
 	QString eventLabel = QStringLiteral("%1 (%2)").arg(m_site->url(), m_siteApis[m_currentApi]->getName());
+	const bool lastApi = m_currentApi >= m_pageApis.count() - 1;
+
+	// One signal per finished page: images, a confirmed empty result, or a failure with its reasons.
+	if (status == PageApi::LoadResult::Ok && !api->images().isEmpty()) {
+		m_outcome = Outcome::Images;
+		Analytics::getInstance().sendEvent("Page load", "Success", eventLabel);
+		emit finishedLoading(this);
+		return;
+	}
+
 	if (status == PageApi::LoadResult::Ok) {
-		// Remember what the site said: pictures, or a valid page with nothing in it. A later empty
-		// answer cannot undo an earlier failure, so only a page that has not failed yet turns Empty.
-		if (api->images().isEmpty()) {
-			if (m_outcome == Outcome::Pending) {
-				m_outcome = Outcome::Empty;
-			}
-		} else {
-			m_outcome = Outcome::Images;
+		// A valid page with nothing in it. Only the first page is worth retrying through another API:
+		// a site's API can silently drop a condition the next one understands, while later pages are
+		// empty simply because the results end there.
+		if (m_outcome == Outcome::Pending) {
+			m_outcome = Outcome::Empty;
 		}
-		// A site's API can answer a valid page with no pictures when it does not understand a tag (silently
-		// dropped conditions) while another API of the same site does. Trying it costs one request, and only
-		// on the first page: later pages are empty because the results end there.
-		const bool anotherApi = m_currentApi < m_pageApis.count() - 1;
-		if (anotherApi && api->images().isEmpty() && api->page() <= 1 && !m_query.tags.isEmpty()) {
+		if (!lastApi && api->page() <= 1 && !m_query.tags.isEmpty()) {
 			log(QStringLiteral("[%1] %2 returned no pictures. Retry using %3.").arg(m_site->url(), m_siteApis[m_currentApi]->getName(), m_siteApis[m_currentApi + 1]->getName()), Logger::Warning);
 			fallback();
 			return;
 		}
-		Analytics::getInstance().sendEvent("Page load", "Success", eventLabel);
-		emit finishedLoading(this);
-	} else {
-		// A failed request only turns the page into a failure when nothing readable came back first...
-		if (m_outcome == Outcome::Pending) {
-			m_outcome = Outcome::Failed;
-		} else if (m_outcome == Outcome::Empty) {
-			// ...and an empty answer followed by a failure cannot be confirmed as a real empty search.
-			m_outcome = Outcome::Inconclusive;
-		}
-		const QStringList &errors = api->errors();
-		if (errors.isEmpty() || !errors.first().contains("impossible")) {
-			Analytics::getInstance().sendEvent("Page load", "Error", eventLabel);
-		}
-		m_errors.append(errors);
-		// A rejected search (tag limit, bad syntax) gets the same answer from every API of the site.
-		if (api->isTerminal()) {
-			emit failedLoading(this);
+		if (m_outcome == Outcome::Empty) {
+			Analytics::getInstance().sendEvent("Page load", "Success", eventLabel);
+			emit finishedLoading(this);
 			return;
 		}
-		fallback();
+		// Something earlier already failed, so this empty page cannot confirm an empty search.
+		emit failedLoading(this);
+		return;
 	}
+
+	// A failed request only turns the page into a failure when nothing readable came back first, and an
+	// empty answer followed by a failure cannot be confirmed as a real empty search.
+	if (m_outcome == Outcome::Pending) {
+		m_outcome = Outcome::Failed;
+	} else if (m_outcome == Outcome::Empty) {
+		m_outcome = Outcome::Inconclusive;
+	}
+	const QStringList &errors = api->errors();
+	if (errors.isEmpty() || !errors.first().contains("impossible")) {
+		Analytics::getInstance().sendEvent("Page load", "Error", eventLabel);
+	}
+	m_errors.append(errors);
+	if (api->isTerminal() || lastApi) {
+		emit failedLoading(this);
+		return;
+	}
+	fallback();
 }
 void Page::abort()
 {

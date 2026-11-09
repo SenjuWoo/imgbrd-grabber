@@ -28,19 +28,26 @@ $personalDirs = @('logs', 'cache', 'recommendations')
 
 if (!(Test-Path -LiteralPath $Install -PathType Container)) { throw "Install folder not found: $Install" }
 
+# 0. Refuse to touch binaries that are in use: a running Grabber holds its DLLs and would leave a
+#    half-replaced install behind.
+if (@(Get-Process -Name 'Grabber', 'Grabber-cli' -ErrorAction SilentlyContinue).Count -gt 0) {
+	throw "Grabber is running. Close it before updating: a half-replaced install is worse than an old one."
+}
+
 # 1. Unpack the package into a temporary folder when we were given an archive.
-$work = Join-Path ([IO.Path]::GetTempPath()) ('grabber-update-' + [Guid]::NewGuid().ToString('N'))
-New-Item -ItemType Directory -Path $work | Out-Null
+$root = Join-Path ([IO.Path]::GetTempPath()) ('grabber-update-' + [Guid]::NewGuid().ToString('N'))
+New-Item -ItemType Directory -Path $root | Out-Null
+$work = $root
 try {
 	$source = $Package
 	if (Test-Path -LiteralPath $Package -PathType Leaf) {
 		Expand-Archive -LiteralPath $Package -DestinationPath $work -Force
-		# A CI artifact is a ZIP inside a ZIP; keep unwrapping until a Grabber.exe shows up.
-		for ($i = 0; $i -lt 3; $i++) {
-			if (Test-Path -LiteralPath (Join-Path $work 'Grabber.exe')) { break }
+		# A CI artifact is a ZIP inside a ZIP; keep unwrapping until a Grabber.exe shows up. The level
+		# moves into a subfolder of $root, which the cleanup below removes as a whole.
+		for ($i = 0; $i -lt 3 -and !(Test-Path -LiteralPath (Join-Path $work 'Grabber.exe')); $i++) {
 			$inner = @(Get-ChildItem -LiteralPath $work -Recurse -File -Filter '*.zip' | Select-Object -First 1)
 			if ($inner.Count -eq 0) { break }
-			$next = Join-Path $work ('unpack-' + $i)
+			$next = Join-Path $root ('unpack-' + $i)
 			Expand-Archive -LiteralPath $inner[0].FullName -DestinationPath $next -Force
 			$work = $next
 		}
@@ -77,21 +84,31 @@ try {
 	foreach ($dir in $personalDirs) { $skipDirs[$dir.ToLowerInvariant()] = $true }
 
 	$copied = 0
-	Get-ChildItem -LiteralPath $source -Recurse -File | ForEach-Object {
-		$relative = $_.FullName.Substring($source.Length).TrimStart('\', '/')
-		$top = ($relative -split '[\\/]')[0].ToLowerInvariant()
-		if ($skipFiles.ContainsKey($relative.ToLowerInvariant()) -or $skipDirs.ContainsKey($top)) { return }
-		$target = Join-Path $Install $relative
-		$parent = Split-Path -Parent $target
-		if (!(Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
-		Copy-Item -LiteralPath $_.FullName -Destination $target -Force
-		$copied++
+	try {
+		Get-ChildItem -LiteralPath $source -Recurse -File | ForEach-Object {
+			$relative = $_.FullName.Substring($source.Length).TrimStart('\', '/')
+			$top = ($relative -split '[\\/]')[0].ToLowerInvariant()
+			if ($skipFiles.ContainsKey($relative.ToLowerInvariant()) -or $skipDirs.ContainsKey($top)) { return }
+			$target = Join-Path $Install $relative
+			$parent = Split-Path -Parent $target
+			if (!(Test-Path -LiteralPath $parent)) { New-Item -ItemType Directory -Path $parent -Force | Out-Null }
+			Copy-Item -LiteralPath $_.FullName -Destination $target -Force
+			$copied++
+		}
+	} catch {
+		# A half-copied install is worse than an old one: put the personal files back and say so.
+		Copy-Item -LiteralPath (Join-Path $backup '*') -Destination $Install -Force -ErrorAction SilentlyContinue
+		throw "Copy step failed ($($_.Exception.Message)). Personal files were restored from $backup."
 	}
 
 	# Portable marker: an update must keep the install portable.
 	[IO.File]::WriteAllText((Join-Path $Install 'portable'), '')
 
-	# 5. Prove nothing personal changed.
+	# 5. Ask the new binary its version before the hash check: starting the program can rewrite
+	#    settings.ini, so the personal-file verification has to come after every operation.
+	$version = & (Join-Path $Install 'Grabber-cli.exe') -v
+
+	# 6. Prove nothing personal changed.
 	$changed = @()
 	foreach ($name in $before.Keys) {
 		$path = Join-Path $Install $name
@@ -99,11 +116,13 @@ try {
 		$after = (Get-FileHash -LiteralPath $path -Algorithm SHA256).Hash
 		if ($after -ne $before[$name]) { $changed += $name }
 	}
-	if ($changed.Count -gt 0) { throw ("Personal files changed during the update: " + ($changed -join ', ')) }
+	if ($changed.Count -gt 0) {
+		Copy-Item -LiteralPath (Join-Path $backup '*') -Destination $Install -Force -ErrorAction SilentlyContinue
+		throw ("Personal files changed during the update: " + ($changed -join ', ') + ". Restored from $backup.")
+	}
 
-	$version = & (Join-Path $Install 'Grabber-cli.exe') -v
 	Write-Output "Updated $copied file(s). Personal data verified unchanged. Backup: $backup"
 	Write-Output $version
 } finally {
-	if ($work -like '*grabber-update-*' -and (Test-Path -LiteralPath $work)) { Remove-Item -LiteralPath $work -Recurse -Force }
+	if (Test-Path -LiteralPath $root) { Remove-Item -LiteralPath $root -Recurse -Force }
 }
