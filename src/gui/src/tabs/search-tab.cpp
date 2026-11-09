@@ -479,6 +479,12 @@ void SearchTab::failedLoading(Page *page)
 
 void SearchTab::siteRateLimited(Site *site, int seconds)
 {
+	// A site shared with another tab (or a restored one) must not raise a notice here: only a page this
+	// tab is actually waiting on deserves a "retrying" message.
+	const bool waiting = std::any_of(m_pendingPages.cbegin(), m_pendingPages.cend(), [site](Page *page) {
+		return page->site() == site;
+	});
+	if (!waiting) { return; }
 	// One toast per site and retry window, so a slow search reads as waiting instead of hung.
 	const qint64 now = QDateTime::currentMSecsSinceEpoch();
 	if (m_stop || now - m_rateNotices.value(site, 0) < qMax(seconds, 5) * 1000) { return; }
