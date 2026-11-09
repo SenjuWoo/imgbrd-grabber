@@ -102,7 +102,8 @@ void Page::fallback(bool loadIfPossible)
 {
 	if (m_currentApi >= m_pageApis.count() - 1) {
 		// Pictures, or a valid but empty page: both are results. Only a page nobody could read is a failure.
-		switch (m_outcome) {
+		switch (m_outcome)
+		{
 			case Outcome::Images:
 			case Outcome::Empty:
 				log(QStringLiteral("[%1] The site answered with no pictures").arg(m_site->url()), Logger::Info);
