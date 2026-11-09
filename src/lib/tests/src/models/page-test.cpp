@@ -122,6 +122,48 @@ TEST_CASE("A site that answers with an empty page is not a failure")
 	CustomNetworkAccessManager::NextFiles.clear();
 }
 
+TEST_CASE("Reloading an empty page stays terminal and does not hang")
+{
+	setupSource("Danbooru (2.0)");
+	setupSite("Danbooru (2.0)", "danbooru.donmai.us");
+	const QScopedPointer<Profile> profile(makeProfile());
+	auto *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	site->setAutoLogin(false);
+
+	QTemporaryFile xml;
+	REQUIRE(xml.open());
+	REQUIRE(xml.write(R"(<?xml version="1.0" encoding="UTF-8"?><posts type="array"></posts>)") > 0);
+	xml.flush();
+	QTemporaryFile json;
+	REQUIRE(json.open());
+	REQUIRE(json.write(R"([])") > 0);
+	json.flush();
+	QTemporaryFile html;
+	REQUIRE(html.open());
+	REQUIRE(html.write(R"(<html><body></body></html>)") > 0);
+	html.flush();
+
+	CustomNetworkAccessManager::NextFiles.clear();
+	for (int i = 0; i < 2; ++i) {
+		CustomNetworkAccessManager::NextFiles.enqueue(xml.fileName());
+		CustomNetworkAccessManager::NextFiles.enqueue(json.fileName());
+		CustomNetworkAccessManager::NextFiles.enqueue(html.fileName());
+	}
+
+	Page page(profile.data(), site, {site}, QStringList{"painted_egg"});
+	QSignalSpy finished(&page, &Page::finishedLoading);
+	QSignalSpy failed(&page, &Page::failedLoading);
+	page.load();
+	REQUIRE(finished.wait());
+	// A second load of the same page answers again instead of waiting on a stale state.
+	page.clear();
+	page.load();
+	REQUIRE(finished.wait());
+	REQUIRE(failed.count() == 0);
+	CustomNetworkAccessManager::NextFiles.clear();
+}
+
 TEST_CASE("Page reload emits once and unsupported endpoints remain readable")
 {
 	setupSource("Danbooru (2.0)");

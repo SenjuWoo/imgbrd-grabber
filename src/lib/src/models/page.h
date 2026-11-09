@@ -75,9 +75,16 @@ class Page : public QObject
 		PageApi *currentApi() const;
 		Site *m_site;
 		int m_currentApi;
-		// Some API of the site answered with a valid page that simply had no pictures: an empty search,
-		// which is a result of its own and must not be reported as a broken source.
-		bool m_emptyResult = false;
+		// What the site's APIs have answered so far: pictures, a valid but empty page, or nothing at all.
+		// An empty answer is a result of its own, and must never hide a real failure behind it.
+		enum class Outcome
+		{
+			Pending,
+			Images,
+			Empty,
+			Failed,
+		};
+		Outcome m_outcome = Outcome::Pending;
 		QList<Api*> m_siteApis;
 		QList<PageApi*> m_pageApis;
 		int m_regexApi;

@@ -99,14 +99,18 @@ Page::~Page()
 
 void Page::fallback(bool loadIfPossible)
 {
-	m_errors.clear();
-
 	if (m_currentApi >= m_pageApis.count() - 1) {
-		// An empty page from the site means the search has no results, not that the source is broken.
-		if (m_emptyResult) {
-			log(QStringLiteral("[%1] The site answered with an empty page").arg(m_site->url()), Logger::Info);
-			emit finishedLoading(this);
-			return;
+		// Pictures, or a valid but empty page: both are results. Only a page nobody could read is a failure.
+		switch (m_outcome) {
+			case Outcome::Images:
+			case Outcome::Empty:
+				log(QStringLiteral("[%1] The site answered with no pictures").arg(m_site->url()), Logger::Info);
+				emit finishedLoading(this);
+				return;
+			case Outcome::Pending:
+			case Outcome::Failed:
+			default:
+				break;
 		}
 		log(QStringLiteral("[%1] No valid source of the site returned result.").arg(m_site->url()), Logger::Warning);
 		m_errors.append(tr("No valid source of the site returned result."));
@@ -114,6 +118,8 @@ void Page::fallback(bool loadIfPossible)
 		return;
 	}
 
+	// A new attempt replaces the diagnostics of the previous one; the exhaustion branch above keeps them.
+	m_errors.clear();
 	m_currentApi++;
 	if (m_currentApi > 0) {
 		log(QStringLiteral("[%1] Loading using %2 failed. Retry using %3.").arg(m_site->url(), m_siteApis[m_currentApi - 1]->getName(), m_siteApis[m_currentApi]->getName()), Logger::Warning);
@@ -159,9 +165,13 @@ void Page::loadFinished(PageApi *api, PageApi::LoadResult status)
 
 	QString eventLabel = QStringLiteral("%1 (%2)").arg(m_site->url(), m_siteApis[m_currentApi]->getName());
 	if (status == PageApi::LoadResult::Ok) {
-		// Remember that the site itself answered with nothing, whatever the later APIs say.
+		// Remember what the site said: pictures, or a valid page with nothing in it.
 		if (api->images().isEmpty()) {
-			m_emptyResult = true;
+			if (m_outcome != Outcome::Images) {
+				m_outcome = Outcome::Empty;
+			}
+		} else {
+			m_outcome = Outcome::Images;
 		}
 		// A site's API can answer a valid page with no pictures when it does not understand a tag (silently
 		// dropped conditions) while another API of the same site does. Trying it costs one request, and only
@@ -175,6 +185,10 @@ void Page::loadFinished(PageApi *api, PageApi::LoadResult status)
 		Analytics::getInstance().sendEvent("Page load", "Success", eventLabel);
 		emit finishedLoading(this);
 	} else {
+		// A failed request only turns the page into a failure when nothing readable came back first.
+		if (m_outcome == Outcome::Pending) {
+			m_outcome = Outcome::Failed;
+		}
 		const QStringList &errors = api->errors();
 		if (errors.isEmpty() || !errors.first().contains("impossible")) {
 			Analytics::getInstance().sendEvent("Page load", "Error", eventLabel);
@@ -230,6 +244,7 @@ void Page::httpsRedirectSlot()
 
 void Page::clear()
 {
+	m_outcome = Outcome::Pending;
 	for (PageApi *pageApi : qAsConst(m_pageApis)) {
 		pageApi->clear();
 	}

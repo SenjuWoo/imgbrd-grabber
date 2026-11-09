@@ -36,6 +36,8 @@ class PageApi : public QObject
 		};
 
 		explicit PageApi(Page *parentPage, Profile *profile, Site *site, Api *api, SearchQuery query, int page = 1, int limit = 25, PostFilter postFiltering = PostFilter(), bool smart = false, QObject *parent = nullptr, int pool = 0, PageInformation lastPageInformation = {});
+		// How long one page may wait out rate limits before giving up with a real error, in milliseconds.
+		static const int RateLimitBudget = 180000;
 		~PageApi() override;
 		PageInformation pageInformation() const;
 		void setLastPage(const PageInformation& info);
@@ -115,6 +117,9 @@ class PageApi : public QObject
 		QSet<QString> m_redirectsSeen;
 		int m_redirectHops = 0;
 		int m_rateLimitRetries = 0;
+		// Wall-clock deadline for waiting out a rate limit. The site's shared cooldown can be pushed
+		// further out by other requests (Discover), which used to keep a page retrying forever.
+		qint64 m_rateLimitDeadline = 0;
 		QTimer *retryTimer(); // Single-shot timer that asks again once the site's shared cooldown ends.
 		QTimer *m_retryTimer = nullptr; // Waits before asking again after a rate limit, outside the shared request queue.
 

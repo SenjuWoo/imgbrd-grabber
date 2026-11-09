@@ -216,10 +216,19 @@ QTimer *PageApi::retryTimer()
 		m_retryTimer->setSingleShot(true);
 		connect(m_retryTimer, &QTimer::timeout, this, [this]() {
 			// Another request of the same site may have moved the limit further out; wait for that
-			// instead of asking again into a closed gate.
+			// instead of asking again into a closed gate. The wait is bounded: a site kept busy by
+			// Discover must not hold a search open forever.
 			const qint64 remaining = m_site->rateLimitRemaining();
-			if (remaining > 0) {
+			if (remaining > 0 && QDateTime::currentMSecsSinceEpoch() < m_rateLimitDeadline) {
 				m_retryTimer->start(int(qMin<qint64>(INT_MAX, remaining + 250)));
+				return;
+			}
+			if (remaining > 0) {
+				m_errors.append(tr("The site kept refusing requests while other searches ran."));
+				setReply(nullptr);
+				m_loaded = true;
+				m_loading = false;
+				emit finishedLoading(this, LoadResult::Error);
 				return;
 			}
 			load(false, true);
@@ -324,6 +333,10 @@ void PageApi::parse()
 			waitSeconds = qMax(waitSeconds, qMin(retryAfter, 300));
 		}
 		m_site->notifyRateLimited(waitSeconds);
+		// The first limit of this page starts the clock; later ones keep waiting, but not past it.
+		if (m_rateLimitDeadline == 0) {
+			m_rateLimitDeadline = QDateTime::currentMSecsSinceEpoch() + RateLimitBudget;
+		}
 		// Spread the requests that waited for the same limit so their retries do not all arrive at once.
 		const qint64 waitMs = qMin<qint64>(INT_MAX, m_site->rateLimitRemaining() + QRandomGenerator::global()->bounded(1500));
 		log(QStringLiteral("[%1][%2] Limit reached (%3). New try in %4 s.").arg(m_site->url(), m_format, QString::number(statusCode)).arg(double(waitMs) / 1000, 0, 'f', 1), Logger::Warning);
