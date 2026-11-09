@@ -29,6 +29,8 @@ class Page : public QObject
 		void setLastPage(const PageInformation &info);
 		void fallback(bool loadIfPossible = true);
 		void load(bool rateLimit = false);
+		// Loads the current API without resetting the page's outcome or rate-limit budget, for fallback.
+		void loadApi(bool rateLimit = false);
 		void loadTags();
 		const QList<QSharedPointer<Image>> &images() const;
 		Site *site() const;
@@ -54,17 +56,16 @@ class Page : public QObject
 		bool isLoaded() const;
 		bool isValid() const;
 		QMap<QString, QUrl> urls() const;
+		/** How long one page may wait out rate limits in total, in milliseconds. */
+		static const int RateLimitBudget = 180000;
+		// How long this page may still wait out rate limits, in milliseconds. Every fallback API of the
+		// site draws on the same budget, which starts with the first limit and is reset by clear().
+		qint64 rateLimitBudget();
 
 	public slots:
 		void abort();
 		void abortTags();
 		void clear();
-		void loadApi(bool rateLimit = false);
-		// How long this page may still wait out rate limits, in milliseconds. Every fallback API of the
-		// site draws on the same budget, which starts with the first limit and is reset by clear().
-		qint64 rateLimitBudget();
-		/** How long one page may wait out rate limits in total, in milliseconds. */
-		static const int RateLimitBudget = 180000;
 
 	protected slots:
 		void loadFinished(PageApi *api, PageApi::LoadResult status);
