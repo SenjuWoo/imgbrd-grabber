@@ -21,10 +21,11 @@ $ErrorActionPreference = 'Stop'
 $personalFiles = @(
 	'settings.ini', 'tabs.json', 'history.json', 'favorites.json', 'discover.json', 'stories.json',
 	'library.sqlite', 'md5s.sqlite', 'story-key.dat', 'restore.igl',
-	'blacklist.txt', 'ignore.txt', 'filenamehistory.txt', 'viewitlater.txt', 'words.txt', 'wordsc.txt'
+	'blacklist.txt', 'ignore.txt', 'filenamehistory.txt', 'viewitlater.txt', 'words.txt', 'wordsc.txt',
+	'position'
 )
 # Directories that are personal or rebuilt by the program.
-$personalDirs = @('logs', 'cache', 'recommendations')
+$personalDirs = @('logs', 'cache', 'recommendations', 'themes', 'webservices', 'models')
 
 if (!(Test-Path -LiteralPath $Install -PathType Container)) { throw "Install folder not found: $Install" }
 
