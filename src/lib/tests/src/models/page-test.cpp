@@ -164,6 +164,25 @@ TEST_CASE("Reloading an empty page stays terminal and does not hang")
 	CustomNetworkAccessManager::NextFiles.clear();
 }
 
+TEST_CASE("The rate-limit budget belongs to the page and resets on a new load")
+{
+	setupSource("Danbooru (2.0)");
+	setupSite("Danbooru (2.0)", "danbooru.donmai.us");
+	const QScopedPointer<Profile> profile(makeProfile());
+	auto *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+
+	Page page(profile.data(), site, {site}, QStringList{"1girl"});
+	const qint64 first = page.rateLimitBudget();
+	REQUIRE(first > 0);
+	REQUIRE(first <= Page::RateLimitBudget);
+	// Every fallback API of the site draws on the same budget, so asking again never adds time.
+	REQUIRE(page.rateLimitBudget() <= first);
+	// A genuinely new load starts the clock again instead of inheriting the old wait.
+	page.clear();
+	REQUIRE(page.rateLimitBudget() > Page::RateLimitBudget - 5000);
+}
+
 TEST_CASE("Page reload emits once and unsupported endpoints remain readable")
 {
 	setupSource("Danbooru (2.0)");

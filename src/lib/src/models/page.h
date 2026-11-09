@@ -59,6 +59,12 @@ class Page : public QObject
 		void abort();
 		void abortTags();
 		void clear();
+		void loadApi(bool rateLimit = false);
+		// How long this page may still wait out rate limits, in milliseconds. Every fallback API of the
+		// site draws on the same budget, which starts with the first limit and is reset by clear().
+		qint64 rateLimitBudget();
+		/** How long one page may wait out rate limits in total, in milliseconds. */
+		static const int RateLimitBudget = 180000;
 
 	protected slots:
 		void loadFinished(PageApi *api, PageApi::LoadResult status);
@@ -75,6 +81,8 @@ class Page : public QObject
 		PageApi *currentApi() const;
 		Site *m_site;
 		int m_currentApi;
+		// When the first rate limit of this page was seen; zero until then.
+		qint64 m_rateLimitDeadline = 0;
 		// What the site's APIs have answered so far: pictures, a valid but empty page, or nothing at all.
 		// An empty answer is a result of its own, and must never hide a real failure behind it.
 		enum class Outcome

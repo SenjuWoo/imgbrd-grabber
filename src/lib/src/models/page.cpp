@@ -1,4 +1,5 @@
 #include "models/page.h"
+#include <QDateTime>
 #include <QUrl>
 #include <algorithm>
 #include <utility>
@@ -126,7 +127,7 @@ void Page::fallback(bool loadIfPossible)
 	}
 
 	if (loadIfPossible) {
-		load();
+		loadApi();
 	}
 }
 
@@ -146,6 +147,13 @@ void Page::setLastPage(const PageInformation& info)
 }
 
 void Page::load(bool rateLimit)
+{
+	// A caller starting a load gets a fresh budget and a fresh outcome; an API fallback keeps both.
+	m_rateLimitDeadline = 0;
+	m_outcome = Outcome::Pending;
+	loadApi(rateLimit);
+}
+void Page::loadApi(bool rateLimit)
 {
 	if (m_currentApi < 0 || m_currentApi >= m_pageApis.count()) {
 		log(QStringLiteral("[%1] No available API to perform the request").arg(m_site->url()), Logger::Error);
@@ -245,9 +253,20 @@ void Page::httpsRedirectSlot()
 void Page::clear()
 {
 	m_outcome = Outcome::Pending;
+	m_rateLimitDeadline = 0;
 	for (PageApi *pageApi : qAsConst(m_pageApis)) {
 		pageApi->clear();
 	}
+}
+
+qint64 Page::rateLimitBudget()
+{
+	const qint64 now = QDateTime::currentMSecsSinceEpoch();
+	// A fresh load starts a fresh budget; later limits of the same load only draw it down.
+	if (m_rateLimitDeadline == 0) {
+		m_rateLimitDeadline = now + RateLimitBudget;
+	}
+	return qMax<qint64>(0, m_rateLimitDeadline - now);
 }
 
 PageApi *Page::currentApi() const
