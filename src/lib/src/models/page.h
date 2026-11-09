@@ -75,6 +75,9 @@ class Page : public QObject
 		PageApi *currentApi() const;
 		Site *m_site;
 		int m_currentApi;
+		// Some API of the site answered with a valid page that simply had no pictures: an empty search,
+		// which is a result of its own and must not be reported as a broken source.
+		bool m_emptyResult = false;
 		QList<Api*> m_siteApis;
 		QList<PageApi*> m_pageApis;
 		int m_regexApi;
