@@ -336,7 +336,8 @@ QMap<QString, QUrl> Page::urls() const
 	for (int i = 0; i < m_pageApis.count(); ++i) {
 		auto *siteApi = m_pageApis[i]->api();
 		auto *pageApi = m_pageApis[i];
-		if (!pageApi->url().isEmpty()) {
+		// A joined page has no single address worth replaying: it is rebuilt from the page number.
+		if (!pageApi->url().isEmpty() && !pageApi->joinsSitePages()) {
 			ret[siteApi->getName()] = pageApi->url();
 		}
 	}

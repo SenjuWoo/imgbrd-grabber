@@ -1,6 +1,7 @@
 #include "models/page-api.h"
 // #include <QtConcurrentRun>
 #include <QRandomGenerator>
+#include <QRegularExpression>
 #include <QTimer>
 #include <QtMath>
 #include <climits>
@@ -34,7 +35,7 @@ PageApi::PageApi(Page *parentPage, Profile *profile, Site *site, Api *api, Searc
 	if (m_api->forcedLimit() > 0) {
 		m_imagesPerPage = m_api->forcedLimit();
 		// Plain tag searches on fixed-size sources (42 per HTML page) request enough of them to fill the asked-for page.
-		if (m_requestedImagesPerPage > m_imagesPerPage && !m_smart && m_query.gallery.isNull() && m_query.endpoint.isEmpty() && m_query.urls.isEmpty()
+		if (m_requestedImagesPerPage > m_imagesPerPage && !m_smart && m_query.gallery.isNull() && m_query.endpoint.isEmpty()
 			&& !(m_query.tags.count() == 1 && isUrl(m_query.tags.first()))) {
 			m_siteLimit = m_imagesPerPage;
 			m_imagesPerPage = m_requestedImagesPerPage;
@@ -87,8 +88,9 @@ void PageApi::updateUrls()
 	QString url;
 	m_errors.clear();
 
-	// URL searches
-	if (m_query.urls.contains(m_api->getName())) {
+	// URL searches. A joined page derives its addresses from the page number: a saved address is one of
+	// the source's own pages (the last one read), and replaying it would show the wrong slice.
+	if (m_siteLimit == 0 && m_query.urls.contains(m_api->getName())) {
 		url = m_query.urls[m_api->getName()];
 	} else if (m_query.tags.count() == 1 && isUrl(m_query.tags.first())) {
 		url = m_query.tags.first();
@@ -388,9 +390,18 @@ void PageApi::parseActual()
 	} else {
 		// Try to read the reply
 		m_source = m_reply->readAll();
-		if (m_source.isEmpty() || (m_reply->error() != NetworkReply::NetworkError::NoError && !parseErrors)) {
+		// Data APIs (Gelbooru's JSON, for one) answer a search without results with an empty body. That is
+		// an empty page, not a failure; an HTML page is never empty, so there it still is one.
+		const bool emptyAnswer = m_source.isEmpty() && m_reply->error() == NetworkReply::NetworkError::NoError
+			&& statusCode >= 200 && statusCode < 300 && m_format != QLatin1String("Html");
+		if (emptyAnswer) {
+			log(QStringLiteral("[%1][%2] Empty answer: no result").arg(m_site->url(), m_format), Logger::Info);
+		} else if (m_source.isEmpty() || (m_reply->error() != NetworkReply::NetworkError::NoError && !parseErrors)) {
 			if (m_reply->error() != NetworkReply::NetworkError::OperationCanceledError) {
 				log(QStringLiteral("[%1][%2] Loading error: %3 (%4)").arg(m_site->url(), m_format, m_reply->errorString()).arg(m_reply->error()), Logger::Error);
+			}
+			if (statusCode == 401 || m_reply->error() == NetworkReply::NetworkError::AuthenticationRequiredError) {
+				m_site->markAuthRefused(m_api);
 			}
 			if (!keepJoined) {
 				fail();
@@ -411,6 +422,10 @@ void PageApi::parseActual()
 			if (!page.error.isEmpty()) {
 				m_terminal = page.terminal;
 				log(QStringLiteral("[%1][%2] %3").arg(m_site->url(), m_format, page.error), Logger::Warning);
+				static const QRegularExpression authRefusal(QStringLiteral("missing authentication|authentication (is )?required|requires authentication"), QRegularExpression::CaseInsensitiveOption);
+				if (statusCode == 401 || authRefusal.match(page.error).hasMatch()) {
+					m_site->markAuthRefused(m_api);
+				}
 				if (!keepJoined) {
 					m_errors.append(page.error);
 					fail();
@@ -558,7 +573,9 @@ void PageApi::parseActual()
 		m_images.removeLast();
 	}
 
-	log(QStringLiteral("[%1][%2] Parsed page `%3`: %4 images (%5), %6 tags (%7), %8 total (%9), %10 pages (%11)").arg(m_site->url(), m_format, m_reply->url().toString()).arg(m_images.count()).arg(m_pageImageCount).arg(page.tags.count()).arg(m_tags.count()).arg(imagesCount(false)).arg(imagesCount(true)).arg(pagesCount(false)).arg(pagesCount(true)), Logger::Info);
+	// The address goes in last and outside arg(): its percent escapes (%2C) would be read as place markers.
+	log(QStringLiteral("[%1][%2] Parsed page `").arg(m_site->url(), m_format) + m_reply->url().toString()
+		+ QStringLiteral("`: %1 images (%2), %3 tags (%4), %5 total (%6), %7 pages (%8)").arg(m_images.count()).arg(m_pageImageCount).arg(page.tags.count()).arg(m_tags.count()).arg(imagesCount(false)).arg(imagesCount(true)).arg(pagesCount(false)).arg(pagesCount(true)), Logger::Info);
 
 	setReply(nullptr);
 	m_loaded = true;

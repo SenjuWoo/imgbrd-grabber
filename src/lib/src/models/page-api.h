@@ -67,6 +67,8 @@ class PageApi : public QObject
 		const QUrl &prevPage() const;
 		bool isLoaded() const;
 		Api *api() const { return m_api; }
+		/** True when several of the source's fixed-size pages are joined to fill the requested page. */
+		bool joinsSitePages() const { return m_siteLimit > 0; }
 
 	public slots:
 		void load(bool rateLimit = false, bool force = false);

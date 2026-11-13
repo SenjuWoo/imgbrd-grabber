@@ -2,6 +2,7 @@
 #include <QSignalSpy>
 #include <QTemporaryFile>
 #include "custom-network-access-manager.h"
+#include "models/api/api.h"
 #include "models/page.h"
 #include "models/profile.h"
 #include "models/site.h"
@@ -202,6 +203,99 @@ TEST_CASE("An empty page followed by a failed fallback is not a confirmed empty 
 	}
 	REQUIRE(finished.count() == 0);
 	REQUIRE(!page.errors().isEmpty());
+	CustomNetworkAccessManager::NextFiles.clear();
+}
+
+TEST_CASE("A search without results on a Gelbooru site is an empty search")
+{
+	setupSource("Gelbooru (0.2)");
+	setupSite("Gelbooru (0.2)", "gelbooru.com");
+	const QScopedPointer<Profile> profile(makeProfile());
+	auto *site = profile->getSites().value("gelbooru.com");
+	REQUIRE(site != nullptr);
+	site->setAutoLogin(false);
+
+	QTemporaryFile xml;
+	REQUIRE(xml.open());
+	REQUIRE(xml.write(R"(<?xml version="1.0" encoding="UTF-8"?><posts count="0" offset="0"></posts>)") > 0);
+	xml.flush();
+	QTemporaryFile html;
+	REQUIRE(html.open());
+	REQUIRE(html.write(R"(<html><body><h1>Nobody here but us chickens!</h1></body></html>)") > 0);
+	html.flush();
+	// What safebooru.org and gelbooru.com really send for JSON without results: HTTP 200 and no body at all.
+	QTemporaryFile json;
+	REQUIRE(json.open());
+
+	CustomNetworkAccessManager::NextFiles.clear();
+	QStringList order;
+	for (Api *api : site->getLoggedInApis()) {
+		order.append(api->getName());
+		CustomNetworkAccessManager::NextFiles.enqueue(api->getName() == "Xml" ? xml.fileName() : api->getName() == "Json" ? json.fileName() : html.fileName());
+	}
+	REQUIRE(order.contains("Json"));
+
+	Page page(profile.data(), site, {site}, QStringList{"indecent_exposure"});
+	QSignalSpy finished(&page, &Page::finishedLoading);
+	QSignalSpy failed(&page, &Page::failedLoading);
+	page.load();
+	if (finished.isEmpty() && failed.isEmpty()) {
+		REQUIRE(finished.wait());
+	}
+	REQUIRE(failed.count() == 0);
+	REQUIRE(finished.count() == 1);
+	REQUIRE(page.images().isEmpty());
+	CustomNetworkAccessManager::NextFiles.clear();
+}
+
+TEST_CASE("An API that refuses anonymous requests is skipped by later pages")
+{
+	setupSource("Danbooru (2.0)");
+	setupSite("Danbooru (2.0)", "danbooru.donmai.us");
+	const QScopedPointer<Profile> profile(makeProfile());
+	auto *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	site->setAutoLogin(false);
+
+	const QList<Api*> all = site->getLoggedInApis();
+	REQUIRE(all.size() >= 2);
+	Api *first = all.first();
+
+	QTemporaryFile json;
+	REQUIRE(json.open());
+	REQUIRE(json.write(R"([])") > 0);
+	json.flush();
+	QTemporaryFile html;
+	REQUIRE(html.open());
+	REQUIRE(html.write(R"(<html><body></body></html>)") > 0);
+	html.flush();
+
+	CustomNetworkAccessManager::NextFiles.clear();
+	CustomNetworkAccessManager::NextFiles.enqueue("401");
+	for (int i = 1; i < all.size(); ++i) {
+		CustomNetworkAccessManager::NextFiles.enqueue(all[i]->getName() == "Html" ? html.fileName() : json.fileName());
+	}
+
+	Page page(profile.data(), site, {site}, QStringList{"forest"});
+	QSignalSpy finished(&page, &Page::finishedLoading);
+	QSignalSpy failed(&page, &Page::failedLoading);
+	page.load();
+	if (finished.isEmpty() && failed.isEmpty()) {
+		REQUIRE(failed.wait());
+	}
+
+	// The refused API is no longer offered, so the next page does not spend a request on it.
+	const QList<Api*> later = site->getLoggedInApis();
+	REQUIRE_FALSE(later.contains(first));
+	REQUIRE(later.size() == all.size() - 1);
+	Page next(profile.data(), site, {site}, QStringList{"forest"}, 2);
+	REQUIRE_FALSE(next.urls().contains(first->getName()));
+
+	// When every API refuses, they are all offered again rather than leaving the site without any.
+	for (Api *api : all) {
+		site->markAuthRefused(api);
+	}
+	REQUIRE(site->getLoggedInApis().size() == all.size());
 	CustomNetworkAccessManager::NextFiles.clear();
 }
 

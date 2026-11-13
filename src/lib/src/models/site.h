@@ -2,6 +2,8 @@
 #define SITE_H
 
 #include <QDateTime>
+#include <QList>
+#include <QSet>
 #include <QString>
 #include <QUrl>
 #include <QVariant>
@@ -99,7 +101,13 @@ class Site : public QObject
 
 		// Api
 		const QList<Api*> &getApis() const;
+		/**
+		 * The APIs worth asking, in order. One that refused an anonymous request (HTTP 401, "Missing
+		 * authentication") is left out until the settings or the login change, unless nothing else is left:
+		 * asking it again for every page only spends a request and a rate-limit slot on a certain refusal.
+		 */
 		QList<Api*> getLoggedInApis() const;
+		void markAuthRefused(Api *api);
 
 		SourceEngine *getSourceEngine() const;
 		Api *firstValidApi() const;
@@ -140,6 +148,7 @@ class Site : public QObject
 		NetworkManager *m_manager;
 		PersistentCookieJar *m_cookieJar;
 		QList<Api*> m_apis;
+		QSet<Api*> m_authRefused;
 		TagDatabase *m_tagDatabase;
 
 		// Login

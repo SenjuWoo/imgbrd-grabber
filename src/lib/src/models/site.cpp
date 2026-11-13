@@ -60,6 +60,8 @@ Site::Site(QString url, SourceEngine *engine, ReadWritePath dir, Profile *profil
 
 void Site::loadConfig()
 {
+	// New settings may carry the credentials an API asked for, and the API objects are rebuilt below.
+	m_authRefused.clear();
 	if (m_settings != nullptr) {
 		m_settings->deleteLater();
 	}
@@ -223,6 +225,7 @@ void Site::login(bool force)
 	}
 
 	log(QStringLiteral("[%1] Logging in...").arg(m_url), Logger::Info);
+	m_authRefused.clear();
 
 	// Clear cookies if we want to force a re-login
 	if (force) {
@@ -372,15 +375,22 @@ SourceEngine *Site::getSourceEngine() const { return m_sourceEngine; }
 const QList<Api *> &Site::getApis() const { return m_apis; }
 QList<Api *> Site::getLoggedInApis() const
 {
-	QList<Api*> ret;
+	QList<Api*> ret, refused;
 	const bool loggedIn = isLoggedIn(true);
 	for (Api *api : m_apis) {
 		if (!api->needAuth() || loggedIn) {
-			ret.append(api);
+			(m_authRefused.contains(api) ? refused : ret).append(api);
 		}
 	}
 
-	return ret;
+	return ret.isEmpty() ? refused : ret;
+}
+void Site::markAuthRefused(Api *api)
+{
+	if (api != nullptr && !m_authRefused.contains(api)) {
+		m_authRefused.insert(api);
+		log(QStringLiteral("[%1] %2 needs an account or API key; later pages skip it. Add the credentials in the source's settings to use it.").arg(m_url, api->getName()), Logger::Warning);
+	}
 }
 Api *Site::firstValidApi() const
 {

@@ -13,6 +13,7 @@
 #include "models/page.h"
 #include "models/page-api.h"
 #include "models/profile.h"
+#include "models/search-query/search-query.h"
 #include "models/site.h"
 #include "models/source.h"
 #include "tags/tag.h"
@@ -318,5 +319,36 @@ TEST_CASE("PageApi pagination uses response evidence and the effective API limit
 		}
 		REQUIRE(ids == QList<qulonglong> {5, 6, 7, 8, 9});
 		REQUIRE_FALSE(joined.hasNext());
+	}
+	SECTION("A saved address never replaces a joined page")
+	{
+		// A restored tab hands back the last address each API read. For a joined page that is the last of
+		// the source's own pages, and replaying it used to show the wrong slice with the wrong size.
+		source.property("apis").property("json").setProperty("forcedLimit", 3);
+		SearchQuery query(QStringList{"forest"});
+		query.urls.insert(api.getName(), QStringLiteral("https://danbooru.donmai.us/posts.json?page=9&limit=3"));
+		PageApi joined(&parentPage, profile.data(), site, &api, query, 1, 5);
+		REQUIRE(joined.joinsSitePages());
+		REQUIRE(joined.imagesPerPage() == 5);
+		REQUIRE(QUrlQuery(joined.url()).queryItemValue("page") == "1");
+		// Without joining, the saved address is still what gets loaded.
+		source.property("apis").property("json").setProperty("forcedLimit", 0);
+		PageApi plain(&parentPage, profile.data(), site, &api, query, 1, 5);
+		REQUIRE_FALSE(plain.joinsSitePages());
+		REQUIRE(QUrlQuery(plain.url()).queryItemValue("page") == "9");
+	}
+	SECTION("An empty answer from a data API is an empty page, not a failure")
+	{
+		QTemporaryFile empty;
+		REQUIRE(empty.open());
+		CustomNetworkAccessManager::NextFiles.enqueue(empty.fileName());
+		QSignalSpy finished(&page, &PageApi::finishedLoading);
+		page.load();
+		REQUIRE(finished.wait());
+		REQUIRE(finished.size() == 1);
+		REQUIRE(finished.first().at(1).value<PageApi::LoadResult>() == PageApi::Ok);
+		REQUIRE(page.images().isEmpty());
+		REQUIRE(page.errors().isEmpty());
+		REQUIRE_FALSE(page.hasNext());
 	}
 }
