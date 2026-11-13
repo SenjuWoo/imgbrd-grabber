@@ -17,6 +17,12 @@ Profile *makeProfile(bool clean)
 		QFile::remove("tests/resources/md5s.txt");
 		QFile::remove("tests/resources/viewitlater.txt");
 		QFile::remove("tests/resources/wordsc.txt");
+		// Every Library restore leaves a safety copy beside the catalog; tests restore into this folder
+		// and filled the checkout with hundreds of them.
+		QDir resources("tests/resources");
+		for (const QString &leftover : resources.entryList({"library.sqlite.before-restore-*.bak"}, QDir::Files)) {
+			resources.remove(leftover);
+		}
 	}
 
 	QFile settings("tests/resources/settings.ini");

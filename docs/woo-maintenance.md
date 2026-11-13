@@ -21,9 +21,16 @@ they apply only when a profile's settings.ini is missing or empty.
    deliberately changed assets; take unchanged runtime files from the fresh package.
    Copy the profile into the package, verify JSON/SQLite and hashes, smoke-test it,
    then swap folders. Do not overlay new Qt DLLs onto an old runtime tree.
+   `scripts/update-install.ps1 -Package <zip or folder> -Install <app folder>` does this for a
+   portable install: it refuses to run while Grabber is open, copies the personal files to
+   `<app folder> Backups/update-<time>` (never inside the app folder; cache, logs and the AI model
+   are not copied), replaces program files, checks that the new CLI starts, proves every personal
+   file is byte-identical, and rolls back otherwise. It keeps the three newest backups.
+   `scripts/test-update-install.ps1 -Package <zip>` exercises all of that on a throwaway install.
 5. Keep the app, this checkout and one compact profile backup. Remove obsolete
    app copies, cached archives and generated packaging/coverage folders only after
-   the replacement runs. Keep build/ and its CMake cache for the next edit.
+   the replacement runs. Keep build/ and its CMake cache for the next edit. A leftover
+   `release.new/` is an interrupted package: `package-windows.ps1` refuses to start until it is removed.
 6. Commit and push scoped source changes. Publishing a release requires the user's
    authorization and successful checks on the exact pushed SHA.
 
@@ -122,3 +129,23 @@ and [SQLite consistent snapshots](https://www.sqlite.org/lang_vacuum.html).
 ## Site development dependencies
 
 The npm override keeps argparse at 2.0.1 to remove the vulnerable sprintf-js dependency while retaining the legacy CLI aliases used by js-yaml 3 in the lint and coverage tools. Argparse 3 removes those aliases. Check updates with a fresh npm ci, the YAML CLI, and npm run check/build/test before changing the override. Development dependencies are excluded from the portable app.
+
+## 7.22.4 audit
+
+Baseline before the changes: clean build, every C++ suite and all site tests green, while the installed
+app showed an empty Discover, failing downloads and "Source failed" on empty searches. None of those
+paths had a test; each fix below has one that fails on the old code.
+
+- Evidence came from the app's own logs and from live responses of gelbooru.com, safebooru.org and
+  api.rule34.xxx: the two APIs refuse anonymous requests (HTTP 401, "Missing authentication"), a JSON
+  search without results is an empty body, post pages no longer carry the markup the detail reader
+  expected, and file names on two of the sites are 40-character hashes rather than MD5s.
+- Site tests: `src/sites/Gelbooru (0.2)/model.spec.ts`. Library tests: `page-test.cpp`,
+  `page-api-test.cpp`, `updater-test.cpp`. GUI tests: `home-test.cpp` (Discover resume, failed source,
+  restored tabs and chosen sources).
+- Tests that restore a Library into `tests/resources` left a `library.sqlite.before-restore-*.bak`
+  each run; the shared test profile now removes them.
+- Not audited line by line in this pass: AI stories, Library import and backup, the QML/Android
+  front end, the installer script and the translations. Their existing tests pass.
+- gelbooru.com and rule34.xxx work without credentials through their HTML pages, which are slower
+  (fixed 42 pictures per request, stricter throttling). The API route needs the user's own key.

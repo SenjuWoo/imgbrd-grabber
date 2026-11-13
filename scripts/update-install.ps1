@@ -6,13 +6,20 @@
 # while protecting the files that hold the user's library, settings and history, proves they are
 # unchanged afterwards, and keeps a timestamped copy of them before it starts.
 #
+# The copy goes beside the install ("<install> Backups\update-<time>"), never inside it: a backup inside
+# the program folder grew it by its own size on every update. Only the newest few are kept, and the
+# folders an update never writes and the program can rebuild (cache, logs, the downloaded AI model) are
+# not copied at all.
+#
 # Usage:
-#   pwsh -File scripts/update-install.ps1 -Package "S:\Misc\out\Grabber-Woo-Edit-7.22.3-windows-x64.zip" -Install "S:\Misc\Grabber Woo Edit"
+#   pwsh -File scripts/update-install.ps1 -Package <release ZIP or unpacked package> -Install <install folder>
 
 [CmdletBinding()]
 param(
 	[Parameter(Mandatory = $true)][string]$Package,
-	[Parameter(Mandatory = $true)][string]$Install
+	[Parameter(Mandatory = $true)][string]$Install,
+	[string]$BackupRoot,
+	[ValidateRange(1, 50)][int]$KeepBackups = 3
 )
 
 $ErrorActionPreference = 'Stop'
@@ -24,10 +31,14 @@ $personalFiles = @(
 	'blacklist.txt', 'ignore.txt', 'filenamehistory.txt', 'viewitlater.txt', 'words.txt', 'wordsc.txt',
 	'position'
 )
-# Directories that are personal or rebuilt by the program.
+# Directories that are personal or rebuilt by the program. An update never writes into any of them.
 $personalDirs = @('logs', 'cache', 'recommendations', 'themes', 'webservices', 'models')
+# Of those, the ones the program rebuilds or downloads again: large, and pointless to copy aside.
+$rebuiltDirs = @('logs', 'cache', 'models')
 
 if (!(Test-Path -LiteralPath $Install -PathType Container)) { throw "Install folder not found: $Install" }
+$Install = (Resolve-Path -LiteralPath $Install).Path.TrimEnd('\', '/')
+if (!$BackupRoot) { $BackupRoot = $Install + ' Backups' }
 
 # 0. Refuse to touch binaries that are in use: a running Grabber holds its DLLs and would leave a
 #    half-replaced install behind.
@@ -93,8 +104,8 @@ try {
 
 	# 3. Copy personal files aside before touching anything.
 	$stamp = Get-Date -Format 'yyyy-MM-dd-HHmmss'
-	$backup = Join-Path $Install ("backup-" + $stamp)
-	New-Item -ItemType Directory -Path $backup | Out-Null
+	$backup = Join-Path $BackupRoot ("update-" + $stamp)
+	New-Item -ItemType Directory -Path $backup -Force | Out-Null
 	$before = @{}
 	foreach ($name in $personalFiles) {
 		$path = Join-Path $Install $name
@@ -104,6 +115,7 @@ try {
 		}
 	}
 	foreach ($dir in $personalDirs) {
+		if ($rebuiltDirs -contains $dir) { continue }
 		$path = Join-Path $Install $dir
 		if (Test-Path -LiteralPath $path) { Copy-Item -LiteralPath $path -Destination (Join-Path $backup $dir) -Recurse -Force }
 	}
@@ -176,6 +188,11 @@ try {
 		Restore-Install -Backup $backup
 		throw ("Personal files changed during the update: " + ($changed -join ', ') + ". The install was rolled back from $backup.")
 	}
+
+	# The replaced program files were kept only to undo a failed update; the personal copy stays.
+	Remove-Item -LiteralPath $appBackup -Recurse -Force
+	$stale = @(Get-ChildItem -LiteralPath $BackupRoot -Directory -Filter 'update-*' | Sort-Object Name -Descending | Select-Object -Skip $KeepBackups)
+	foreach ($entry in $stale) { Remove-Item -LiteralPath $entry.FullName -Recurse -Force }
 
 	Write-Output "Updated $copied file(s). Personal data verified unchanged. Backup: $backup"
 	Write-Output $version
