@@ -211,6 +211,10 @@ Grabber.regexToTags = (regexp: string, src: string): ITag[] => {
 
     const matches = Grabber.regexMatches(regexp, src);
     for (const match of matches) {
+        // Sites indent tag links; the surrounding whitespace is not part of the name.
+        if (typeof match["name"] === "string") {
+            match["name"] = match["name"].trim();
+        }
         if (match["name"] in uniques) {
             continue;
         }

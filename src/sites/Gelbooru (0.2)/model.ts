@@ -3,6 +3,31 @@ const tagTypeMap: Record<string, string> = {
     "metadata": "meta",
 };
 
+function isMd5(value: any): boolean {
+    return typeof value === "string" && /^[0-9a-f]{32}$/i.test(value);
+}
+
+// The original file of a post page: its "Original image" link, then the page's og:image, then the picture
+// shown (a sample on large posts). The picture's attributes changed order and gained a Cloudflare prefix
+// in its onclick over the years, so none of that is assumed.
+function originalImageUrl(src: string): string | undefined {
+    const patterns = [
+        /<a[^>]+href="([^"]+)"[^>]*>\s*Original image\s*<\/a>/i,
+        /<meta[^>]+property="og:image"[^>]+content="([^"]+)"/i,
+        /<meta[^>]+content="([^"]+)"[^>]+property="og:image"/i,
+        /<img[^>]+src="([^"]+)"[^>]+id="image"/i,
+        /<img[^>]+id="image"[^>]+src="([^"]+)"/i,
+        /<img[^>]+src="([^"]+)"[^>]+onclick="[^"]*Note\.toggle\(\);"/i,
+    ];
+    for (const pattern of patterns) {
+        const match = src.match(pattern);
+        if (match && match[1].length > 4) {
+            return match[1].replace(/&amp;/g, "&");
+        }
+    }
+    return undefined;
+}
+
 function completeImage(img: IImage): IImage {
     img.author = (img as any).owner;
 
@@ -13,6 +38,17 @@ function completeImage(img: IImage): IImage {
             type: tagTypeMap[tag.type] || tag.type,
             count: tag.count,
         }));
+    }
+
+    // The JSON API calls the checksum "hash". File names are not checksums everywhere: safebooru.org and
+    // rule34.xxx name files with a 40-character hash, which must not be taken for the MD5 (it breaks
+    // duplicate detection, merging across sources and %md5% file names). Without one, the saved file is hashed.
+    const hash = (img as any).hash;
+    if (!isMd5(img.md5) && isMd5(hash)) {
+        img.md5 = hash;
+    }
+    if (!isMd5(img.md5)) {
+        delete img.md5;
     }
 
     if ((!img.file_url || img.file_url.length < 5) && img.preview_url) {
@@ -156,11 +192,27 @@ export const source: ISource = {
                     return "/index.php?page=dapi&s=post&q=index&limit=" + opts.limit + "&pid=" + page + "&tags=" + encodeURIComponent(search) + "&json=1";
                 },
                 parse: (src: string): IParsedSearch | IError => {
-                    let parsed = JSON.parse(src);
+                    // A search without results is answered with an empty body
+                    if (src.trim().length === 0) {
+                        return { images: [] };
+                    }
+
+                    let parsed: any;
+                    try {
+                        parsed = JSON.parse(src);
+                    } catch (e: any) {
+                        return { error: "Invalid JSON response" };
+                    }
 
                     // Handle error messages
                     if (typeof parsed === "string") {
                         return { error: parsed };
+                    }
+                    if (!parsed || typeof parsed !== "object") {
+                        return { error: "Invalid JSON response" };
+                    }
+                    if (!Array.isArray(parsed) && (parsed["success"] === false || parsed["success"] === "false")) {
+                        return { error: String(parsed["message"] || parsed["reason"] || "Unknown API error") };
                     }
 
                     // Handle the old format
@@ -172,13 +224,15 @@ export const source: ISource = {
                     }
 
                     const images: IImage[] = [];
-                    for (const image of parsed["post"]) {
-                        images.push(completeImage(image));
+                    for (const image of Grabber.makeArray(parsed["post"])) {
+                        if (image) {
+                            images.push(completeImage(image));
+                        }
                     }
 
                     return {
                         images,
-                        imageCount: parsed["@attributes"]["count"],
+                        imageCount: parsed["@attributes"]?.["count"],
                     };
                 },
             },
@@ -232,7 +286,7 @@ export const source: ISource = {
                     }
                     return {
                         images: images.map(completeImage),
-                        tags: Grabber.regexToTags('<li class="tag-type-(?<type>[^"]+)">(?:[^<]*<a[^>]*>[^<]*</a>)*[^<]*<a[^>]*>(?<name>[^<]*)</a>[^<]*<span[^>]*>\\s*(?<count>\\d+)\\s*</span>', src),
+                        tags: Grabber.regexToTags('<li class="tag-type-(?<type>[^" ]+)[^"]*">(?:[^<]*<a[^>]*>[^<]*</a>)*[^<]*<a[^>]*>(?<name>[^<]*)</a>[^<]*<span[^>]*>\\s*(?<count>\\d+)\\s*</span>', src),
                         pageCount: pageCount ? parseInt(pageCount, 10) / 42 + 1 : undefined,
                     };
                 },
@@ -244,9 +298,9 @@ export const source: ISource = {
                 },
                 parse: (src: string): IParsedDetails => {
                     return {
-                        tags: Grabber.regexToTags('<li class="tag-type-(?<type>[^"]+)">(?:[^<]*(?:<span[^>]*>[^<]*)?<a[^>]*>[^<]*</a>(?:[^<]*</span>)?)*[^<]*<a[^>]*>(?<name>[^<]*)</a>[^<]*<span[^>]*>(?<count>\\d+)</span>[^<]*</li>', src),
-                        imageUrl: Grabber.regexToConst("url", '<img[^>]+src="([^"]+)"[^>]+onclick="Note\\.toggle\\(\\);"[^>]*/>', src),
-                        createdAt: src.match(/>Posted:\s*([^<]+)</i)?.[1],
+                        tags: Grabber.regexToTags('<li class="tag-type-(?<type>[^" ]+)[^"]*">(?:[^<]*(?:<span[^>]*>[^<]*)?<a[^>]*>[^<]*</a>(?:[^<]*</span>)?)*[^<]*<a[^>]*>(?<name>[^<]*)</a>[^<]*<span[^>]*>(?<count>\\d+)</span>[^<]*</li>', src),
+                        imageUrl: originalImageUrl(src),
+                        createdAt: src.match(/Posted:\s*([^<]+)</i)?.[1]?.trim(),
                         source: src.match(/>Source:\s*<a href="([^"]+)"/i)?.[1],
                     };
                 },
