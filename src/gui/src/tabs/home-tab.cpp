@@ -302,7 +302,15 @@ void HomeTab::showEvent(QShowEvent *event)
 {
 	QWidget::showEvent(event);
 	m_feed->setPaused(false);
-	if (m_started) {
+	if (m_started && m_grid->gridModel()->rowCount() == 0) {
+		// An empty feed has no scroll position to continue from: ask again, or it would stay empty until
+		// a manual Refresh (every start pauses the first batch when the saved tab opens).
+		QTimer::singleShot(0, this, [this]() {
+			if (!m_feed->isBusy()) {
+				m_feed->fetchMore();
+			}
+		});
+	} else if (m_started) {
 		QTimer::singleShot(0, m_grid, &ImageGridView::checkNearEnd); // Continue where a pause stopped.
 	}
 	m_grid->setDensity(m_profile->getSettings()->value("Gallery/density", 1).toInt());

@@ -1585,10 +1585,23 @@ void SearchTab::toggleSource(const QString &url)
 {
 	Site *site = m_sites.value(url);
 
+	if (site == nullptr) {
+		return;
+	}
+
 	const int removed = m_selectedSources.removeAll(site);
 	if (removed == 0) {
 		m_selectedSources.append(site);
 	}
+
+	// A tick in the source bar is a choice like the Sources window: remember it, so new tabs, Discover and
+	// the next start follow what is ticked instead of an older selection.
+	QStringList chosen;
+	chosen.reserve(m_selectedSources.count());
+	for (Site *selected : std::as_const(m_selectedSources)) {
+		chosen.append(selected->url());
+	}
+	m_settings->setValue("sites", chosen);
 }
 void SearchTab::setFavoriteImage(const QString &name)
 {

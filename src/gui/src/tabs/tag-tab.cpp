@@ -192,7 +192,12 @@ bool TagTab::read(const QJsonObject &json, bool preload)
 			selectedSourcesObj.append(site);
 		}
 	}
-	saveSources(selectedSourcesObj, false);
+	// A restored tab gets its own sources back. It must not rewrite the sources chosen for new tabs and
+	// Discover (saveSources does): every restored tab did, so the last tab of the session decided them.
+	// It must not move the restored page back to 1 either, which saveSources does for a "new" source.
+	if (json.contains("sites")) {
+		setSources(selectedSourcesObj);
+	}
 
 	// Endpoint
 	const QString endpoint = json["endpoint"].toString();

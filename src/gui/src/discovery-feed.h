@@ -123,6 +123,7 @@ class DiscoveryFeed : public QObject
 			bool done = false;
 			bool dropped = false; // A better tagged copy of the same picture replaced it.
 			int group = 0;
+			QString signature; // The request (source|tags) that found it.
 		};
 
 		void loadState();
@@ -140,7 +141,9 @@ class DiscoveryFeed : public QObject
 		void encoded(const QString &key, const QVector<float> &vector);
 		void candidateDone(const QString &key);
 		void ratingChanged();
-		void finishBatch();
+		/** Ends the batch. `interrupted` (Discover left the screen) gives back the pages it could not show. */
+		void finishBatch(bool interrupted = false);
+		bool hasAnswerableSource() const;
 		void setBusy(bool busy);
 		double visualScore(const QVector<float> &vector) const;
 
@@ -160,6 +163,8 @@ class DiscoveryFeed : public QObject
 		QHash<Page *, QString> m_pages;
 		QHash<QString, QString> m_queryReasons;
 		QHash<QString, int> m_nextPage;
+		// Page asked for by each request of the running batch, to ask again when the batch is interrupted.
+		QHash<QString, int> m_batchPages;
 		QSet<QString> m_exhausted;
 		QStringList m_failedSources;
 		// Source that failed a batch request -> epoch seconds until which Discover skips it.

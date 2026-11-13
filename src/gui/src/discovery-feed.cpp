@@ -82,7 +82,7 @@ DiscoveryFeed::DiscoveryFeed(Profile *profile, LibraryRecommendations *recommend
 {
 	m_seed = QRandomGenerator::global()->generate();
 	m_timeout->setSingleShot(true);
-	connect(m_timeout, &QTimer::timeout, this, &DiscoveryFeed::finishBatch);
+	connect(m_timeout, &QTimer::timeout, this, [this]() { finishBatch(); });
 	connect(profile->library(), &LibraryStore::imageChanged, this, &DiscoveryFeed::ratingChanged);
 	connect(recommendations, &LibraryRecommendations::changed, this, [this]() { m_tasteDirty = true; });
 	loadState();
@@ -613,7 +613,7 @@ void DiscoveryFeed::setPaused(bool paused)
 {
 	m_paused = paused;
 	if (paused && m_busy) {
-		finishBatch(); // Shows what is ready and aborts the rest, so searches do not queue behind Discover.
+		finishBatch(true); // Shows what is ready and aborts the rest, so searches do not queue behind Discover.
 	}
 }
 
@@ -628,6 +628,7 @@ void DiscoveryFeed::restart()
 		it = it.key().endsWith('|') ? std::next(it) : m_nextPage.erase(it);
 	}
 	m_exhausted.clear();
+	m_backoff.clear(); // A refresh is the user asking again now.
 	m_shown.clear();
 	m_shownQueries.clear();
 	m_shownFingerprints.clear();
@@ -695,6 +696,7 @@ void DiscoveryFeed::fetchMore()
 	const int samples = m_taste.isEmpty() || sampleSources.isEmpty() ? 0 : (!unsampled.isEmpty() ? std::min<int>(2, int(unsampled.size())) : (m_batch % 3 == 2 ? 1 : 0));
 	++m_batch;
 	m_failedSources.clear();
+	m_batchPages.clear();
 	m_candidates.clear();
 	m_groups.clear();
 	m_previewQueue.clear();
@@ -726,6 +728,7 @@ void DiscoveryFeed::fetchMore()
 		// Single tags start at a random early page so refreshes are not always the same posts.
 		const int page = m_nextPage.value(signature, query.tags.size() == 1 ? 1 + int(rng.bounded(3u)) : 1);
 		m_nextPage.insert(signature, page + 1);
+		m_batchPages.insert(signature, page);
 		m_queryReasons.insert(signature, query.reason);
 		const bool sample = query.tags.isEmpty() && !m_taste.isEmpty();
 		log(QStringLiteral("Discover: %1 on %2 (page %3)").arg(query.tags.isEmpty() ? QStringLiteral("newest posts") : query.tags.join(' '), query.website).arg(page), Logger::Info);
@@ -736,7 +739,18 @@ void DiscoveryFeed::fetchMore()
 		connect(request, &Page::httpsRedirect, this, [this](Page *result) { pageFinished(result, false); });
 	}
 	if (m_pages.isEmpty()) {
-		emit statusChanged(tr("You've reached the end of these topics (%n picture(s) already seen).", "", seenCount()) + ' ' + repeatHint());
+		// Nothing could be asked. Sources resting after a failure are not "the end of these topics".
+		QStringList resting;
+		for (const QString &source : std::as_const(sources)) {
+			if (m_backoff.value(source, 0) > backoffNow) {
+				resting.append(sites.value(source)->name());
+			}
+		}
+		if (!resting.isEmpty()) {
+			emit statusChanged(tr("%1 did not respond. Discover asks again in a few minutes; Refresh asks now.").arg(resting.join(", ")));
+		} else {
+			emit statusChanged(tr("You've reached the end of these topics (%n picture(s) already seen).", "", seenCount()) + ' ' + repeatHint());
+		}
 		return;
 	}
 	setBusy(true);
@@ -820,6 +834,7 @@ void DiscoveryFeed::pageFinished(Page *page, bool success)
 			Candidate candidate;
 			candidate.item = {key, image, m_queryReasons.value(signature), 0, false};
 			candidate.query = queryTags;
+			candidate.signature = signature;
 			candidate.tagScore = m_taste.score(image->tagsString());
 			found.append(candidate);
 		}
@@ -1036,9 +1051,40 @@ void DiscoveryFeed::finishIfIdle()
 	}
 }
 
-void DiscoveryFeed::finishBatch()
+bool DiscoveryFeed::hasAnswerableSource() const
+{
+	const qint64 now = QDateTime::currentSecsSinceEpoch();
+	const auto &sites = m_profile->getSites();
+	for (const QString &source : SiteMirrors::unique(m_profile->getSettings()->value("sites").toStringList())) {
+		if (sites.contains(source) && m_backoff.value(source, 0) <= now) {
+			return true;
+		}
+	}
+	return false;
+}
+
+void DiscoveryFeed::finishBatch(bool interrupted)
 {
 	m_timeout->stop();
+	if (interrupted) {
+		// Leaving Discover mid-batch (every start does: the saved tab opens two seconds in) must not use up
+		// the pages that were asked for but never shown. They are asked again when Discover is back.
+		QSet<QString> unfinished;
+		for (auto it = m_pages.constBegin(); it != m_pages.constEnd(); ++it) {
+			unfinished.insert(it.value());
+		}
+		for (const auto &candidate : std::as_const(m_candidates)) {
+			if (!candidate.done && !candidate.dropped) {
+				unfinished.insert(candidate.signature);
+			}
+		}
+		for (const QString &signature : std::as_const(unfinished)) {
+			if (m_batchPages.contains(signature)) {
+				m_nextPage.insert(signature, m_batchPages.value(signature));
+				m_exhausted.remove(signature);
+			}
+		}
+	}
 	const auto pages = m_pages.keys();
 	m_pages.clear();
 	for (auto *page : pages) {
@@ -1068,7 +1114,7 @@ void DiscoveryFeed::finishBatch()
 
 	const QString visual = m_encoder == nullptr ? QStringLiteral("off") : (m_visualSeeds.isEmpty() ? QStringLiteral("on, but no rated Library picture is indexed") : QStringLiteral("on, %1 rated Library pictures").arg(m_visualSeeds.size()));
 	log(QStringLiteral("Discover: batch %1 showed %2 pictures, %3 ranked by look too (local AI %4)").arg(m_batch).arg(m_batchEmitted).arg(m_batchVisual).arg(visual), Logger::Info);
-	QString status = m_batchEmitted == 0 ? tr("No new pictures in this batch.") + ' ' + repeatHint() : QString();
+	QString status = m_batchEmitted == 0 && !interrupted ? tr("No new pictures in this batch.") + ' ' + repeatHint() : QString();
 	if (!m_failedSources.isEmpty()) {
 		status += (status.isEmpty() ? QString() : QStringLiteral(" ")) + tr("%1 did not respond.").arg(m_failedSources.join(", "));
 	}
@@ -1076,8 +1122,9 @@ void DiscoveryFeed::finishBatch()
 	emit statusChanged(status);
 	if (m_batchEmitted > 0) {
 		m_emptyBatches = 0;
-	} else if (m_failedSources.isEmpty() && ++m_emptyBatches < 3) {
-		// Everything was filtered out: try other topics, but never hammer failing sources.
+	} else if (!interrupted && !m_paused && ++m_emptyBatches < 3 && hasAnswerableSource()) {
+		// Everything was filtered out: try other topics. A source that failed rests for a few minutes and is
+		// skipped by the next batch, so it is not hammered, and it no longer stops the sources that answer.
 		QTimer::singleShot(0, this, &DiscoveryFeed::fetchMore);
 	}
 }

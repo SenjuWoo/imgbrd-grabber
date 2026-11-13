@@ -1,5 +1,8 @@
 #include <QApplication>
 #include <QFile>
+#include <QSpinBox>
+#include <QFileInfo>
+#include <QDir>
 #include <QImage>
 #include <QItemSelectionModel>
 #include <QJsonArray>
@@ -41,9 +44,9 @@
 
 namespace
 {
-	QString saveRated(Profile *profile, int id, const QString &md5, const QString &tags, bool favorite)
+	QString saveRated(Profile *profile, int id, const QString &md5, const QString &tags, bool favorite, Site *site = nullptr)
 	{
-		Image image(profile->getSites().value("danbooru.donmai.us"), {{"id", QString::number(id)}, {"md5", md5},
+		Image image(site != nullptr ? site : profile->getSites().value("danbooru.donmai.us"), {{"id", QString::number(id)}, {"md5", md5},
 			{"file_url", "https://test.invalid/" + QString::number(id) + ".png"}, {"tags", tags}}, profile);
 		QList<Tag> imageTags;
 		for (const auto &tag : tags.split(' ', Qt::SkipEmptyParts)) {
@@ -751,6 +754,154 @@ TEST_CASE("The taste dialog explains Discover and edits focus, variety and tag p
 
 	QTest::mouseClick(dialog.findChild<QPushButton*>("discoverResetTuning"), Qt::LeftButton);
 	REQUIRE(dialog.tuning().isNeutral());
+}
+
+TEST_CASE("Discover fills an empty feed again when it returns to the screen", "[library][home][discovery]")
+{
+	auto clearReplies = qScopeGuard([]() { CustomNetworkAccessManager::NextFiles.clear(); });
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *site = jsonDanbooru(profile.data());
+	seedTagBackground(profile.data(), site->url());
+	saveRated(profile.data(), 801, QString(32, '8'), "forest", true);
+	const QString posts = writePosts(directory, "posts.json", {
+		post(901, QString(32, '1'), "forest river"),
+		post(902, QString(32, '2'), "forest lake"),
+	});
+	CustomNetworkAccessManager::NextFiles.enqueue(posts);
+
+	HomeTab home(profile.data(), nullptr);
+	home.resize(1100, 800);
+	home.show();
+	REQUIRE(home.feed()->isBusy());
+	// What every start does: the saved tab opens while the first batch is still loading.
+	home.hide();
+	REQUIRE_FALSE(home.feed()->isBusy());
+	REQUIRE(home.grid()->gridModel()->rowCount() == 0);
+	// Being interrupted is not "no new pictures".
+	REQUIRE_FALSE(home.findChild<QLabel*>("homeStatus")->text().contains("No new pictures"));
+
+	CustomNetworkAccessManager::NextFiles.clear();
+	CustomNetworkAccessManager::NextFiles.enqueue(posts);
+	CustomNetworkAccessManager::NextFiles.enqueue(writePreview(directory, "a.png", Qt::red));
+	CustomNetworkAccessManager::NextFiles.enqueue(writePreview(directory, "b.png", Qt::blue));
+	home.show();
+	// Without asking again the feed stayed empty until a manual Refresh.
+	REQUIRE(QTest::qWaitFor([&home]() { return home.grid()->gridModel()->rowCount() == 2; }, 10000));
+}
+
+TEST_CASE("A failed source does not stop Discover from asking the others", "[library][home][discovery]")
+{
+	auto clearReplies = qScopeGuard([]() { CustomNetworkAccessManager::NextFiles.clear(); });
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	// A second site of the same source type, so one can fail while the other answers.
+	const QString sourceDir = QDir::cleanPath(QFileInfo(QString::fromUtf8(__FILE__)).absolutePath() + "/../../sites");
+	const QString target = directory.path() + "/sites/Danbooru (2.0)";
+	REQUIRE(QDir().mkpath(target + "/second.test"));
+	{
+		QFile sites(target + "/sites.txt");
+		REQUIRE(sites.open(QIODevice::WriteOnly));
+		REQUIRE(sites.write("danbooru.donmai.us\nsecond.test") > 0);
+	}
+	REQUIRE(QFile::copy(sourceDir + "/Danbooru (2.0)/danbooru.donmai.us/defaults.ini", target + "/second.test/defaults.ini"));
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	Site *first = jsonDanbooru(profile.data());
+	Site *second = profile->getSites().value("second.test");
+	REQUIRE(second != nullptr);
+	second->setSetting("sources/usedefault", false, true);
+	second->setSetting("sources/source_1", "Json", "Xml");
+	second->setSetting("sources/source_2", "", "Json");
+	second->setSetting("sources/source_3", "", "Regex");
+	second->setSetting("sources/source_4", "", "Rss");
+	second->loadConfig();
+	profile->getSettings()->setValue("sites", QStringList{first->url(), second->url()});
+	{
+		const QJsonObject sampled {{"posts", 400}, {"tags", QJsonObject {{"forest", 4}}}};
+		QFile file(DiscoveryFeed::statePath(profile->getPath()));
+		REQUIRE(file.open(QIODevice::WriteOnly));
+		REQUIRE(file.write(QJsonDocument(QJsonObject {{"version", 2}, {"background", QJsonObject {{first->url(), sampled}, {second->url(), sampled}}}}).toJson()) > 0);
+	}
+	// Discover asks the sources its taste was learned on, so both need a rated picture.
+	saveRated(profile.data(), 801, QString(32, '8'), "forest", true);
+	saveRated(profile.data(), 802, QString(32, '9'), "forest", true, second);
+
+	// One request fails; whatever else the first batch asks only finds the picture already in Library.
+	const QString known = writePosts(directory, "known.json", {post(801, QString(32, '8'), "forest")});
+	CustomNetworkAccessManager::NextFiles.enqueue("500");
+	for (int i = 0; i < 3; ++i) {
+		CustomNetworkAccessManager::NextFiles.enqueue(known);
+	}
+
+	HomeTab home(profile.data(), nullptr);
+	QSignalSpy busy(home.feed(), &DiscoveryFeed::busyChanged);
+	home.resize(900, 700);
+	home.show();
+	// The source that failed rests; the batch that showed nothing is followed by another one for the rest.
+	REQUIRE(QTest::qWaitFor([&busy]() {
+		int started = 0;
+		for (const auto &arguments : busy) {
+			started += arguments.at(0).toBool() ? 1 : 0;
+		}
+		return started >= 2;
+	}, 10000));
+}
+
+TEST_CASE("Restoring tabs keeps the chosen sources, and ticking a source remembers it", "[library][home][session]")
+{
+	QTemporaryDir directory;
+	REQUIRE(directory.isValid());
+	const QScopedPointer<Profile> profile(makeLibraryProfile(directory.path()));
+	profile->getSettings()->setValue("preloadAllTabs", false);
+	Site *site = profile->getSites().value("danbooru.donmai.us");
+	REQUIRE(site != nullptr);
+	const QString path = directory.filePath("tabs.json");
+
+	// A tab saved without any source, restored while a source is chosen for new tabs and Discover.
+	{
+		auto *bare = new TagTab(profile.data(), nullptr, nullptr);
+		bare->setTags("forest", false);
+		bare->setSources({});
+		QList<SearchTab*> searches {bare};
+		REQUIRE(TabsLoader::save(path, searches, bare));
+		delete bare;
+	}
+	profile->getSettings()->setValue("sites", QStringList{site->url()});
+	QList<SearchTab*> restored;
+	QVariant current;
+	REQUIRE(TabsLoader::load(path, restored, current, profile.data(), nullptr, nullptr));
+	REQUIRE(restored.size() == 1);
+	REQUIRE(restored.first()->sources().isEmpty());
+	// The restored tab's own sources used to overwrite the choice: the last tab of a session decided it.
+	REQUIRE(profile->getSettings()->value("sites").toStringList() == QStringList{site->url()});
+
+	// Ticking a source in the bar is a choice and is remembered.
+	profile->getSettings()->setValue("sites", QStringList());
+	REQUIRE(QMetaObject::invokeMethod(restored.first(), "toggleSource", Q_ARG(QString, site->url())));
+	REQUIRE(restored.first()->sources() == QList<Site*>{site});
+	REQUIRE(profile->getSettings()->value("sites").toStringList() == QStringList{site->url()});
+	REQUIRE(QMetaObject::invokeMethod(restored.first(), "toggleSource", Q_ARG(QString, site->url())));
+	REQUIRE(profile->getSettings()->value("sites").toStringList().isEmpty());
+	qDeleteAll(restored);
+	restored.clear();
+
+	// A tab on page 6 comes back on page 6, even when its source is not among the chosen ones.
+	{
+		auto *deep = new TagTab(profile.data(), nullptr, nullptr);
+		deep->setTags("forest", false);
+		deep->setSources({site});
+		deep->findChild<QSpinBox*>("spinPage")->setValue(6);
+		QList<SearchTab*> searches {deep};
+		REQUIRE(TabsLoader::save(path, searches, deep));
+		delete deep;
+	}
+	profile->getSettings()->setValue("sites", QStringList());
+	REQUIRE(TabsLoader::load(path, restored, current, profile.data(), nullptr, nullptr));
+	REQUIRE(restored.size() == 1);
+	REQUIRE(restored.first()->sources() == QList<Site*>{site});
+	REQUIRE(restored.first()->findChild<QSpinBox*>("spinPage")->value() == 6);
+	qDeleteAll(restored);
 }
 
 // Developer aid: GRABBER_DIAG_PROFILE=<copy of a full profile folder> GRABBER_TASTE_SCREENSHOT=<png> gui-tests "[tastediag]".
