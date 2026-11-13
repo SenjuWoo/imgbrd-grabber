@@ -17,6 +17,11 @@ class ProgramUpdater : public Updater
 		ProgramUpdater();
 		explicit ProgramUpdater(QString baseUrl);
 		QUrl latestUrl() const;
+		/**
+		 * Whether this build follows the rolling "nightly" release (compared by commit) instead of tagged
+		 * releases (compared by version). Set from the build; tests override it.
+		 */
+		void setNightly(bool nightly, const QString &commit = QString());
 
 	public slots:
 		void checkForUpdates() const override;
@@ -33,7 +38,10 @@ class ProgramUpdater : public Updater
 		void downloadFinished(const QString &path);
 
 	private:
+		void request(const QString &path) const;
 		QString m_baseUrl;
+		bool m_nightly = false;
+		QString m_commit;
 		NetworkReply *m_downloadReply;
 		QByteArray m_source;
 		QString m_newVersion;

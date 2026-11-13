@@ -5,6 +5,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QNetworkRequest>
+#include <QRegularExpression>
 #include <utility>
 #include "logger.h"
 #include "network/network-manager.h"
@@ -17,15 +18,27 @@ ProgramUpdater::ProgramUpdater()
 
 ProgramUpdater::ProgramUpdater(QString baseUrl)
 	: m_baseUrl(std::move(baseUrl)), m_downloadReply(nullptr)
-{}
+{
+	#ifdef NIGHTLY
+		m_nightly = true;
+		m_commit = QString(NIGHTLY_COMMIT);
+	#endif
+}
+
+void ProgramUpdater::setNightly(bool nightly, const QString &commit)
+{
+	m_nightly = nightly;
+	m_commit = commit;
+}
 
 void ProgramUpdater::checkForUpdates() const
 {
-	#ifdef NIGHTLY
-		const QUrl url(m_baseUrl + "/releases/tags/nightly");
-	#else
-		const QUrl url(m_baseUrl + "/releases/latest");
-	#endif
+	request(m_nightly ? QStringLiteral("/releases/tags/nightly") : QStringLiteral("/releases/latest"));
+}
+
+void ProgramUpdater::request(const QString &path) const
+{
+	const QUrl url(m_baseUrl + path);
 	QNetworkRequest request(url);
 	request.setTransferTimeout(30000);
 	request.setAttribute(QNetworkRequest::RedirectPolicyAttribute, QNetworkRequest::NoLessSafeRedirectPolicy);
@@ -37,6 +50,14 @@ void ProgramUpdater::checkForUpdates() const
 void ProgramUpdater::checkForUpdatesDone()
 {
 	auto *reply = dynamic_cast<NetworkReply*>(sender());
+	// A repository that publishes tagged releases only has no "nightly" release and answers 404. A build
+	// made from a branch then compares itself with the latest tagged release, instead of failing every
+	// check and never hearing about an update.
+	if (m_nightly && reply->error() == NetworkReply::NetworkError::ContentNotFoundError && reply->url().path().endsWith(QStringLiteral("/releases/tags/nightly"))) {
+		reply->deleteLater();
+		request(QStringLiteral("/releases/latest"));
+		return;
+	}
 	const QByteArray response = reply->readAll();
 	QJsonParseError parseError;
 	const QJsonDocument json = QJsonDocument::fromJson(response, &parseError);
@@ -53,22 +74,22 @@ void ProgramUpdater::checkForUpdatesDone()
 	}
 	m_source = response;
 
-	#if defined NIGHTLY
+	QString latest, changelog;
+	bool isNew;
+	if (m_nightly && lastRelease["tag_name"].toString() == QLatin1String("nightly")) {
 		static const QRegularExpression regexHead(R"(Head:\**\s*([a-f0-9]{40}))");
 		const auto match = regexHead.match(lastRelease["body"].toString());
-		QString latest = match.hasMatch() ? match.captured(1) : lastRelease["target_commitish"].toString();
-		const QString current = QString(NIGHTLY_COMMIT);
-		const bool isNew = !current.isEmpty() && latest != current;
+		latest = match.hasMatch() ? match.captured(1) : lastRelease["target_commitish"].toString();
+		isNew = !m_commit.isEmpty() && latest != m_commit;
 		latest = latest.left(8);
-		QString changelog;
-	#else
-		QString latest = lastRelease["tag_name"].toString();
+	} else {
+		latest = lastRelease["tag_name"].toString();
 		if (latest.startsWith('v')) {
 			latest.remove(0, 1);
 		}
-		const bool isNew = compareVersions(latest, QString(VERSION)) > 0;
-		const QString changelog = lastRelease["body"].toString();
-	#endif
+		isNew = compareVersions(latest, QString(VERSION)) > 0;
+		changelog = lastRelease["body"].toString();
+	}
 
 	m_newVersion = latest;
 	emit finished(latest, isNew, changelog);

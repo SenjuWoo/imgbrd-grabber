@@ -111,6 +111,41 @@ TEST_CASE("Updater")
 		}
 	}
 
+	SECTION("A branch build falls back to tagged releases where no nightly release exists")
+	{
+		// What the installed 7.22.3 did on every start: ask for a "nightly" release this repository never
+		// published, get 404, and report that it could not check for updates.
+		updater.setNightly(true, "0123456789abcdef0123456789abcdef01234567");
+		for (const auto &expected : QList<QPair<QString, bool>> {{"999.0.0", true}, {"0.0.1", false}}) {
+			QTemporaryFile response;
+			REQUIRE(response.open());
+			response.write(QStringLiteral(R"({"tag_name":"v%1","html_url":"https://github.com/SenjuWoo/imgbrd-grabber/releases/tag/v%1","body":"notes"})").arg(expected.first).toUtf8());
+			response.flush();
+			CustomNetworkAccessManager::NextFiles.enqueue("404");
+			CustomNetworkAccessManager::NextFiles.enqueue(response.fileName());
+			QSignalSpy failed(&updater, &ProgramUpdater::failed);
+			QSignalSpy finished(&updater, &ProgramUpdater::finished);
+			updater.checkForUpdates();
+			REQUIRE(finished.wait());
+			REQUIRE(failed.isEmpty());
+			const auto result = finished.takeFirst();
+			REQUIRE(result.at(0).toString() == expected.first);
+			REQUIRE(result.at(1).toBool() == expected.second);
+		}
+		// A real nightly release is still compared by commit.
+		QTemporaryFile nightly;
+		REQUIRE(nightly.open());
+		nightly.write(R"({"tag_name":"nightly","html_url":"https://github.com/SenjuWoo/imgbrd-grabber/releases/tag/nightly","target_commitish":"ffffffffffffffffffffffffffffffffffffffff"})");
+		nightly.flush();
+		CustomNetworkAccessManager::NextFiles.enqueue(nightly.fileName());
+		QSignalSpy finished(&updater, &ProgramUpdater::finished);
+		updater.checkForUpdates();
+		REQUIRE(finished.wait());
+		REQUIRE(finished.first().at(0).toString() == "ffffffff");
+		REQUIRE(finished.first().at(1).toBool());
+		updater.setNightly(false);
+	}
+
 	#ifndef NIGHTLY
 		SECTION("Release tags are independent of their display title")
 		{
