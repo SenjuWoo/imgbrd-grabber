@@ -668,6 +668,22 @@ void DiscoveryFeed::fetchMore()
 		emit statusChanged(tr("Choose image sources in a search tab, then come back to Discover."));
 		return;
 	}
+	// Sources resting after a failure take no part in this batch: a search picked for one of them would
+	// only be skipped below, and could leave the batch with nothing to ask while other sources answer.
+	const qint64 backoffNow = QDateTime::currentSecsSinceEpoch();
+	QStringList resting;
+	for (auto it = sources.begin(); it != sources.end();) {
+		if (m_backoff.value(*it, 0) > backoffNow) {
+			resting.append(sites.value(*it)->name());
+			it = sources.erase(it);
+		} else {
+			++it;
+		}
+	}
+	if (sources.isEmpty()) {
+		emit statusChanged(tr("%1 did not respond. Discover asks again in a few minutes; Refresh asks now.").arg(resting.join(", ")));
+		return;
+	}
 
 	const quint32 batchSeed = m_seed + quint32(m_batch) * 7919u;
 	QRandomGenerator rng(batchSeed);
@@ -713,8 +729,6 @@ void DiscoveryFeed::fetchMore()
 	}
 	queries.append(m_taste.queries(sources, wanted + 4, batchSeed, m_feedback));
 	QHash<QString, int> perSource;
-	// Backed-off sources are skipped before they take a request slot.
-	const qint64 backoffNow = QDateTime::currentSecsSinceEpoch();
 	for (const auto &query : queries) {
 		if (m_pages.size() >= wanted + samples) {
 			break;
@@ -740,12 +754,6 @@ void DiscoveryFeed::fetchMore()
 	}
 	if (m_pages.isEmpty()) {
 		// Nothing could be asked. Sources resting after a failure are not "the end of these topics".
-		QStringList resting;
-		for (const QString &source : std::as_const(sources)) {
-			if (m_backoff.value(source, 0) > backoffNow) {
-				resting.append(sites.value(source)->name());
-			}
-		}
 		if (!resting.isEmpty()) {
 			emit statusChanged(tr("%1 did not respond. Discover asks again in a few minutes; Refresh asks now.").arg(resting.join(", ")));
 		} else {

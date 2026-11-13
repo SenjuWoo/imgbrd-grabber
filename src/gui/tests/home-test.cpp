@@ -818,17 +818,19 @@ TEST_CASE("A failed source does not stop Discover from asking the others", "[lib
 	second->loadConfig();
 	profile->getSettings()->setValue("sites", QStringList{first->url(), second->url()});
 	{
-		const QJsonObject sampled {{"posts", 400}, {"tags", QJsonObject {{"forest", 4}}}};
+		// Each source knows one of the two tags, so every batch has a request for each of them.
+		const QJsonObject forests {{"posts", 400}, {"tags", QJsonObject {{"forest", 4}}}};
+		const QJsonObject rivers {{"posts", 400}, {"tags", QJsonObject {{"river", 4}}}};
 		QFile file(DiscoveryFeed::statePath(profile->getPath()));
 		REQUIRE(file.open(QIODevice::WriteOnly));
-		REQUIRE(file.write(QJsonDocument(QJsonObject {{"version", 2}, {"background", QJsonObject {{first->url(), sampled}, {second->url(), sampled}}}}).toJson()) > 0);
+		REQUIRE(file.write(QJsonDocument(QJsonObject {{"version", 2}, {"background", QJsonObject {{first->url(), forests}, {second->url(), rivers}}}}).toJson()) > 0);
 	}
-	// Discover asks the sources its taste was learned on, so both need a rated picture.
+	// Discover searches a general tag on the sources where it was rated, so each source gets its own.
 	saveRated(profile.data(), 801, QString(32, '8'), "forest", true);
-	saveRated(profile.data(), 802, QString(32, '9'), "forest", true, second);
+	saveRated(profile.data(), 802, QString(32, '9'), "river", true, second);
 
-	// One request fails; whatever else the first batch asks only finds the picture already in Library.
-	const QString known = writePosts(directory, "known.json", {post(801, QString(32, '8'), "forest")});
+	// One request fails; the other only finds pictures already in Library.
+	const QString known = writePosts(directory, "known.json", {post(801, QString(32, '8'), "forest"), post(802, QString(32, '9'), "river")});
 	CustomNetworkAccessManager::NextFiles.enqueue("500");
 	for (int i = 0; i < 3; ++i) {
 		CustomNetworkAccessManager::NextFiles.enqueue(known);
