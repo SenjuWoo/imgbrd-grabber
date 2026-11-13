@@ -25,9 +25,13 @@ static void addMd5(Profile *profile, const QString &path)
 {
 	QCryptographicHash hash(QCryptographicHash::Md5);
 
+	// A file that cannot be read has no checksum: recording the hash of nothing would make every such
+	// file a "duplicate" of every other one.
 	QFile f(path);
-	f.open(QFile::ReadOnly);
-	hash.addData(&f);
+	if (!f.open(QFile::ReadOnly) || !hash.addData(&f)) {
+		log(QStringLiteral("Could not read `%1` to record its MD5").arg(path), Logger::Warning);
+		return;
+	}
 	f.close();
 
 	profile->addMd5(hash.result().toHex(), path);
