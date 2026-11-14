@@ -7,6 +7,7 @@
 #include <QSignalSpy>
 #include <QTemporaryFile>
 #include <QTemporaryDir>
+#include "custom-network-access-manager.h"
 #include "loader/token.h"
 #include "models/image.h"
 #include "models/image-factory.h"
@@ -441,4 +442,85 @@ TEST_CASE("Image")
 		REQUIRE(tokens.contains("rating"));
 		REQUIRE(tokens["rating"].value().toString() == "unknown");
 	}
+}
+
+TEST_CASE("A post page refused to anonymous users is read through the site's HTML instead")
+{
+	setupSource("Gelbooru (0.2)");
+	setupSite("Gelbooru (0.2)", "api.rule34.xxx");
+	const QScopedPointer<Profile> pProfile(makeProfile());
+	Profile *profile = pProfile.data();
+	Site *site = profile->getSites().value("api.rule34.xxx");
+	REQUIRE(site != nullptr);
+	site->setAutoLogin(false);
+
+	// A picture from an HTML listing: its file address is guessed from the thumbnail
+	QMap<QString, QString> details;
+	details["id"] = "5089291";
+	details["md5"] = "e9586f76c9438fafd806e987aedb799b";
+	details["file_url"] = "https://wimg.rule34.xxx/images/4468/e9586f76c9438fafd806e987aedb799b.jpg";
+	details["preview_url"] = "https://wimg.rule34.xxx/thumbnails/4468/thumbnail_e9586f76c9438fafd806e987aedb799b.jpg";
+	details["tags_general"] = "landscape sky";
+	auto img = ImageFactory::build(site, details, profile);
+	REQUIRE(img->pageUrl().toString().contains("json=1"));
+
+	// What api.rule34.xxx answers without an API key: HTTP 200 and a bare JSON string
+	QTemporaryFile refusal;
+	REQUIRE(refusal.open());
+	REQUIRE(refusal.write(R"("Missing authentication. Go to api.rule34.xxx for more information")") > 0);
+	refusal.flush();
+	QTemporaryFile post;
+	REQUIRE(post.open());
+	REQUIRE(post.write(R"(<html><body><ul id="tag-sidebar"><li class="tag-type-general tag"><a href="index.php?page=post&amp;s=list&amp;tags=sky">sky</a> <span class="tag-count">10</span></li></ul>)"
+		R"(<img alt="sky" height="1200" id="image" src="https://wimg.rule34.xxx/samples/4468/sample_e9586f76c9438fafd806e987aedb799b.jpg" width="850" />)"
+		R"(<li><a href="https://wimg.rule34.xxx//images/4468/e9586f76c9438fafd806e987aedb799b.png" style="font-weight: bold;">Original image</a></li></body></html>)") > 0);
+	post.flush();
+
+	CustomNetworkAccessManager::NextFiles.clear();
+	CustomNetworkAccessManager::NextFiles.enqueue(refusal.fileName());
+	CustomNetworkAccessManager::NextFiles.enqueue(post.fileName());
+
+	QSignalSpy spy(img.data(), SIGNAL(finishedLoadingTags(Image::LoadTagsResult)));
+	img->loadDetails();
+	REQUIRE(spy.wait(10000));
+	REQUIRE(spy.first().first().value<Image::LoadTagsResult>() == Image::LoadTagsResult::Ok);
+
+	// The real file (a PNG, so the guessed .jpg was a 404) and the post page people can open
+	REQUIRE(img->url().toString() == QString("https://wimg.rule34.xxx//images/4468/e9586f76c9438fafd806e987aedb799b.png"));
+	REQUIRE(img->pageUrl().toString().contains("page=post&s=view&id=5089291"));
+	REQUIRE(CustomNetworkAccessManager::NextFiles.isEmpty());
+
+	// Later pictures go straight to the post page
+	auto other = ImageFactory::build(site, details, profile);
+	REQUIRE(other->pageUrl().toString().contains("page=post&s=view"));
+	CustomNetworkAccessManager::NextFiles.clear();
+}
+
+TEST_CASE("Details without any API that can read them end instead of waiting forever")
+{
+	setupSource("Gelbooru (0.2)");
+	setupSite("Gelbooru (0.2)", "api.rule34.xxx");
+	const QScopedPointer<Profile> pProfile(makeProfile());
+	Profile *profile = pProfile.data();
+	Site *site = profile->getSites().value("api.rule34.xxx");
+	REQUIRE(site != nullptr);
+	site->setAutoLogin(false);
+
+	QMap<QString, QString> details;
+	details["id"] = "1";
+	details["md5"] = "e9586f76c9438fafd806e987aedb799b";
+	details["file_url"] = "https://wimg.rule34.xxx/images/1/e9586f76c9438fafd806e987aedb799b.jpg";
+	auto img = ImageFactory::build(site, details, profile);
+
+	// Every details API refuses: the request ends with an error, the second API is asked once.
+	CustomNetworkAccessManager::NextFiles.clear();
+	CustomNetworkAccessManager::NextFiles.enqueue("401");
+	CustomNetworkAccessManager::NextFiles.enqueue("401");
+	CustomNetworkAccessManager::NextFiles.enqueue("401");
+	QSignalSpy spy(img.data(), SIGNAL(finishedLoadingTags(Image::LoadTagsResult)));
+	img->loadDetails();
+	REQUIRE(spy.wait(10000));
+	REQUIRE(spy.first().first().value<Image::LoadTagsResult>() != Image::LoadTagsResult::Ok);
+	REQUIRE(CustomNetworkAccessManager::NextFiles.size() == 1);
+	CustomNetworkAccessManager::NextFiles.clear();
 }

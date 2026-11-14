@@ -61,6 +61,7 @@ Image::Image(const Image &other)
 	m_sources = other.m_sources;
 
 	m_pageUrl = other.m_pageUrl;
+	m_pageUrlApi = other.m_pageUrlApi;
 
 	m_sizes = other.m_sizes;
 	m_identity = other.m_identity;
@@ -280,6 +281,7 @@ void Image::init()
 		Api *api = m_parentSite->detailsApi();
 		if (api != nullptr) {
 			m_pageUrl = api->detailsUrl(m_id, m_md5, m_parentSite, m_identity).url;
+			m_pageUrlApi = api;
 		}
 	}
 	m_pageUrl = m_parentSite->fixUrl(m_pageUrl).toString();
@@ -482,11 +484,25 @@ void Image::loadDetails(bool rateLimit, bool continueChain)
 		m_detailsRedirectsSeen.clear();
 		m_detailsRedirectHops = 0;
 		m_detailsRateLimitRetries = 0;
+		m_detailsApisRefused.clear();
 	}
 
 	if (m_loadedDetails || m_pageUrl.isEmpty()) {
 		emit finishedLoadingTags(LoadTagsResult::Ok);
 		return;
+	}
+
+	// The API that built the address may have turned away anonymous requests since (often a search finds
+	// out first): ask the next API's post page rather than spend a request on a certain refusal.
+	if (m_pageUrlApi != nullptr) {
+		Api *api = m_parentSite->detailsApi();
+		if (api != nullptr && api != m_pageUrlApi && !m_detailsApisRefused.contains(api)) {
+			const PageUrl url = api->detailsUrl(m_id, m_md5, m_parentSite, m_identity);
+			if (url.error.isEmpty() && !url.url.isEmpty()) {
+				m_pageUrl = m_parentSite->fixUrl(url.url);
+				m_pageUrlApi = api;
+			}
+		}
 	}
 
 	if (m_loadDetails != nullptr) {
@@ -505,6 +521,29 @@ void Image::loadDetails(bool rateLimit, bool continueChain)
 	m_loadingDetails = true;
 
 	connect(m_loadDetails, &NetworkReply::finished, this, &Image::parseDetails);
+}
+bool Image::retryDetailsElsewhere(Api *refused)
+{
+	if (refused == nullptr) {
+		return false;
+	}
+	m_parentSite->markAuthRefused(refused);
+	m_detailsApisRefused.insert(refused);
+
+	// An address that came with the listing has no other API to ask
+	if (m_pageUrlApi == nullptr) {
+		return false;
+	}
+	Api *next = m_parentSite->detailsApi();
+	if (next == nullptr || m_detailsApisRefused.contains(next)) {
+		return false;
+	}
+
+	log(QStringLiteral("[%1][%2] Reading the post page through %3 instead").arg(m_parentSite->url(), refused->getName(), next->getName()), Logger::Info);
+	m_loadDetails->deleteLater();
+	m_loadDetails = nullptr;
+	loadDetails(false, true);
+	return true;
 }
 void Image::abortTags()
 {
@@ -559,8 +598,15 @@ void Image::parseDetails()
 		return;
 	}
 
+	// The API that built the address, so the answer is read by the parser it was asked for
+	Api *api = m_pageUrlApi != nullptr ? m_pageUrlApi : m_parentSite->detailsApi();
+
 	// Aborted or connection error
 	if (m_loadDetails->error()) {
+		const bool refused = statusCode == 401 || m_loadDetails->error() == NetworkReply::NetworkError::AuthenticationRequiredError;
+		if (refused && retryDetailsElsewhere(api)) {
+			return;
+		}
 		if (m_loadDetails->error() != NetworkReply::NetworkError::OperationCanceledError) {
 			log(QStringLiteral("Loading details error for '%1': %2").arg(m_pageUrl.toString(), m_loadDetails->errorString()), Logger::Error);
 		}
@@ -572,9 +618,10 @@ void Image::parseDetails()
 
 	const QString source = QString::fromUtf8(m_loadDetails->readAll());
 
-	// Get an api able to parse details
-	Api *api = m_parentSite->detailsApi();
 	if (api == nullptr) {
+		m_loadDetails->deleteLater();
+		m_loadDetails = nullptr;
+		emit finishedLoadingTags(LoadTagsResult::Error);
 		return;
 	}
 
@@ -583,6 +630,9 @@ void Image::parseDetails()
 	if (!ret.error.isEmpty()) {
 		auto logLevel = m_detailsParsWarnAsErr ? Logger::Error : Logger::Warning;
 		log(QStringLiteral("[%1][%2] %3").arg(m_parentSite->url(), api->getName(), ret.error), logLevel);
+		if (Site::isAuthRefusal(statusCode, ret.error) && retryDetailsElsewhere(api)) {
+			return;
+		}
 		m_loadDetails->deleteLater();
 		m_loadDetails = nullptr;
 		emit finishedLoadingTags(LoadTagsResult::Error);

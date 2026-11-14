@@ -108,6 +108,8 @@ class Site : public QObject
 		 */
 		QList<Api*> getLoggedInApis() const;
 		void markAuthRefused(Api *api);
+		/** Whether an answer means "anonymous requests are not allowed here" (HTTP 401 or the site's wording). */
+		static bool isAuthRefusal(int statusCode, const QString &message);
 
 		SourceEngine *getSourceEngine() const;
 		Api *firstValidApi() const;

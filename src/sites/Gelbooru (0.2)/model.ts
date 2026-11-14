@@ -28,6 +28,36 @@ function originalImageUrl(src: string): string | undefined {
     return undefined;
 }
 
+// api.rule34.xxx (and gelbooru.com) refuse anonymous API calls. The app recognises the "Missing
+// authentication" wording, skips the API for the session and uses the site's HTML pages instead.
+function withAuthHint(message: string): string {
+    if (/^Missing authentication/i.test(message)) {
+        return message + ". Enter your API user ID and key (rule34.xxx > Account > Options) in Options > Sources > this site > Login, type URL.";
+    }
+    return message;
+}
+
+// A JSON reply, or the site's error message. Errors come as a bare JSON string (HTTP 200) or as
+// {"success": false, "message": ...}.
+function parseJsonReply(src: string): { data?: any; error?: string } {
+    let parsed: any;
+    try {
+        parsed = JSON.parse(src);
+    } catch (e: any) {
+        return { error: "Invalid JSON response" };
+    }
+    if (typeof parsed === "string") {
+        return { error: withAuthHint(parsed) };
+    }
+    if (!parsed || typeof parsed !== "object") {
+        return { error: "Invalid JSON response" };
+    }
+    if (!Array.isArray(parsed) && (parsed["success"] === false || parsed["success"] === "false")) {
+        return { error: withAuthHint(String(parsed["message"] || parsed["reason"] || "Unknown API error")) };
+    }
+    return { data: parsed };
+}
+
 function completeImage(img: IImage): IImage {
     img.author = (img as any).owner;
 
@@ -149,10 +179,7 @@ export const source: ISource = {
                     if ("error" in parsed) {
                         const error = parsed["error"];
                         const message = typeof error === "string" ? error : String(error["#text"] || "Unknown API error");
-                        if (/^Missing authentication/i.test(message)) {
-                            return { error: message + ". Enter your API user ID and key (rule34.xxx > Account > Options) in Options > Sources > this site > Login, type URL." };
-                        }
-                        return { error: message };
+                        return { error: withAuthHint(message) };
                     }
 
                     // Validate the shape of the response
@@ -197,23 +224,11 @@ export const source: ISource = {
                         return { images: [] };
                     }
 
-                    let parsed: any;
-                    try {
-                        parsed = JSON.parse(src);
-                    } catch (e: any) {
-                        return { error: "Invalid JSON response" };
+                    const reply = parseJsonReply(src);
+                    if (reply.error !== undefined) {
+                        return { error: reply.error };
                     }
-
-                    // Handle error messages
-                    if (typeof parsed === "string") {
-                        return { error: parsed };
-                    }
-                    if (!parsed || typeof parsed !== "object") {
-                        return { error: "Invalid JSON response" };
-                    }
-                    if (!Array.isArray(parsed) && (parsed["success"] === false || parsed["success"] === "false")) {
-                        return { error: String(parsed["message"] || parsed["reason"] || "Unknown API error") };
-                    }
+                    let parsed: any = reply.data;
 
                     // Handle the old format
                     if (Array.isArray(parsed)) {
@@ -240,11 +255,37 @@ export const source: ISource = {
                 url: (id: string, md5: string, opts: IUrlDetailsOptions): string => {
                     return "/index.php?page=dapi&s=post&q=index&id=" + id + "&fields=tag_info&json=1";
                 },
-                parse: (src: string): IImage => {
-                    const parsed = JSON.parse(src);
-                    const post = "post" in parsed ? parsed["post"] : parsed;
-                    const image = Array.isArray(post) ? post[0] : post;
-                    return completeImage(image);
+                parse: (src: string): IParsedDetails | IError => {
+                    if (src.trim().length === 0) {
+                        return { error: "Post not found" };
+                    }
+                    const reply = parseJsonReply(src);
+                    if (reply.error !== undefined) {
+                        return { error: reply.error };
+                    }
+                    const parsed = reply.data;
+                    // A list, the wrapped format ({"@attributes", "post"}; no "post" when the ID is unknown) or the bare post
+                    const post = Array.isArray(parsed) ? parsed : "post" in parsed ? parsed["post"] : "@attributes" in parsed ? undefined : parsed;
+                    const raw = Array.isArray(post) ? post[0] : post;
+                    if (!raw || typeof raw !== "object") {
+                        return { error: "Post not found" };
+                    }
+
+                    // The real file address is what a download falls back to after a guessed one fails; a
+                    // file_url guessed from the thumbnail (completeImage) would only repeat that guess.
+                    const fileUrl: string | undefined = typeof raw.file_url === "string" && raw.file_url.length > 4 ? raw.file_url : undefined;
+                    const image = completeImage(raw);
+                    // Without tag_info the JSON API sends the tags as one space-separated string
+                    const rawTags: any = image.tags;
+                    const tags: string[] | ITag[] | undefined = Array.isArray(rawTags)
+                        ? rawTags
+                        : typeof rawTags === "string" ? rawTags.split(" ").filter((tag: string) => tag.length > 0) : undefined;
+                    return {
+                        tags,
+                        imageUrl: fileUrl,
+                        createdAt: image.created_at,
+                        source: image.source || undefined,
+                    };
                 },
             },
         },

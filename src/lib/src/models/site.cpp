@@ -7,6 +7,7 @@
 #include <QJsonObject>
 #include <QNetworkCookie>
 #include <QNetworkDiskCache>
+#include <QRegularExpression>
 #include <QSettings>
 #include <QStringList>
 #include <utility>
@@ -402,8 +403,20 @@ Api *Site::firstValidApi() const
 	}
 	return nullptr;
 }
+bool Site::isAuthRefusal(int statusCode, const QString &message)
+{
+	static const QRegularExpression authRefusal(QStringLiteral("missing authentication|authentication (is )?required|requires authentication"), QRegularExpression::CaseInsensitiveOption);
+	return statusCode == 401 || (!message.isEmpty() && authRefusal.match(message).hasMatch());
+}
 Api *Site::detailsApi() const
 {
+	// Same order and the same refusals as searches: an API that turned away anonymous requests would
+	// turn away the post page too, and a download that needs it (the guessed file address was wrong) fails.
+	for (Api *api : getLoggedInApis()) {
+		if (api->canLoadDetails()) {
+			return api;
+		}
+	}
 	for (Api *api : m_apis) {
 		if (api->canLoadDetails()) {
 			return api;

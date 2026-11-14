@@ -155,6 +155,12 @@ npm test -- --runInBand
 
 `build-local.ps1` builds the GUI/CLI, runs the existing C++ and site tests, and stages a clean portable package with a commit and per-file hash manifest. Linux/macOS build instructions remain in the [upstream documentation](https://www.bionus.org/imgbrd-grabber/docs/compilation.html). The [Build workflow](.github/workflows/build.yml) checks Windows, Linux, macOS, Android, formatting, coverage, and site adapters. Published artifacts must come from the same commit whose required checks succeeded.
 
+## Changes in 7.22.5
+
+- **rule34.xxx pictures download again.** A picture from an HTML listing has a file address guessed from its thumbnail, which is wrong for PNGs, GIFs and videos. The fallback asked rule34.xxx's JSON API for the post, which refuses anonymous requests with a bare text reply, and the reader threw `TypeError: Type error`, so the download stopped. The refusal is now recognized: the post is read from the site's own post page, and later pictures go there directly. The JSON reader also returns the real file address when the API answers, which it never did before.
+- **A post page no API can read ends the request.** When no source API could read the details, the request was left waiting forever and the download never finished or failed.
+- **A search the site calls empty is asked once.** A source that states a search has no results (XML `count="0"`) was asked again through each of its other APIs, so every empty search cost up to three requests per source and filled the log with "Loading using … failed". The site's answer is now believed.
+
 ## Changes in 7.22.4
 
 - **Discover is no longer empty after a start.** The first batch was cut off when the saved tab opened two seconds in, and an empty feed never asked again until a manual Refresh. It now asks again when Discover comes back on screen, and an interrupted batch gives its pages back instead of using them up.

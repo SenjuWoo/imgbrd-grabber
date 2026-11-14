@@ -130,6 +130,23 @@ and [SQLite consistent snapshots](https://www.sqlite.org/lang_vacuum.html).
 
 The npm override keeps argparse at 2.0.1 to remove the vulnerable sprintf-js dependency while retaining the legacy CLI aliases used by js-yaml 3 in the lint and coverage tools. Argparse 3 removes those aliases. Check updates with a fresh npm ci, the YAML CLI, and npm run check/build/test before changing the override. Development dependencies are excluded from the portable app.
 
+## 7.22.5 audit
+
+Started from the app's logs after 7.22.4: 97 `TypeError` warnings from the rule34.xxx JSON details
+reader, downloads that stopped after "Reading its post page for the actual file", and empty searches
+asked three times per source.
+
+- Details: `Site::detailsApi()` now follows `getLoggedInApis()`, so a refused API is skipped for
+  details as it is for searches. `Image` remembers which API built its post-page address
+  (`m_pageUrlApi`), parses the answer with that API, and on a refusal (HTTP 401 or the site's
+  "Missing authentication" text, `Site::isAuthRefusal`) asks the next API's post page once. A details
+  request with no API to parse it now ends with an error instead of never emitting its signal.
+- Counts: `PageApi::setImageCount`/`setPageCount` no longer let a guess overwrite a count the site
+  stated, so an XML `count="0"` stays an exact 0 and `Page` stops the API fallback on it.
+- Tests that fail on the old code: `image-test.cpp` (refused JSON details read through HTML; every API
+  refusing ends the request), `page-test.cpp` (a stated empty search costs one request), and the
+  Gelbooru `model.spec.ts` details cases.
+
 ## 7.22.4 audit
 
 Baseline before the changes: clean build, every C++ suite and all site tests green, while the installed

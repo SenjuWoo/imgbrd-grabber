@@ -40,6 +40,48 @@ describe("Gelbooru (0.2)", () => {
             expect(parse("<html>Too many requests</html>").error).toBeDefined();
         });
 
+        describe("Details", () => {
+            const details = (src: string) => source.apis.json.details!.parse(src, 200) as any;
+
+            it("reports the refusal of an anonymous request instead of throwing", () => {
+                // api.rule34.xxx answers HTTP 200 with a bare JSON string
+                const res = details("\"Missing authentication. Go to api.rule34.xxx for more information\"");
+                expect(res.error).toMatch(/^Missing authentication/);
+                expect(details(JSON.stringify({ success: false, message: "Missing authentication" })).error).toMatch(/^Missing authentication/);
+                expect(details("").error).toBeDefined();
+                expect(details("<html>Too many requests</html>").error).toBeDefined();
+                expect(details(JSON.stringify({ "@attributes": { count: 0 } })).error).toBeDefined();
+            });
+
+            it("gives the real file address and the tags", () => {
+                const res = details(JSON.stringify({
+                    "@attributes": { limit: 100, offset: 0, count: 1 },
+                    post: [{
+                        id: 5089291,
+                        hash: "e9586f76c9438fafd806e987aedb799b",
+                        image: "e9586f76c9438fafd806e987aedb799b.png",
+                        file_url: "https://wimg.rule34.xxx/images/4468/e9586f76c9438fafd806e987aedb799b.png",
+                        preview_url: "https://wimg.rule34.xxx/thumbnails/4468/thumbnail_e9586f76c9438fafd806e987aedb799b.jpg",
+                        source: "https://example.com/post/1",
+                        created_at: "Sat Nov 08 12:34:56 -0600 2025",
+                        tags: "landscape  sky",
+                        tag_info: [{ tag: "landscape", type: "tag", count: 10 }, { tag: "someone", type: "artist", count: 2 }],
+                    }],
+                }));
+                expect(res.error).toBeUndefined();
+                expect(res.imageUrl).toEqual("https://wimg.rule34.xxx/images/4468/e9586f76c9438fafd806e987aedb799b.png");
+                expect(res.source).toEqual("https://example.com/post/1");
+                expect(res.createdAt).toEqual("Sat Nov 08 12:34:56 -0600 2025");
+                expect(res.tags).toEqual([{ name: "landscape", type: "general", count: 10 }, { name: "someone", type: "artist", count: 2 }]);
+            });
+
+            it("does not offer an address guessed from the thumbnail", () => {
+                const res = details(JSON.stringify([{ id: 1, tags: "a b", preview_url: "https://x.test/thumbnails/1/thumbnail_abc.jpg" }]));
+                expect(res.imageUrl).toBeUndefined();
+                expect(res.tags).toEqual(["a", "b"]);
+            });
+        });
+
         it("accepts the wrapped format without posts", () => {
             const res = parse(JSON.stringify({ "@attributes": { limit: 10, offset: 0, count: 0 } }));
             expect(res.error).toBeUndefined();

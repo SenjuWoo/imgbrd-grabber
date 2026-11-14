@@ -248,6 +248,49 @@ TEST_CASE("A search without results on a Gelbooru site is an empty search")
 	CustomNetworkAccessManager::NextFiles.clear();
 }
 
+TEST_CASE("A search the site states is empty is not asked again through its other APIs")
+{
+	setupSource("Gelbooru (0.2)");
+	setupSite("Gelbooru (0.2)", "api.rule34.xxx");
+	const QScopedPointer<Profile> profile(makeProfile());
+	auto *site = profile->getSites().value("api.rule34.xxx");
+	REQUIRE(site != nullptr);
+	site->setAutoLogin(false);
+
+	const QList<Api*> apis = site->getLoggedInApis();
+	REQUIRE(apis.size() >= 2);
+	REQUIRE(apis.first()->getName() == QString("Xml"));
+
+	QTemporaryFile xml;
+	REQUIRE(xml.open());
+	REQUIRE(xml.write(R"(<?xml version="1.0" encoding="UTF-8"?><posts count="0" offset="0"></posts>)") > 0);
+	xml.flush();
+	QTemporaryFile other;
+	REQUIRE(other.open());
+	REQUIRE(other.write(R"([])") > 0);
+	other.flush();
+
+	CustomNetworkAccessManager::NextFiles.clear();
+	CustomNetworkAccessManager::NextFiles.enqueue(xml.fileName());
+	for (int i = 1; i < apis.size(); ++i) {
+		CustomNetworkAccessManager::NextFiles.enqueue(other.fileName());
+	}
+
+	Page page(profile.data(), site, {site}, QStringList{"indecent_exposure"});
+	QSignalSpy finished(&page, &Page::finishedLoading);
+	QSignalSpy failed(&page, &Page::failedLoading);
+	page.load();
+	if (finished.isEmpty() && failed.isEmpty()) {
+		REQUIRE(finished.wait());
+	}
+	REQUIRE(failed.count() == 0);
+	REQUIRE(page.images().isEmpty());
+	REQUIRE(page.imagesCount(false) == 0);
+	// One request, not one per API
+	REQUIRE(CustomNetworkAccessManager::NextFiles.size() == apis.size() - 1);
+	CustomNetworkAccessManager::NextFiles.clear();
+}
+
 TEST_CASE("An API that refuses anonymous requests is skipped by later pages")
 {
 	setupSource("Danbooru (2.0)");

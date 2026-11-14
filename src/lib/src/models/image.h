@@ -13,6 +13,7 @@
 #include "tags/tag.h"
 
 
+class Api;
 class ExtensionRotator;
 class NetworkReply;
 class Page;
@@ -129,6 +130,8 @@ class Image : public QObject, public Downloadable
 		void init();
 		QString md5forced() const;
 		QString postSaving(const QString &path, Size size, bool addMd5 = true, bool startCommands = false, int count = 1, bool basic = false);
+		/** After an API refused an anonymous details request: remember it and ask the next one. False when there is none. */
+		bool retryDetailsElsewhere(Api *refused);
 
 	public slots:
 		void loadDetails(bool rateLimit = false, bool continueChain = false);
@@ -147,6 +150,7 @@ class Image : public QObject, public Downloadable
 		QUrl m_url;
 		QString m_extension;
 		QUrl m_pageUrl;
+		Api *m_pageUrlApi = nullptr; // The API that built m_pageUrl and parses its answer; null when the listing gave it.
 		QUrl m_parentUrl;
 		QSettings *m_settings;
 		Site *m_parentSite;
@@ -156,6 +160,7 @@ class Image : public QObject, public Downloadable
 		QSet<QString> m_detailsRedirectsSeen;
 		int m_detailsRedirectHops = 0;
 		int m_detailsRateLimitRetries = 0;
+		QSet<Api*> m_detailsApisRefused;
 
 		// Shared
 		// - Technical

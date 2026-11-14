@@ -191,7 +191,10 @@ void Page::loadFinished(PageApi *api, PageApi::LoadResult status)
 		if (m_outcome == Outcome::Pending) {
 			m_outcome = Outcome::Empty;
 		}
-		if (!lastApi && api->page() <= 1 && !m_query.tags.isEmpty()) {
+		// A site that states the search has no results at all (XML count="0") is believed: asking each
+		// other API too tripled the requests of every empty search on every source.
+		const bool statedEmpty = api->imagesCount(false) == 0 && api->pagesCount(false) == 0;
+		if (!lastApi && !statedEmpty && api->page() <= 1 && !m_query.tags.isEmpty()) {
 			log(QStringLiteral("[%1] %2 returned no pictures. Retry using %3.").arg(m_site->url(), m_siteApis[m_currentApi]->getName(), m_siteApis[m_currentApi + 1]->getName()), Logger::Warning);
 			fallback();
 			return;

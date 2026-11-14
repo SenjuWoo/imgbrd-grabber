@@ -1,7 +1,6 @@
 #include "models/page-api.h"
 // #include <QtConcurrentRun>
 #include <QRandomGenerator>
-#include <QRegularExpression>
 #include <QTimer>
 #include <QtMath>
 #include <climits>
@@ -422,8 +421,7 @@ void PageApi::parseActual()
 			if (!page.error.isEmpty()) {
 				m_terminal = page.terminal;
 				log(QStringLiteral("[%1][%2] %3").arg(m_site->url(), m_format, page.error), Logger::Warning);
-				static const QRegularExpression authRefusal(QStringLiteral("missing authentication|authentication (is )?required|requires authentication"), QRegularExpression::CaseInsensitiveOption);
-				if (statusCode == 401 || authRefusal.match(page.error).hasMatch()) {
+				if (Site::isAuthRefusal(statusCode, page.error)) {
 					m_site->markAuthRefused(m_api);
 				}
 				if (!keepJoined) {
@@ -732,9 +730,11 @@ QString PageApi::minDate() const
 	return minDate;
 }
 
+// A guess never replaces a count the site stated. A stated 0 used to be overwritten by the page-count
+// round trip below and read as "unknown", so a search the site called empty was asked again elsewhere.
 void PageApi::setImageCount(int count, bool sure)
 {
-	if (m_imagesCount <= 0 || (!m_imagesCountSafe && sure)) {
+	if ((m_imagesCount <= 0 && (sure || !m_imagesCountSafe)) || (!m_imagesCountSafe && sure)) {
 		m_imagesCount = count;
 		m_imagesCountSafe = sure;
 
@@ -749,7 +749,7 @@ void PageApi::setImageMaxCount(int maxCount)
 
 void PageApi::setPageCount(int count, bool sure)
 {
-	if (m_pagesCount <= 0 || (!m_pagesCountSafe && sure)) {
+	if ((m_pagesCount <= 0 && (sure || !m_pagesCountSafe)) || (!m_pagesCountSafe && sure)) {
 		m_pagesCount = count;
 		m_pagesCountSafe = sure;
 
